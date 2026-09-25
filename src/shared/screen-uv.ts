@@ -29,8 +29,13 @@ export function screenUvToStream(u: number, v: number, rotation: Rotation): { x:
   return { x: t.a * u + t.b * v + t.c, y: t.d * u + t.e * v + t.f };
 }
 
-/** The same mapping as a column-major three.js Matrix3, multiplying (u, v, 1). */
+/**
+ * The same mapping as a column-major three.js Matrix3, multiplying (u, v, 1)
+ * and yielding stream texture coordinates (s right, t up, as three.js
+ * samples a VideoFrame with the flipY semantics VideoFrameTexture uses).
+ * screenUvToStream's y is measured down, so t = 1 - y here.
+ */
 export function streamSampleMatrix(rotation: Rotation): number[] {
   const t = TABLE[rotation];
-  return [t.a, t.d, 0, t.b, t.e, 0, t.c, t.f, 1];
+  return [t.a, 0 - t.d, 0, t.b, 0 - t.e, 0, t.c, 1 - t.f, 1];
 }

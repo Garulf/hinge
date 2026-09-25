@@ -1,4 +1,4 @@
-import { classifyScreen, type ScreenClass } from "../shared/fold7";
+import { classifyScreen, FOLD7, type ScreenClass } from "../shared/fold7";
 import { defaultScale, workLayout } from "../shared/layout";
 import type { SessionStatus } from "../shared/wire";
 import { InputRouter } from "./input/input-router";
@@ -44,6 +44,24 @@ const pipe = new VideoPipe(scene, (w, h) => void onSize(w, h), {
 const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
 new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
+
+/**
+ * Before the first frame there is no stream size to lay out from, so the
+ * window and overlay would otherwise sit at their raw BrowserWindow default
+ * (an odd, wrongly proportioned box that can't even be dragged sensibly).
+ * Lay out for the cover screen, portrait, at the usual default scale so the
+ * first status the user sees renders at a normal size and DPR.
+ */
+async function applyPlaceholderLayout(): Promise<void> {
+  const placeholderCls: ScreenClass = { screen: "cover", rotated: false };
+  const spec = FOLD7[placeholderCls.screen];
+  const workAreaHeight = await window.hinge.workAreaHeight();
+  const placeholderScale = defaultScale(spec.px.w, spec.px.h, placeholderCls, workAreaHeight);
+  const layout = workLayout(spec.px.w, spec.px.h, placeholderCls, placeholderScale);
+  scene.applyLayout(layout);
+  window.hinge.setContentSize(layout.window.w, layout.window.h);
+}
+void applyPlaceholderLayout();
 
 void receivePort().then((port) => {
   client = new PortClient(port);

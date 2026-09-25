@@ -15,7 +15,8 @@ function fakeTarget() {
     },
     removeEventListener() {},
     fire(type: string, e: Record<string, unknown> = {}) {
-      for (const fn of listeners.get(type) ?? []) fn(e);
+      const event = { preventDefault: () => {}, ...e };
+      for (const fn of listeners.get(type) ?? []) fn(event);
     },
   };
 }
@@ -132,6 +133,21 @@ test("I4 + I5: window blur ends an active drag, cancels an active touch, and flu
   expect(touchActions).toEqual(["down", "cancel"]);
   const keyUps = sent.filter((i) => i.type === "key" && i.action === "up");
   expect(keyUps).toEqual([{ type: "key", action: "up", keyCode: 31, repeat: 0, metaState: 0 }]);
+});
+
+test("every key event is preventDefault()ed, even one the keymap does not forward (Ctrl+Minus zoom)", () => {
+  setup();
+  const preventDefault = vi.fn();
+  fakeWindow.fire("keydown", { type: "keydown", code: "Minus", key: "-", repeat: false, ctrlKey: true, altKey: false, metaKey: false, shiftKey: false, preventDefault });
+  expect(preventDefault).toHaveBeenCalledOnce();
+});
+
+test("Ctrl+R is preventDefault()ed so it cannot trigger an Electron reload", () => {
+  const { sent } = setup();
+  const preventDefault = vi.fn();
+  fakeWindow.fire("keydown", { type: "keydown", code: "KeyR", key: "r", repeat: false, ctrlKey: true, altKey: false, metaKey: false, shiftKey: false, preventDefault });
+  expect(preventDefault).toHaveBeenCalledOnce();
+  expect(sent).toEqual([{ type: "key", action: "down", keyCode: 46, repeat: 0, metaState: 4096 | 8192 }]);
 });
 
 test("a bezel drag started, then blurred, does not leave #dragging stuck for the next press", () => {

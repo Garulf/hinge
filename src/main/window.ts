@@ -2,9 +2,10 @@ import { join } from "node:path";
 import { BrowserWindow, MessageChannelMain, ipcMain, screen } from "electron";
 import type { MessagePortMain } from "electron";
 import type { PortLike } from "./app-controller";
+import { clampToWorkArea } from "../shared/clamp-bounds";
 import type { MainToRenderer, RendererToMain } from "../shared/wire";
 
-export function createPhoneWindow(): { win: BrowserWindow; port: MessagePortMain } {
+export function createPhoneWindow(): { win: BrowserWindow; port: PortLike } {
   const win = new BrowserWindow({
     width: 360,
     height: 760,
@@ -23,24 +24,40 @@ export function createPhoneWindow(): { win: BrowserWindow; port: MessagePortMain
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else void win.loadFile(join(import.meta.dirname, "../renderer/index.html"));
 
-  const { port1, port2 } = new MessageChannelMain();
-  win.webContents.once("did-finish-load", () => {
-    win.webContents.postMessage("hinge:port", null, [port2]);
-  });
+  const port = trackedPort(win);
 
   registerWindowIpc(win);
 
-  return { win, port: port1 };
+  return { win, port };
 }
 
-export function portLikeOf(port: MessagePortMain): PortLike {
+/**
+ * A MessagePortMain can only be transferred once, and a reloaded page (a
+ * crash, Ctrl+R, or a future update) gets a brand new JS context that has
+ * lost its old one, so a fresh channel has to be handed over on every
+ * did-finish-load, not just the first. bindSource() must keep working
+ * against a single stable PortLike across that swap.
+ */
+function trackedPort(win: BrowserWindow): PortLike {
+  let current: MessagePortMain | null = null;
+  const handlers: Array<(msg: RendererToMain) => void> = [];
+
+  function attach(): void {
+    const { port1, port2 } = new MessageChannelMain();
+    current = port1;
+    port1.on("message", (e) => {
+      for (const fn of handlers) fn(e.data as RendererToMain);
+    });
+    port1.start();
+    win.webContents.postMessage("hinge:port", null, [port2]);
+  }
+
+  win.webContents.on("did-finish-load", attach);
+
   return {
-    // MessagePortMain.postMessage only transfers other MessagePortMain instances,
-    // not ArrayBuffers, so packets cross by value rather than by transfer.
-    postMessage: (msg: MainToRenderer) => port.postMessage(msg),
+    postMessage: (msg: MainToRenderer) => current?.postMessage(msg),
     onMessage: (fn: (msg: RendererToMain) => void) => {
-      port.on("message", (e) => fn(e.data as RendererToMain));
-      port.start();
+      handlers.push(fn);
     },
   };
 }
@@ -62,12 +79,12 @@ function registerWindowIpc(win: BrowserWindow): void {
     const centerY = bounds.y + bounds.height / 2;
     win.setContentSize(width, height);
     const next = win.getBounds();
-    win.setBounds({
-      x: Math.round(centerX - next.width / 2),
-      y: Math.round(centerY - next.height / 2),
-      width: next.width,
-      height: next.height,
-    });
+    const area = screen.getDisplayMatching(bounds).workArea;
+    const clamped = clampToWorkArea(
+      { x: Math.round(centerX - next.width / 2), y: Math.round(centerY - next.height / 2), width: next.width, height: next.height },
+      area,
+    );
+    win.setBounds(clamped);
   });
 
   ipcMain.handle("hinge:work-area-height", (event) => {

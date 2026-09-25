@@ -98,6 +98,10 @@ export class InputRouter {
   }
 
   #onKey(e: KeyboardEvent): void {
+    // Every key event this window receives is meant for the phone, not Electron
+    // chrome; without this, Ctrl+R/W/-/=/Shift+I still trigger reload, close,
+    // zoom and devtools even with the default app menu removed.
+    e.preventDefault();
     const like: KeyEventLike = {
       type: e.type as "keydown" | "keyup",
       code: e.code,

@@ -291,3 +291,18 @@ test("true angle is clamped to at least 100 while the inner screen is lit even i
   const out = ticks(director, 60);
   expect(out.trueAngle).toBeGreaterThanOrEqual(99.5);
 });
+
+test("a settled pose reports the exact target angle and brightness", () => {
+  const director = new FoldDirector();
+  director.streamClass(COVER);
+  director.firstFrame();
+  ticks(director, 30);
+  director.streamClass(INNER);
+  director.firstFrame();
+  const out = ticks(director, 60);
+  expect(out.settled).toBe(true);
+  expect(out.angle).toBe(180);
+  expect(out.trueAngle).toBe(180);
+  expect(out.innerBrightness).toBe(1);
+  expect(out.coverBrightness).toBe(0);
+});

@@ -62,3 +62,18 @@ test("variable dt ticks converge to the same value within 1 degree", () => {
 
   expect(Math.abs(fine.value - coarse.value)).toBeLessThan(1);
 });
+
+test("snapIfSettled lands exactly on target once settled and leaves a moving spring alone", () => {
+  const spring = new Spring({ value: 0, settleMs: 450 });
+  spring.target = 180;
+  spring.step(100);
+  const moving = spring.value;
+  spring.snapIfSettled();
+  expect(spring.value).toBe(moving);
+
+  spring.step(500);
+  expect(spring.value).not.toBe(180);
+  spring.snapIfSettled();
+  expect(spring.value).toBe(180);
+  expect(spring.velocity).toBe(0);
+});

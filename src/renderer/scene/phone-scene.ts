@@ -160,6 +160,7 @@ export class PhoneScene implements FrameTarget {
   #lastTime: number | null = null;
   #frameDirty = true;
   #layoutDirty = true;
+  #renderedSettled = false;
   #fatalStatus: string | null = null;
   readonly #software: boolean;
 
@@ -394,10 +395,13 @@ export class PhoneScene implements FrameTarget {
     }
     this.#onTick(out, rotation);
 
-    if (out.settled && !this.#frameDirty && !this.#layoutDirty) return;
+    // The tick that settles still moved the pose (the last fade step, the
+    // snap onto the target angle), so skipping starts only after it is drawn.
+    if (out.settled && this.#renderedSettled && !this.#frameDirty && !this.#layoutDirty) return;
     if (this.#layoutDirty) this.#applyLayout();
     this.#frameDirty = false;
     this.#layoutDirty = false;
+    this.#renderedSettled = out.settled;
     this.#renderNow();
   }
 

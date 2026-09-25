@@ -105,6 +105,8 @@ export class FoldDirector {
     this.#trueAngle.target = this.#trueAngleTarget();
     this.#workAngle.step(dtMs);
     this.#trueAngle.step(dtMs);
+    this.#workAngle.snapIfSettled();
+    this.#trueAngle.snapIfSettled();
 
     this.#brightness.cover = stepBrightness(this.#brightness.cover, this.#brightnessTarget.cover, dtMs);
     this.#brightness.inner = stepBrightness(this.#brightness.inner, this.#brightnessTarget.inner, dtMs);

@@ -42,4 +42,11 @@ export class Spring {
   settled(epsilon = 0.5): boolean {
     return Math.abs(this.target - this.value) <= epsilon && Math.abs(this.velocity) <= epsilon * this.#omega;
   }
+
+  /** Lands exactly on target once settled, so a finished move rests on the exact pose instead of creeping toward it. */
+  snapIfSettled(): void {
+    if (!this.settled()) return;
+    this.value = this.target;
+    this.velocity = 0;
+  }
 }

@@ -77,7 +77,7 @@ function registerWindowIpc(win: BrowserWindow): void {
   };
 
   ipcMain.on("hinge:set-window-size", (event, width: number, height: number, rotation: Rotation) => {
-    if (event.sender !== win.webContents) return;
+    if (event.sender !== win.webContents || win.isFullScreen()) return;
     const current = win.getContentBounds();
     const area = screen.getDisplayMatching(win.getBounds()).workArea;
     win.setContentBounds(anchoredWindowBounds(current, { w: width, h: height }, rotation, placedRotation, area));
@@ -113,6 +113,18 @@ function registerWindowIpc(win: BrowserWindow): void {
   });
 
   win.on("blur", stopDrag);
+
+  ipcMain.on("hinge:toggle-fullscreen", (event) => {
+    if (event.sender !== win.webContents) return;
+    stopDrag();
+    win.setFullScreen(!win.isFullScreen());
+  });
+  win.on("enter-full-screen", () => win.webContents.send("hinge:fullscreen", true));
+  win.on("leave-full-screen", () => win.webContents.send("hinge:fullscreen", false));
+
+  ipcMain.on("hinge:quit", (event) => {
+    if (event.sender === win.webContents) win.close();
+  });
 }
 
 function sizeOf(bounds: { width: number; height: number }): { width: number; height: number } {

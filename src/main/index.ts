@@ -1,6 +1,6 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, Menu } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu } from "electron";
 import { AdbHost } from "./adb-host";
 import type { ClipboardHost } from "./clipboard-sync";
 import { bindSource, DeviceSource, type SessionFactory } from "./app-controller";
@@ -16,7 +16,8 @@ import { teeToRecording } from "./recorder";
 import { ReplaySource } from "./replay-source";
 import { ScrcpySession } from "./scrcpy-session";
 import { toStreamSettings } from "./scrcpy-init";
-import { loadSettings } from "./settings";
+import { loadSettings, type SettingsStore } from "./settings";
+import { bridgeSettings } from "./settings-bridge";
 import { vendorPaths } from "./vendor-paths";
 import { createPhoneWindow } from "./window";
 import { createWirelessDeps } from "./wireless";
@@ -82,7 +83,9 @@ function closeRecordStream(stream: WriteStream, writer: ReturnType<typeof create
   };
 }
 
-async function buildSource(opts: { serial: string | null; replay: string | null; record: string | null }, log: Logger["log"]): Promise<BuiltSource> {
+type RunOptions = Extract<ReturnType<typeof parseArgs>, { mode: "run" }>;
+
+async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logger["log"]): Promise<BuiltSource> {
   if (opts.replay) return { source: await ReplaySource.fromFile(opts.replay, { loop: false }), closeRecording: async () => {} };
 
   const paths = vendorPaths({
@@ -94,7 +97,6 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
   const host = new AdbHost({ adbPath: paths.adb });
   await host.ensureServer();
 
-  const settings = await loadSettings(join(app.getPath("userData"), "settings.json"));
   const wireless = createWirelessDeps(host.client);
   const onConnected = (serial: string): void => {
     settings.save({ lastDevice: serial }).catch((e) => log(`failed to save lastDevice: ${String(e)}`));
@@ -161,15 +163,18 @@ function shutdown(source: MediaSource, closeRecording: () => Promise<void>): Pro
   ]);
 }
 
-async function runMode(opts: { serial: string | null; replay: string | null; record: string | null }): Promise<void> {
+async function runMode(opts: RunOptions): Promise<void> {
   await app.whenReady();
   const logger = createLogger(join(app.getPath("logs"), "hinge.log"));
+  const settingsPath = join(app.getPath("userData"), "settings.json");
+  const settings = await loadSettings(settingsPath);
   const { win, port } = createPhoneWindow();
+  bridgeSettings(win, settings, ipcMain, settingsPath);
 
   let source: MediaSource;
   let closeRecording: () => Promise<void> = async () => {};
   try {
-    const built = await buildSource(opts, logger.log);
+    const built = await buildSource(opts, settings, logger.log);
     source = built.source;
     closeRecording = built.closeRecording;
   } catch (e) {

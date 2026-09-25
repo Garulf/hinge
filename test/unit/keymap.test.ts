@@ -63,3 +63,16 @@ test("KeyTracker.flush sends an up for every key still held, then forgets them",
   expect(flushed.map((i) => i.type === "key" && i.keyCode).sort()).toEqual([21, 31]);
   expect(t.flush()).toEqual([]);
 });
+
+test("AltGr (Ctrl+Alt) with a printable key is text, on keydown only", () => {
+  expect(keyIntents(ev({ code: "KeyQ", key: "@", ctrlKey: true, altKey: true }))).toEqual([{ type: "text", text: "@" }]);
+  expect(keyIntents(ev({ type: "keyup", code: "KeyQ", key: "@", ctrlKey: true, altKey: true }))).toEqual([]);
+  expect(keyIntents(ev({ code: "F4", key: "F4", ctrlKey: true, altKey: true }))).toEqual([]);
+});
+
+test("Ctrl+V pastes the PC clipboard instead of sending the key", () => {
+  expect(keyIntents(ev({ code: "KeyV", key: "v", ctrlKey: true }))).toEqual([{ type: "clipboard-paste", asText: false }]);
+  expect(keyIntents(ev({ code: "KeyV", key: "v", ctrlKey: true, repeat: true }))).toEqual([]);
+  expect(keyIntents(ev({ type: "keyup", code: "KeyV", key: "v", ctrlKey: true }))).toEqual([]);
+  expect(keyIntents(ev({ code: "KeyV", key: "V", ctrlKey: true, shiftKey: true }))[0]).toMatchObject({ type: "key", keyCode: 50 });
+});

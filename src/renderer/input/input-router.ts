@@ -1,9 +1,10 @@
 import * as THREE from "three";
 import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
-import { ModifierTracker } from "../../shared/modifiers";
+import { ModifierTracker, type ModifierKey } from "../../shared/modifiers";
+import { WheelSteps } from "../../shared/scale";
 import { insideScreenMask, screenUvToStream } from "../../shared/screen-uv";
-import { hingeShortcut, type HingeAction } from "../../shared/shortcuts";
-import { streamToDevice, TouchTracker, type StreamPoint } from "../../shared/touch";
+import { DEFAULT_MODIFIERS, ShortcutHandler, type HingeAction } from "../../shared/shortcuts";
+import { streamToDevice, TouchTracker, type PointerEventLike, type StreamPoint } from "../../shared/touch";
 import type { ControlIntent } from "../../shared/wire";
 import type { PhoneScene } from "../scene/phone-scene";
 
@@ -13,6 +14,10 @@ function clamp(n: number, min: number, max: number): number {
 
 export interface InputRouterOptions {
   onAction?: (action: HingeAction) => void;
+  /** The configured shortcut modifiers, read on every key event so a settings change applies at once. */
+  modifiers?: () => readonly ModifierKey[];
+  /** While the display is paused nothing but shortcuts reaches the phone, as in scrcpy. */
+  paused?: () => boolean;
 }
 
 export class InputRouter {
@@ -24,6 +29,9 @@ export class InputRouter {
   readonly #touch: TouchTracker;
   readonly #keys = new KeyTracker();
   readonly #modifiers = new ModifierTracker();
+  readonly #shortcuts: ShortcutHandler;
+  readonly #paused: () => boolean;
+  readonly #wheelSteps = new WheelSteps();
   readonly #raycaster = new THREE.Raycaster();
   #dragging = false;
 
@@ -40,6 +48,8 @@ export class InputRouter {
     this.#send = send;
     this.#onAction = opts.onAction ?? (() => {});
     this.#touch = new TouchTracker(videoSize);
+    this.#shortcuts = new ShortcutHandler(this.#modifiers, opts.modifiers ?? (() => DEFAULT_MODIFIERS));
+    this.#paused = opts.paused ?? (() => false);
 
     canvas.addEventListener("pointerdown", (e) => this.#onPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.#onPointerMove(e));
@@ -52,9 +62,8 @@ export class InputRouter {
     window.addEventListener("keydown", (e) => this.#onKey(e));
     window.addEventListener("keyup", (e) => this.#onKey(e));
     window.addEventListener("blur", () => {
-      this.#cancelInteraction();
       this.#modifiers.clear();
-      for (const intent of this.#keys.flush()) this.#send(intent);
+      this.#releaseAll();
     });
   }
 
@@ -69,7 +78,7 @@ export class InputRouter {
       window.hinge.beginDrag();
       return;
     }
-    this.#dispatch({ kind: "down", button: e.button, buttons: e.buttons, hit });
+    this.#dispatch({ kind: "down", button: e.button, buttons: e.buttons, hit, ctrl: e.ctrlKey, shift: e.shiftKey });
   }
 
   #onPointerMove(e: PointerEvent): void {
@@ -87,6 +96,12 @@ export class InputRouter {
     this.#dispatch({ kind: "up", button: e.button, buttons: e.buttons, hit: this.#hitOf(e) });
   }
 
+  /** Lets go of every touch and key the phone still has held, before focus is lost or the display pauses. */
+  #releaseAll(): void {
+    this.#cancelInteraction();
+    for (const intent of [...this.#shortcuts.flush(), ...this.#keys.flush()]) this.#send(intent);
+  }
+
   /** Resets drag and touch state on blur, pointercancel and lostpointercapture. */
   #cancelInteraction(): void {
     if (this.#dragging) {
@@ -98,6 +113,12 @@ export class InputRouter {
 
   #onWheel(e: WheelEvent): void {
     e.preventDefault();
+    if (this.#shortcuts.modHeld()) {
+      const steps = this.#wheelSteps.add(e.deltaY);
+      for (let i = 0; i < Math.abs(steps); i++) this.#onAction(steps > 0 ? "scale-down" : "scale-up");
+      return;
+    }
+    if (this.#paused()) return;
     const hit = this.#hitOf(e);
     const size = this.#videoSize();
     if (!hit || !size) return;
@@ -126,12 +147,15 @@ export class InputRouter {
       shiftKey: e.shiftKey,
     };
     this.#modifiers.handle(like);
-    const action = hingeShortcut(like, this.#modifiers);
-    if (action) {
-      e.preventDefault();
-      this.#onAction(action);
+    const shortcut = this.#shortcuts.handle(like, this.#paused());
+    if (shortcut) {
+      if (shortcut.claimed) e.preventDefault();
+      for (const intent of shortcut.intents) this.#send(intent);
+      if (shortcut.action === "pause") this.#releaseAll();
+      if (shortcut.action) this.#onAction(shortcut.action);
       return;
     }
+    if (this.#paused()) return;
     const intents = this.#keys.handle(like);
     // Only claim the key when it actually produced something to send to the
     // phone; an unclaimed key (Alt+F4, Alt+Space, ...) must still reach the
@@ -140,8 +164,10 @@ export class InputRouter {
     for (const intent of intents) this.#send(intent);
   }
 
-  #dispatch(e: { kind: "down" | "move" | "up" | "leave" | "blur"; button: number; buttons: number; hit: StreamPoint | null }): void {
-    for (const intent of this.#touch.handle(e)) this.#send(intent);
+  #dispatch(e: PointerEventLike): void {
+    const intents = this.#touch.handle(e);
+    if (this.#paused()) return;
+    for (const intent of intents) this.#send(intent);
   }
 
   /**

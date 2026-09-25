@@ -41,11 +41,20 @@ function metaStateOf(e: KeyEventLike): number {
   return state;
 }
 
+function isPaste(e: KeyEventLike): boolean {
+  return e.code === "KeyV" && e.ctrlKey && !e.shiftKey;
+}
+
+/** AltGr arrives as Ctrl+Alt on Windows, so Ctrl+Alt with a printable key is typed text. */
 export function keyIntents(e: KeyEventLike): ControlIntent[] {
   if (MODIFIER_CODES.has(e.code)) return [];
+  const printable = [...e.key].length === 1;
+  const altGr = e.ctrlKey && e.altKey && !e.metaKey && printable;
+  if (altGr) return e.type === "keydown" ? [{ type: "text", text: e.key }] : [];
   if (e.altKey || e.metaKey) return [];
+  if (isPaste(e)) return e.type === "keydown" && !e.repeat ? [{ type: "clipboard-paste", asText: false }] : [];
 
-  if ([...e.key].length === 1) {
+  if (printable) {
     if (e.type === "keyup") return [];
     if (!e.ctrlKey) return [{ type: "text", text: e.key }];
   }

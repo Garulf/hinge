@@ -14,6 +14,7 @@
     "test/unit/frame-lifecycle.test.ts",
     "test/unit/input-router.test.ts",
     "test/unit/media-gate.test.ts",
+    "test/unit/pausable-target.test.ts",
     "test/unit/screen-routing.test.ts",
     "test/unit/status-overlay.test.ts",
     "test/unit/texture-renderer.test.ts",

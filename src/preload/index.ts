@@ -37,6 +37,18 @@ const api: HingeApi = {
   endDrag: () => ipcRenderer.send("hinge:end-drag"),
   workAreaHeight: () => ipcRenderer.invoke("hinge:work-area-height"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  settings: () => ipcRenderer.invoke("hinge:settings-get"),
+  settingsPath: () => ipcRenderer.invoke("hinge:settings-path"),
+  saveSettings: (patch) => ipcRenderer.invoke("hinge:settings-save", patch),
+  saveDeviceSettings: (serial, patch) => ipcRenderer.invoke("hinge:settings-save-device", serial, patch),
+  onSettings: (fn) => {
+    ipcRenderer.on("hinge:settings", (_event, settings) => fn(settings));
+  },
+  toggleFullscreen: () => ipcRenderer.send("hinge:toggle-fullscreen"),
+  onFullscreen: (fn) => {
+    ipcRenderer.on("hinge:fullscreen", (_event, on: boolean) => fn(on));
+  },
+  quit: () => ipcRenderer.send("hinge:quit"),
   platform: process.platform,
 };
 

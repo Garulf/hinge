@@ -3,12 +3,15 @@ import { bodyIsOpen, FoldDirector, type DirectorOutput } from "../shared/fold-di
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
 import { bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
+import type { Settings } from "../shared/settings";
+import { normaliseModifiers, type HingeAction } from "../shared/shortcuts";
 import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
 import { AudioPipe } from "./audio-pipe";
 import { createWorkletPlayer } from "./audio/worklet-player";
 import { InputRouter } from "./input/input-router";
 import { MediaGate } from "./media-gate";
+import { PausableTarget } from "./pausable-target";
 import { PortClient, receivePort } from "./port-client";
 import { PhoneScene } from "./scene/phone-scene";
 import { VideoPipe } from "./video-pipe";
@@ -106,13 +109,41 @@ function onDecodeError(message: string): void {
   else scene.setStatus(`Video error: ${message}`);
 }
 
-const pipe = new VideoPipe(scene, onSize, { onError: onDecodeError, onFirstFrame });
+const display = new PausableTarget(scene);
+const pipe = new VideoPipe(display, onSize, { onError: onDecodeError, onFirstFrame });
 // audioPipe has no UI surface to report failures through; logged only.
 const audioPipe = new AudioPipe({ createPlayer: createWorkletPlayer, onError: (message) => console.error("audio:", message) });
 
 const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
-new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
+let settings: Settings | null = null;
+let view: "work" | "showcase" = "work";
+void window.hinge.settings().then((loaded) => (settings ??= loaded));
+window.hinge.onSettings((changed) => (settings = changed));
+
+function onAction(action: HingeAction): void {
+  switch (action) {
+    case "toggle-view":
+      view = view === "work" ? "showcase" : "work";
+      director.setView(view);
+      break;
+    case "quit":
+      window.hinge.quit();
+      break;
+    case "pause":
+      display.paused = true;
+      break;
+    case "unpause":
+      display.paused = false;
+      break;
+  }
+}
+
+new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }), {
+  onAction,
+  modifiers: () => normaliseModifiers(settings?.shortcutModifiers),
+  paused: () => display.paused,
+});
 
 // Deliberately minimal: only resolves dropped files to real paths and hands them to main.
 window.addEventListener("dragover", (e) => e.preventDefault());

@@ -294,3 +294,80 @@ test("a press in a masked-off rounded corner of the lit screen drags the window"
   expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledOnce();
   expect(sent).toEqual([]);
 });
+
+function setupWith(opts: { modifiers?: () => ("lalt" | "ralt" | "lsuper" | "rsuper" | "lctrl" | "rctrl")[]; paused?: () => boolean; onAction?: (action: HingeAction) => void }) {
+  const canvas = fakeCanvas();
+  const sent: ControlIntent[] = [];
+  new InputRouter(canvas as unknown as HTMLCanvasElement, fakeScene() as never, () => ({ w: 100, h: 100 }), (intent) => sent.push(intent), opts);
+  return { canvas, sent };
+}
+
+test("MOD+h presses HOME on the phone and claims the key", () => {
+  const { sent } = setup();
+  fireKey("keydown", "AltLeft", { altKey: true });
+  const preventDefault = fireKey("keydown", "KeyH", { altKey: true, key: "h" });
+  fireKey("keyup", "KeyH", { altKey: true, key: "h" });
+  expect(preventDefault).toHaveBeenCalledOnce();
+  expect(sent.map((i) => i.type === "key" && [i.action, i.keyCode])).toEqual([
+    ["down", 3],
+    ["up", 3],
+  ]);
+});
+
+test("the shortcut modifier comes from the options and is read on every key", () => {
+  let modifiers: ("lalt" | "rctrl")[] = ["rctrl"];
+  const onAction = vi.fn();
+  setupWith({ modifiers: () => modifiers, onAction });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fireKey("keydown", "KeyF", { altKey: true });
+  expect(onAction).not.toHaveBeenCalled();
+  modifiers = ["lalt"];
+  fireKey("keyup", "KeyF", { altKey: true });
+  fireKey("keydown", "KeyF", { altKey: true });
+  expect(onAction).toHaveBeenCalledWith("fullscreen");
+});
+
+test("Ctrl+V pastes the PC clipboard on the phone", () => {
+  const { sent } = setup();
+  fireKey("keydown", "ControlLeft", { ctrlKey: true, key: "Control" });
+  fireKey("keydown", "KeyV", { ctrlKey: true, key: "v" });
+  expect(sent).toEqual([{ type: "clipboard-paste", asText: false }]);
+});
+
+test("Ctrl+drag on the screen pinches with a mirrored virtual finger", () => {
+  const { canvas, sent } = setup();
+  canvas.fire("pointerdown", { pointerId: 12, button: 0, buttons: 1, ctrlKey: true, shiftKey: false, clientX: 30, clientY: 30 });
+  expect(sent.map((i) => i.type === "touch" && i.pointerId)).toEqual([-2, -3]);
+});
+
+test("MOD+wheel scales the phone one step per notch instead of scrolling", () => {
+  const onAction = vi.fn();
+  const { canvas, sent } = setup({ onAction });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("wheel", { deltaX: 0, deltaY: -100, buttons: 0, ...CENTER });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 200, buttons: 0, ...CENTER });
+  expect(onAction.mock.calls.map(([a]) => a)).toEqual(["scale-up", "scale-down", "scale-down"]);
+  expect(sent).toEqual([]);
+});
+
+test("while paused, touches, scrolls and typing are dropped but MOD+Shift+z still unpauses", () => {
+  const onAction = vi.fn();
+  const { canvas, sent } = setupWith({ paused: () => true, onAction });
+  canvas.fire("pointerdown", { pointerId: 13, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, ...CENTER });
+  fireKey("keydown", "KeyA", { key: "a" });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fireKey("keydown", "KeyZ", { altKey: true, shiftKey: true });
+  expect(sent).toEqual([]);
+  expect(onAction).toHaveBeenCalledWith("unpause");
+});
+
+test("MOD+z releases a touch in progress before pausing", () => {
+  const onAction = vi.fn();
+  const { canvas, sent } = setup({ onAction });
+  canvas.fire("pointerdown", { pointerId: 14, button: 0, buttons: 1, ...CENTER });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fireKey("keydown", "KeyZ", { altKey: true });
+  expect(sent.map((i) => i.type === "touch" && i.action)).toEqual(["down", "cancel"]);
+  expect(onAction).toHaveBeenCalledWith("pause");
+});

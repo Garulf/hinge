@@ -26,6 +26,11 @@ export interface ControllerLike {
   backOrScreenOn(action: number): Promise<void>;
   resetVideo(): Promise<void>;
   setClipboard(m: { content: string; sequence: bigint; paste: boolean }): Promise<void>;
+  setDisplayPower(on: boolean): Promise<void>;
+  expandNotificationPanel(): Promise<void>;
+  expandSettingPanel(): Promise<void>;
+  collapseNotificationPanel(): Promise<void>;
+  rotateDevice(): Promise<void>;
 }
 
 /**
@@ -87,6 +92,16 @@ export function applyIntent(c: ControllerLike, intent: ControlIntent, deps?: App
       return c.backOrScreenOn(KEY_ACTION[intent.action]);
     case "reset-video":
       return c.resetVideo();
+    case "display-power":
+      return c.setDisplayPower(intent.on);
+    case "expand-notifications":
+      return c.expandNotificationPanel();
+    case "expand-settings":
+      return c.expandSettingPanel();
+    case "collapse-panels":
+      return c.collapseNotificationPanel();
+    case "rotate-device":
+      return c.rotateDevice();
     case "clipboard-paste": {
       const readPcClipboard = deps?.readPcClipboard;
       if (!readPcClipboard) return Promise.resolve();

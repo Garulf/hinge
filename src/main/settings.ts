@@ -1,38 +1,19 @@
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import type { DeviceSettings, Settings, SettingsPatch } from "../shared/settings";
 
-export type ShortcutModifier = "lalt" | "ralt" | "lsuper" | "rsuper" | "lctrl" | "rctrl";
-
-export interface DeviceSettings {
-  windowPosition?: { x: number; y: number };
-  pxPerMm?: number;
-}
-
-export interface Settings {
-  version: 1;
-  colourway: string;
-  videoCodec: "h264" | "h265";
-  videoBitRate: number;
-  maxSize: number;
-  maxFps: number;
-  audio: boolean;
-  shortcutModifier: ShortcutModifier;
-  alwaysOnTop: boolean;
-  lastDevice: string | null;
-  view: "work" | "showcase";
-  devices: Record<string, DeviceSettings>;
-}
+export type { DeviceSettings, Settings, SettingsPatch, ShortcutModifier } from "../shared/settings";
 
 export const SETTINGS_VERSION = 1;
 
 export const DEFAULT_SETTINGS: Settings = {
   version: 1,
-  colourway: "Jetblack",
+  colourway: "jetblack",
   videoCodec: "h264",
   videoBitRate: 16_000_000,
   maxSize: 0,
   maxFps: 0,
   audio: true,
-  shortcutModifier: "lalt",
+  shortcutModifiers: ["lalt", "lsuper"],
   alwaysOnTop: false,
   lastDevice: null,
   view: "work",
@@ -50,7 +31,7 @@ const NO_MIGRATIONS: MigrationMap = {};
 
 export interface SettingsStore {
   readonly current: Settings;
-  save(patch: Partial<Omit<Settings, "devices">>): Promise<void>;
+  save(patch: SettingsPatch): Promise<void>;
   saveDevice(serial: string, patch: DeviceSettings): Promise<void>;
   /** Returns an unsubscribe function. */
   onChange(fn: (settings: Settings) => void): () => void;

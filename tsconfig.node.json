@@ -5,5 +5,5 @@
     "types": ["node"], "lib": ["ES2023", "DOM"], "skipLibCheck": true
   },
   "include": ["src/main", "src/preload", "src/shared", "test", "electron.vite.config.ts", "vitest.config.ts", "playwright.config.ts"],
-  "exclude": ["test/unit/audio-pipe.test.ts", "test/unit/worklet-player.test.ts", "test/unit/fold-model.test.ts", "test/unit/frame-lifecycle.test.ts", "test/unit/input-router.test.ts", "test/unit/media-gate.test.ts", "test/unit/screen-routing.test.ts", "test/unit/status-overlay.test.ts", "test/unit/texture-renderer.test.ts", "test/unit/video-pipe.test.ts", "test/unit/wrap-text.test.ts"]
+  "exclude": ["test/unit/audio-pipe.test.ts", "test/unit/worklet-player.test.ts", "test/unit/fold-model.test.ts", "test/unit/frame-lifecycle.test.ts", "test/unit/input-router.test.ts", "test/unit/media-gate.test.ts", "test/unit/pausable-target.test.ts", "test/unit/screen-routing.test.ts", "test/unit/status-overlay.test.ts", "test/unit/texture-renderer.test.ts", "test/unit/video-pipe.test.ts", "test/unit/wrap-text.test.ts"]
 }

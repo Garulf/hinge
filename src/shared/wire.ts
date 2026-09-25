@@ -28,6 +28,11 @@ export type ControlIntent =
   | { type: "text"; text: string }
   | { type: "back-or-screen-on"; action: "down" | "up" }
   | { type: "reset-video" }
+  | { type: "display-power"; on: boolean }
+  | { type: "expand-notifications" }
+  | { type: "expand-settings" }
+  | { type: "collapse-panels" }
+  | { type: "rotate-device" }
   /**
    * Unresolved: main fills in the PC clipboard content and (for a real
    * paste) a fresh sequence number, since neither is available to the

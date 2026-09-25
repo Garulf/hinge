@@ -69,15 +69,20 @@ export class AdbHost {
     return "spawned";
   }
 
-  async watch(onChange: (devices: DeviceSummary[]) => void): Promise<() => Promise<void>> {
+  async watch(
+    onChange: (devices: DeviceSummary[]) => void,
+    onError?: (err: Error) => void,
+  ): Promise<() => Promise<void>> {
     const observer = await this.client.trackDevices({
       includeStates: ["device", "unauthorized", "authorizing", "offline"],
     });
     const emit = (devices: readonly AdbServerClientType.Device[]) => onChange(devices.map(toDeviceSummary));
-    const off = observer.onListChange(emit);
+    const offList = observer.onListChange(emit);
+    const offError = observer.onError((err) => onError?.(err));
     emit(observer.current);
     return async () => {
-      off();
+      offList();
+      offError();
       await observer.close();
     };
   }

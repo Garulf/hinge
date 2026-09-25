@@ -122,3 +122,55 @@ test("switchDeviceToWifi fails clearly when the device has no Wi-Fi IP (Wi-Fi of
   expect(calls.setTcpIpPort).toEqual([]);
   expect(calls.connect).toEqual([]);
 });
+
+test("switchDeviceToWifi retries connect while adbd is restarting in TCP mode, succeeding once it comes back", async () => {
+  const fakeAdb = { marker: "adb" } as never;
+  let attempts = 0;
+  const delays: number[] = [];
+  const { deps, calls } = fakeDeps({
+    wlanIp: async () => "192.168.1.77",
+    connect: async (address) => {
+      calls.connect.push([address]);
+      attempts++;
+      if (attempts <= 2) throw new Error("connection refused (adbd restarting)");
+    },
+  });
+  const address = await switchDeviceToWifi(deps, fakeAdb, {
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+
+  expect(address).toBe("192.168.1.77:5555");
+  expect(attempts).toBe(3);
+  expect(delays).toEqual([300, 300]);
+});
+
+test("switchDeviceToWifi gives up after 10 failed connect attempts", async () => {
+  const fakeAdb = { marker: "adb" } as never;
+  let attempts = 0;
+  const { deps } = fakeDeps({
+    wlanIp: async () => "192.168.1.77",
+    connect: async () => {
+      attempts++;
+      throw new Error("still refused");
+    },
+  });
+  await expect(switchDeviceToWifi(deps, fakeAdb, { delay: async () => {} })).rejects.toThrow("still refused");
+  expect(attempts).toBe(10);
+});
+
+test("pairNewDevice reports paired ok with connectedAddress null and a message when the mDNS service is found but connect() itself fails", async () => {
+  const { deps, calls } = fakeDeps({
+    mdnsServices: async () => [{ name: "x", service: "_adb-tls-connect._tcp", address: "192.168.1.42:5000" }],
+    connect: async (address) => {
+      calls.connect.push([address]);
+      throw new Error("connection refused");
+    },
+  });
+  const result = await pairNewDevice(deps, "192.168.1.42:37251", "123456");
+
+  expect(result.paired).toBe(true);
+  expect(result.connectedAddress).toBeNull();
+  expect(result.message).toContain("connection refused");
+});

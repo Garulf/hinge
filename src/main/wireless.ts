@@ -1,5 +1,4 @@
-import type { Adb } from "@yume-chan/adb";
-import { AdbServerClient } from "@yume-chan/adb";
+import type { Adb, AdbServerClient } from "@yume-chan/adb";
 
 export interface MdnsService {
   name: string;
@@ -35,8 +34,10 @@ function defaultDelay(ms: number): Promise<void> {
 
 export interface PairResult {
   paired: true;
-  /** null when pairing succeeded but no matching mDNS connect service was found within the poll window; the caller should ask for the connect port instead. */
+  /** null when pairing succeeded but no matching mDNS connect service was found within the poll window (ask for the connect port instead), or when a matching service was found but connecting to it failed. */
   connectedAddress: string | null;
+  /** Set alongside a null connectedAddress when a connect service was found but connect() itself failed, so the caller can show why. */
+  message?: string;
 }
 
 /**
@@ -62,8 +63,14 @@ export async function pairNewDevice(
     const services = await deps.mdnsServices();
     const match = services.find((s) => s.service === CONNECT_SERVICE && hostOf(s.address) === host);
     if (match) {
-      await deps.connect(match.address);
-      return { paired: true, connectedAddress: match.address };
+      // Pairing itself already succeeded at this point; a failed connect is
+      // reported as "ask for the port" rather than failing the whole pair.
+      try {
+        await deps.connect(match.address);
+        return { paired: true, connectedAddress: match.address };
+      } catch (e) {
+        return { paired: true, connectedAddress: null, message: String(e) };
+      }
     }
     if (attempt < attempts - 1) await delay(delayMs);
   }
@@ -71,15 +78,34 @@ export async function pairNewDevice(
 }
 
 const WIFI_PORT = 5555;
+const CONNECT_RETRY_ATTEMPTS = 10;
+const CONNECT_RETRY_DELAY_MS = 300;
 
 /** `adb tcpip 5555` then `adb connect <device-ip>:5555`, the device's own ip from `ip -4 addr show wlan0`. */
-export async function switchDeviceToWifi(deps: WirelessDeps, adb: Adb): Promise<string> {
+export async function switchDeviceToWifi(
+  deps: WirelessDeps,
+  adb: Adb,
+  opts?: { delay?: (ms: number) => Promise<void> },
+): Promise<string> {
   const ip = await deps.wlanIp(adb);
   if (!ip) throw new Error("could not find the device's Wi-Fi (wlan0) IP address; is Wi-Fi on?");
   await deps.setTcpIpPort(adb, WIFI_PORT);
   const address = `${ip}:${WIFI_PORT}`;
-  await deps.connect(address);
-  return address;
+  const delay = opts?.delay ?? defaultDelay;
+
+  // setTcpIpPort restarts adbd in TCP mode; connect() can fail transiently
+  // for a moment while it comes back up.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < CONNECT_RETRY_ATTEMPTS; attempt++) {
+    try {
+      await deps.connect(address);
+      return address;
+    } catch (e) {
+      lastError = e;
+      if (attempt < CONNECT_RETRY_ATTEMPTS - 1) await delay(CONNECT_RETRY_DELAY_MS);
+    }
+  }
+  throw lastError;
 }
 
 /** Matches the first `inet a.b.c.d/nn` line, which is how `ip -4 addr show wlan0` reports the interface's address. */

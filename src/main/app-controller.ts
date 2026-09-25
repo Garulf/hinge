@@ -61,6 +61,7 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
       lastAudioConfigPacket = null;
       post({ kind: "audio-end", reason });
     },
+    transferProgress: (progress) => post({ kind: "transfer-progress", progress }),
   };
 
   let started = false;
@@ -75,6 +76,10 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
       }
       started = true;
       source.start(sink).catch((e) => sink.status({ state: "error", message: String(e) }));
+      return;
+    }
+    if (msg.kind === "drop-files") {
+      source.transfer?.(msg.paths);
       return;
     }
     source.control(msg.intent);
@@ -142,6 +147,10 @@ export class DeviceSource implements MediaSource {
 
   control(intent: ControlIntent): void {
     this.#session?.control(intent);
+  }
+
+  transfer(localPaths: string[]): void {
+    this.#session?.transfer?.(localPaths);
   }
 
   async stop(): Promise<void> {

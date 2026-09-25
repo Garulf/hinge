@@ -1,5 +1,5 @@
 import type { PostureReading } from "../shared/posture";
-import type { AudioStreamInfo, ControlIntent, SessionStatus, VideoStreamInfo, WireAudioPacket, WireMediaPacket } from "../shared/wire";
+import type { AudioStreamInfo, ControlIntent, SessionStatus, TransferProgress, VideoStreamInfo, WireAudioPacket, WireMediaPacket } from "../shared/wire";
 
 export interface MediaSink {
   videoStart(info: VideoStreamInfo): void;
@@ -12,12 +12,15 @@ export interface MediaSink {
   audioStart?(info: AudioStreamInfo): void;
   audioPacket?(packet: WireAudioPacket): void;
   audioEnd?(reason?: "unsupported"): void;
+  transferProgress?(progress: TransferProgress): void;
 }
 
 export interface MediaSource {
   start(sink: MediaSink): Promise<void>;
   control(intent: ControlIntent): void;
   stop(): Promise<void>;
+  /** Absent in contexts with nothing to push files to (e.g. the probe mode or replay). */
+  transfer?(localPaths: string[]): void;
   /**
    * Resolves when the source ends on its own (stream closed, retries exhausted),
    * as opposed to being stopped explicitly. Absent for sources that never end

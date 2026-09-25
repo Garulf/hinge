@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { PackageManager } from "@yume-chan/android-bin";
 import type { Adb } from "@yume-chan/adb";
 import { AdbScrcpyClient, AdbScrcpyExitedError, AdbScrcpyOptions4_1 } from "@yume-chan/adb-scrcpy";
 import { DefaultServerPath, type ScrcpyVideoStreamPacket } from "@yume-chan/scrcpy";
@@ -7,7 +8,37 @@ import { createClipboardSync, type ClipboardHost, type ClipboardSync } from "./c
 import { applyIntent, type ApplyIntentDeps } from "./intents";
 import type { MediaSink, MediaSource } from "./media-source";
 import { buildInit, type StreamSettings } from "./scrcpy-init";
+import { createTransferQueue, defaultOpenFile, type TransferDeps, type TransferQueue } from "./transfers";
 import { toWire, toWireAudio, type ControlIntent } from "../shared/wire";
+
+/**
+ * Bridges a plain (DOM-shaped) ReadableStream<Uint8Array> from transfers.ts
+ * into the PushReadableStream Tango's own sync/install calls expect;
+ * backpressure and cancellation both flow through in either direction.
+ */
+function toPushReadable(source: ReadableStream<Uint8Array>): PushReadableStream<Uint8Array> {
+  return new PushReadableStream<Uint8Array>(async (controller) => {
+    const reader = source.getReader();
+    try {
+      for (;;) {
+        if (controller.abortSignal.aborted) {
+          await reader.cancel();
+          return;
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
+        const ok = await controller.enqueue(value);
+        if (!ok) {
+          await reader.cancel();
+          return;
+        }
+      }
+      controller.close();
+    } catch (e) {
+      controller.error(e);
+    }
+  });
+}
 
 type Client = AdbScrcpyClient<AdbScrcpyOptions4_1<any>>;
 
@@ -48,6 +79,8 @@ export class ScrcpySession implements MediaSource {
   readonly #firstPacketTimeoutMs: number;
   readonly #clipboardHost: ClipboardHost | undefined;
   #clipboardSync: ClipboardSync | null = null;
+  readonly #transfers: TransferQueue;
+  #sink: MediaSink | null = null;
 
   constructor(
     private readonly opts: {
@@ -61,6 +94,8 @@ export class ScrcpySession implements MediaSource {
       firstPacketTimeoutMs?: number;
       /** Absent in contexts with no PC clipboard access (e.g. the probe mode): clipboard sync and clipboard-paste are then both no-ops. */
       clipboardHost?: ClipboardHost;
+      /** Overrides for tests; production uses PackageManager/adb.sync/controller.scanFile against opts.adb. */
+      transferDeps?: Partial<TransferDeps>;
     },
   ) {
     this.#deps = { ...defaultDeps, ...opts.deps };
@@ -69,9 +104,30 @@ export class ScrcpySession implements MediaSource {
     this.ended = new Promise((resolve) => {
       this.#resolveEnded = resolve;
     });
+
+    // Constructed lazily, not here: a real PackageManager probes adb
+    // features on construction, which a fake adb (as tests without their
+    // own transferDeps override pass) does not support.
+    let pm: PackageManager | undefined;
+    const getPm = (): PackageManager => (pm ??= new PackageManager(opts.adb));
+    const defaultTransferDeps: TransferDeps = {
+      openFile: defaultOpenFile,
+      installApk: (stream) => getPm().pushAndInstallStream(toPushReadable(stream), { replaceExisting: true }),
+      pushFile: async (path, stream) => {
+        await opts.adb.sync.write({ path, readable: toPushReadable(stream) });
+      },
+      scanFile: async (path) => {
+        const controller = this.#client?.controller;
+        if (!controller) throw new Error("no control connection to scan the pushed file");
+        await controller.scanFile(path);
+      },
+    };
+    this.#transfers = createTransferQueue({ ...defaultTransferDeps, ...opts.transferDeps }, opts.log);
+    this.#transfers.onProgress((progress) => this.#sink?.transferProgress?.(progress));
   }
 
   async start(sink: MediaSink): Promise<void> {
+    this.#sink = sink;
     try {
       sink.status({ state: "connecting", serial: this.opts.serial });
 
@@ -97,10 +153,15 @@ export class ScrcpySession implements MediaSource {
     applyIntent(controller, intent, this.#clipboardDeps()).catch((e) => this.opts.log?.(`control failed: ${String(e)}`));
   }
 
+  transfer(localPaths: string[]): void {
+    this.#transfers.enqueue(localPaths);
+  }
+
   async stop(): Promise<void> {
     this.#stopped = true;
     this.#clipboardSync?.stop();
     this.#clipboardSync = null;
+    this.#transfers.cancelAll();
     await this.#client?.close().catch(() => {});
   }
 

@@ -125,6 +125,56 @@ test("audioEnd forwards the reason and clears the replay state so a later ready 
   expect(posted.some((m) => m.kind === "audio-start" || m.kind === "audio-packet")).toBe(false);
 });
 
+test("forwards transfer-progress from the sink to the port, and routes a drop-files message to the source's transfer()", async () => {
+  const posted: MainToRenderer[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: (m) => posted.push(m), onMessage: (fn) => { handler = fn; } };
+  const transferred: string[][] = [];
+  let sink!: MediaSink;
+  const source: MediaSource = {
+    start: async (s) => { sink = s; },
+    control: () => {},
+    transfer: (paths) => transferred.push(paths),
+    stop: async () => {},
+  };
+  bindSource(source, port);
+  handler({ kind: "ready" });
+  await flush();
+
+  handler({ kind: "drop-files", paths: ["/tmp/a.apk", "/tmp/b.png"] });
+  expect(transferred).toEqual([["/tmp/a.apk", "/tmp/b.png"]]);
+
+  sink.transferProgress!({ id: "t1", name: "a.apk", kind: "install", state: "running", bytesWritten: 1, totalBytes: 2 });
+  expect(posted).toContainEqual({
+    kind: "transfer-progress",
+    progress: { id: "t1", name: "a.apk", kind: "install", state: "running", bytesWritten: 1, totalBytes: 2 },
+  });
+});
+
+test("DeviceSource.transfer() forwards to the current session and is a no-op with no session connected", async () => {
+  const watcher = fakeWatcher();
+  const transferred: string[][] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: (): MediaSource => ({
+      start: async () => {},
+      control: () => {},
+      transfer: (paths) => transferred.push(paths),
+      stop: async () => {},
+    }),
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  source.transfer(["/tmp/nowhere.txt"]);
+  expect(transferred).toEqual([]);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  source.transfer(["/tmp/here.txt"]);
+  expect(transferred).toEqual([["/tmp/here.txt"]]);
+});
+
 function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }

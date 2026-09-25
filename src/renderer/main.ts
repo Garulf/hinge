@@ -87,6 +87,17 @@ const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
 new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
 
+// Thin on purpose: Task 7 owns drop feedback (per-file toasts); this only
+// resolves dropped files to real paths and hands them to main.
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+  const paths = Array.from(files).map((file) => window.hinge.getPathForFile(file));
+  client?.send({ kind: "drop-files", paths });
+});
+
 void Promise.all([receivePort(), scene.ready]).then(([port]) => {
   client = new PortClient(port);
   client.on((msg) => {

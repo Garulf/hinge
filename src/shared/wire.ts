@@ -38,6 +38,19 @@ export type ControlIntent =
 
 export interface PostureMessage { kind: "posture"; reading: PostureReading }
 
+export type TransferKind = "install" | "push";
+export type TransferState = "queued" | "running" | "done" | "error" | "cancelled";
+
+export interface TransferProgress {
+  id: string;
+  name: string;
+  kind: TransferKind;
+  state: TransferState;
+  bytesWritten: number;
+  totalBytes: number;
+  message?: string;
+}
+
 export type MainToRenderer =
   | { kind: "video-start"; info: VideoStreamInfo }
   | { kind: "video-packet"; packet: WireMediaPacket }
@@ -47,11 +60,14 @@ export type MainToRenderer =
   /** reason "unsupported" covers both the device metadata reporting "disabled"/"errored" and the audio stream failing before it produced anything; absent for a clean end (e.g. session stop). */
   | { kind: "audio-end"; reason?: "unsupported" }
   | { kind: "status"; status: SessionStatus }
+  | { kind: "transfer-progress"; progress: TransferProgress }
   | PostureMessage;
 
 export type RendererToMain =
   | { kind: "ready" }
-  | { kind: "control"; intent: ControlIntent };
+  | { kind: "control"; intent: ControlIntent }
+  /** Local PC file paths, already resolved in the preload via webUtils.getPathForFile; main decides install vs. push by extension. */
+  | { kind: "drop-files"; paths: string[] };
 
 type LooseMediaPacket =
   | { type: "configuration"; data: Uint8Array }

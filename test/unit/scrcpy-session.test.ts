@@ -2,7 +2,8 @@ import { expect, test } from "vitest";
 import { ScrcpySession, type ScrcpyServerDeps } from "../../src/main/scrcpy-session";
 import type { MediaSink } from "../../src/main/media-source";
 import { DEFAULT_STREAM_SETTINGS } from "../../src/main/scrcpy-init";
-import type { SessionStatus } from "../../src/shared/wire";
+import type { TransferDeps } from "../../src/main/transfers";
+import type { SessionStatus, TransferProgress } from "../../src/shared/wire";
 
 function fakeSink(): {
   sink: MediaSink;
@@ -12,12 +13,14 @@ function fakeSink(): {
   audioStarts: unknown[];
   audioPackets: unknown[];
   audioEnds: (string | undefined)[];
+  transfers: TransferProgress[];
 } {
   const statuses: SessionStatus[] = [];
   const packets: unknown[] = [];
   const audioStarts: unknown[] = [];
   const audioPackets: unknown[] = [];
   const audioEnds: (string | undefined)[] = [];
+  const transfers: TransferProgress[] = [];
   let ended = 0;
   const sink: MediaSink = {
     videoStart: () => {},
@@ -29,8 +32,9 @@ function fakeSink(): {
     audioStart: (info) => audioStarts.push(info),
     audioPacket: (p) => audioPackets.push(p),
     audioEnd: (reason) => audioEnds.push(reason),
+    transferProgress: (p) => transfers.push(p),
   };
-  return { sink, statuses, packets, endCalls: () => ended, audioStarts, audioPackets, audioEnds };
+  return { sink, statuses, packets, endCalls: () => ended, audioStarts, audioPackets, audioEnds, transfers };
 }
 
 function neverEndingStream(): ReadableStream<{ type: "data"; data: Uint8Array }> {
@@ -62,7 +66,12 @@ function oneShotClient(
 
 function baseOpts(
   deps: Partial<ScrcpyServerDeps>,
-  extra?: Partial<{ firstPacketTimeoutMs: number; log: (l: string) => void; clipboardHost: { readText: () => Promise<string>; writeText: (t: string) => Promise<void> } }>,
+  extra?: Partial<{
+    firstPacketTimeoutMs: number;
+    log: (l: string) => void;
+    clipboardHost: { readText: () => Promise<string>; writeText: (t: string) => Promise<void> };
+    transferDeps: Partial<TransferDeps>;
+  }>,
 ) {
   return {
     adb: {} as never,
@@ -387,4 +396,87 @@ test("an audio stream that errors mid-stream posts audio-end('unsupported') inst
   expect(logs.some((l) => l.includes("audio socket closed"))).toBe(true);
 
   await session.stop();
+});
+
+function textStream(text: string): ReadableStream<Uint8Array> {
+  const bytes = new TextEncoder().encode(text);
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
+test("transfer() enqueues onto the session's transfer queue and progress reaches the sink as transfer-progress", async () => {
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(() => videoStream) as never,
+  };
+  const pushes: string[] = [];
+  const transferDeps: Partial<TransferDeps> = {
+    openFile: async () => ({ size: 5, stream: textStream("hello") }),
+    pushFile: async (path, stream) => {
+      pushes.push(path);
+      const reader = stream.getReader();
+      for (;;) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    },
+    scanFile: async () => {},
+  };
+  const session = new ScrcpySession(baseOpts(deps, { transferDeps }));
+  const { sink, transfers } = fakeSink();
+  await session.start(sink);
+
+  session.transfer(["/tmp/notes.txt"]);
+  await flush();
+  await flush();
+
+  expect(pushes).toEqual(["/sdcard/Download/notes.txt"]);
+  expect(transfers.map((p) => p.state)).toEqual(["queued", "running", "running", "done"]);
+});
+
+test("stop() cancels an in-flight transfer instead of letting it finish and be announced done, exactly as a device switch requires", async () => {
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(() => videoStream) as never,
+  };
+  let releasePush!: () => void;
+  const pushGate = new Promise<void>((resolve) => {
+    releasePush = resolve;
+  });
+  const transferDeps: Partial<TransferDeps> = {
+    openFile: async () => ({ size: 5, stream: textStream("hello") }),
+    pushFile: async (_path, stream) => {
+      const reader = stream.getReader();
+      await reader.read(); // consumes the one chunk, firing the second "running" progress event
+      await pushGate;
+      throw new Error("push aborted");
+    },
+    scanFile: async () => {},
+  };
+  const session = new ScrcpySession(baseOpts(deps, { transferDeps }));
+  const { sink, transfers } = fakeSink();
+  await session.start(sink);
+
+  session.transfer(["/tmp/big.bin"]);
+  await flush();
+  expect(transfers.map((p) => p.state)).toEqual(["queued", "running", "running"]);
+
+  await session.stop();
+  releasePush();
+  await flush();
+
+  expect(transfers.map((p) => p.state)).toEqual(["queued", "running", "running", "cancelled"]);
+  expect(transfers.some((p) => p.state === "done")).toBe(false);
 });

@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fold7_params import P  # noqa: E402
 from meshkit import (  # noqa: E402
     CORNERS, arc, blender_to_phone, face_toward, finish_solid, grid_positions, mm, phone_to_blender,
-    rounded_rect, screen_panel, smoothstep, split_along_planes, sweep,
+    circle, rounded_rect, screen_panel, smoothstep, split_along_planes, stadium, sweep,
 )
 
 MODEL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +37,11 @@ HINGE_FILL_TOP_MM = 4.06
 DISPLAY_PANEL_HEIGHT_MM = 3.95
 DISPLAY_PANEL_MARGIN_MM = 1.6
 SMOOTH_ANGLE_DEG = 40.0
+LENS_SEGMENTS = 128
+ISLAND_ARC_SEGMENTS = 48
+SMALL_HOLE_SEGMENTS = 24
+BUTTON_ARC_SEGMENTS = 12
+HOLE_DEPTH_MM = 0.5
 PHONE_PLUS_Z_IN_BLENDER = Vector((0, -1, 0))
 
 
@@ -436,12 +441,202 @@ def build_cover_screen(phone):
     return obj
 
 
+# Camera island, buttons, ports ------------------------------------------------
+
+def on_back(u, v, h):
+    return (u, v, -h)
+
+
+def camera_island_centre():
+    e = P.est
+    return (P.half_width_mm - e.camera_island_center_from_outer_edge_mm,
+            P.half_height_mm - e.camera_island_from_top_mm - e.camera_island_height_mm / 2)
+
+
+def lens_profile(outer_radius, base, top):
+    rounding = 0.25
+    radial = [
+        (outer_radius, base, "ring"),
+        (outer_radius, top - rounding, "ring"),
+    ]
+    radial += [(r, h, "ring") for r, h, _ in arc(outer_radius - rounding, top - rounding, rounding, 0, 90, 4, "ring")[1:]]
+    radial += [
+        (outer_radius - 0.9, top, "ring"),
+        (outer_radius - 1.15, top - 0.08, "ring"),
+        (outer_radius - 1.3, top - 0.2, "ring"),
+        (outer_radius - 1.3, top - 0.28, "bezel"),
+        (outer_radius - 1.5, top - 0.3, "bezel"),
+        (outer_radius - 2.8, top - 0.3, "bezel"),
+        (outer_radius - 3.0, top - 0.36, "glass"),
+        (3.2, top - 0.36, "glass"),
+        (2.2, top - 0.33, "glass"),
+        (1.1, top - 0.31, "glass"),
+        (0.0, top - 0.3, "glass"),
+    ]
+    return [(outer_radius - r, h, kind) for r, h, kind in radial]
+
+
+def build_camera_island(phone):
+    e = P.est
+    cu, cv = camera_island_centre()
+    slots = Slots(phone.materials, "camera_island", "lens_ring", "lens_glass")
+    kind_material = {"island": "camera_island", "ring": "lens_ring", "bezel": "lens_ring", "glass": "lens_glass"}
+    bm = bmesh.new()
+    rounding = e.camera_plate_edge_round_mm
+    plate_top = e.camera_plate_height_mm
+    plate_profile = [(0.0, -0.05, "island"), (0.06, plate_top - rounding, "island")]
+    plate_profile += arc(0.06 + rounding, plate_top - rounding, rounding, 180, 90, PROFILE_ROUND_SEGMENTS, "island")[1:]
+    outline = stadium(cu, cv, e.camera_island_height_mm, e.camera_island_width_mm, ISLAND_ARC_SEGMENTS)
+    sweep(bm, outline, on_back, plate_profile, closed_profile=False, cap_start=True, cap_end=True,
+          material_of=lambda seg, kind: slots[kind_material[kind]])
+    lens_top = plate_top + e.lens_ring_height_mm
+    for offset in (-1, 0, 1):
+        ring = circle(cu, cv + offset * e.lens_pitch_mm, e.lens_ring_outer_radius_mm, LENS_SEGMENTS)
+        sweep(bm, ring, on_back, lens_profile(e.lens_ring_outer_radius_mm, plate_top - 0.05, lens_top),
+              closed_profile=False, cap_start=True, material_of=lambda seg, kind: slots[kind_material[kind]])
+    finish_solid(bm)
+    return mesh_object("CameraIsland", bm, slots, phone.fixed_half)
+
+
+def build_flash(phone):
+    e = P.est
+    u = P.half_width_mm - e.flash_center_from_outer_edge_mm
+    v = P.half_height_mm - e.flash_center_from_top_mm
+    r = e.flash_radius_mm
+    profile = [(0.0, -0.05, "flash"), (0.0, 0.02, "flash"), (0.25, 0.05, "flash"), (r, 0.06, "flash")]
+    slots = Slots(phone.materials, "flash")
+    bm = bmesh.new()
+    sweep(bm, circle(u, v, r, 48), on_back, profile, closed_profile=False, cap_start=True,
+          material_of=lambda seg, kind: slots["flash"])
+    finish_solid(bm)
+    return mesh_object("Flash", bm, slots, phone.fixed_half)
+
+
+def button_profile(protrusion, rounding):
+    points = [(0.0, -0.2, "button"), (0.0, protrusion - rounding, "button")]
+    points += arc(rounding, protrusion - rounding, rounding, 180, 90, 4, "button")[1:]
+    return points
+
+
+def build_button(phone, name, top_from_top, length, depth, protrusion, rounding):
+    v_centre = P.spec.body_open_thickness_mm / 2
+    u_top = P.half_height_mm - top_from_top
+    outline = rounded_rect(u_top - length, u_top, v_centre - depth / 2, v_centre + depth / 2,
+                           dict.fromkeys(CORNERS, depth / 2 - 1e-4), BUTTON_ARC_SEGMENTS, max_step=1.5)
+    slots = Slots(phone.materials, "button")
+    bm = bmesh.new()
+    sweep(bm, outline, lambda u, v, h: (P.half_width_mm + h, u, v), button_profile(protrusion, rounding),
+          closed_profile=False, cap_start=True, cap_end=True, material_of=lambda seg, kind: slots["button"])
+    finish_solid(bm)
+    return mesh_object(name, bm, slots, phone.fixed_half)
+
+
+def build_buttons(phone):
+    e = P.est
+    build_button(phone, "VolumeRocker", e.volume_rocker_top_from_top_mm, e.volume_rocker_length_mm,
+                 e.volume_rocker_depth_mm, e.volume_rocker_protrusion_mm, 0.25)
+    build_button(phone, "PowerKey", e.power_key_top_from_top_mm, e.power_key_length_mm,
+                 e.power_key_depth_mm, e.power_key_protrusion_mm, 0.12)
+
+
+def edge_place(edge):
+    half_h = P.half_height_mm
+    if edge == "top":
+        return lambda u, v, h: (u, half_h - h, v)
+    return lambda u, v, h: (u, -half_h + h, v)
+
+
+def cutter_prism(bm, outline, place, depth):
+    profile = [(0.0, -1.0, "port"), (0.0, depth, "port")]
+    sweep(bm, outline, place, profile, closed_profile=False, cap_start=True, cap_end=True)
+
+
+def cutter_groove(bm, outline, place, width, depth):
+    half = width / 2
+    profile = [(-half, -1.0, "port"), (half, -1.0, "port"), (half, depth, "port"), (-half, depth, "port")]
+    sweep(bm, outline, place, profile)
+
+
+def port_cutters(side):
+    e = P.est
+    mid = P.spec.body_open_thickness_mm / 2
+    cutters = []
+    hole = lambda u, v, d: circle(u, v, d / 2, SMALL_HOLE_SEGMENTS)  # noqa: E731
+    if side < 0:
+        usb_u = -P.half_width_mm / 2
+        cutters.append(("bottom", rounded_rect(usb_u - e.usb_c_width_mm / 2, usb_u + e.usb_c_width_mm / 2,
+                                               mid - e.usb_c_height_mm / 2, mid + e.usb_c_height_mm / 2,
+                                               dict.fromkeys(CORNERS, e.usb_c_height_mm / 2 - 1e-4), 12), 0.7))
+        first = -e.speaker_holes_center_from_hinge_mm - (e.speaker_hole_count - 1) / 2 * e.speaker_hole_pitch_mm
+        for i in range(e.speaker_hole_count):
+            cutters.append(("bottom", hole(first + i * e.speaker_hole_pitch_mm, mid, e.speaker_hole_diameter_mm),
+                            HOLE_DEPTH_MM))
+        cutters.append(("bottom", hole(-22.0, mid, e.mic_hole_diameter_mm), HOLE_DEPTH_MM))
+        cutters.append(("top", hole(-22.0, mid, e.mic_hole_diameter_mm), HOLE_DEPTH_MM))
+        earpiece_v = 1.0
+        cutters.append(("top", rounded_rect(usb_u - e.earpiece_slot_length_mm / 2, usb_u + e.earpiece_slot_length_mm / 2,
+                                            earpiece_v - e.earpiece_slot_height_mm / 2,
+                                            earpiece_v + e.earpiece_slot_height_mm / 2,
+                                            dict.fromkeys(CORNERS, e.earpiece_slot_height_mm / 2 - 1e-4), 8),
+                        HOLE_DEPTH_MM))
+    else:
+        cutters.append(("bottom", hole(22.0, mid, e.mic_hole_diameter_mm), HOLE_DEPTH_MM))
+        cutters.append(("top", hole(45.0, mid, e.mic_hole_diameter_mm), HOLE_DEPTH_MM))
+        cutters.append(("top", hole(e.sim_pin_hole_from_hinge_mm, mid, e.mic_hole_diameter_mm), 0.6))
+    return cutters
+
+
+def sim_tray_groove():
+    e = P.est
+    mid = P.spec.body_open_thickness_mm / 2
+    u = e.sim_tray_center_from_hinge_mm
+    return rounded_rect(u - e.sim_tray_length_mm / 2, u + e.sim_tray_length_mm / 2, mid - e.sim_tray_height_mm / 2,
+                        mid + e.sim_tray_height_mm / 2, dict.fromkeys(CORNERS, e.sim_tray_height_mm / 2 - 1e-4), 12)
+
+
+def cut_ports(phone, frame, side):
+    slots_material = phone.materials["port"]
+    bm = bmesh.new()
+    for edge, outline, depth in port_cutters(side):
+        cutter_prism(bm, outline, edge_place(edge), depth)
+    if side > 0:
+        cutter_groove(bm, sim_tray_groove(), edge_place("top"), 0.12, 0.12)
+    finish_solid(bm)
+    mesh = bpy.data.meshes.new(frame.name + "Cutters")
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.materials.append(slots_material)
+    cutter = bpy.data.objects.new(mesh.name, mesh)
+    bpy.context.scene.collection.objects.link(cutter)
+    boolean = frame.modifiers.new("Ports", "BOOLEAN")
+    boolean.operation = "DIFFERENCE"
+    boolean.solver = "EXACT"
+    boolean.material_mode = "TRANSFER"
+    boolean.object = cutter
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    result = bpy.data.meshes.new_from_object(frame.evaluated_get(depsgraph), preserve_all_data_layers=True,
+                                             depsgraph=depsgraph)
+    frame.modifiers.clear()
+    old_mesh = frame.data
+    frame.data = result
+    result.name = old_mesh.name
+    bpy.data.meshes.remove(old_mesh)
+    bpy.data.objects.remove(cutter)
+    bpy.data.meshes.remove(mesh)
+    result.shade_smooth()
+    result.set_sharp_from_angle(angle=math.radians(SMOOTH_ANGLE_DEG))
+
+
 def build_phone(materials):
     phone = Phone(materials)
     for side in (+1, -1):
-        build_frame(phone, side)
+        frame = build_frame(phone, side)
+        cut_ports(phone, frame, side)
         build_display_panel(phone, side)
     build_back_glass(phone)
+    build_camera_island(phone)
+    build_flash(phone)
+    build_buttons(phone)
     build_inner_screen(phone)
     build_hinge_fill(phone)
     build_cover_screen(phone)

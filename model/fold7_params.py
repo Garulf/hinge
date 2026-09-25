@@ -115,9 +115,13 @@ class Params:
         return self.est.camera_plate_height_mm + self.est.lens_ring_height_mm
 
     @property
+    def button_protrusion_mm(self) -> float:
+        return max(self.est.volume_rocker_protrusion_mm, self.est.power_key_protrusion_mm)
+
+    @property
     def expected_rest_bbox_mm(self) -> tuple:
         return (
-            self.spec.body_open_width_mm,
+            self.spec.body_open_width_mm + self.button_protrusion_mm,
             self.spec.body_height_mm,
             self.spec.body_open_thickness_mm + self.camera_bump_mm,
         )

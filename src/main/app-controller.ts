@@ -70,7 +70,8 @@ export class DeviceSource implements MediaSource {
 
   async start(sink: MediaSink): Promise<void> {
     this.#sink = sink;
-    await this.#watch();
+    const watched = await this.#watch();
+    if (!watched) this.#beginReconnect();
   }
 
   control(intent: ControlIntent): void {
@@ -89,28 +90,37 @@ export class DeviceSource implements MediaSource {
     this.#dispose = null;
   }
 
-  async #watch(): Promise<void> {
+  /** Installs a fresh device-tracking subscription. Returns whether it succeeded. */
+  async #watch(): Promise<boolean> {
+    let dispose: (() => Promise<void>) | undefined;
     try {
-      const dispose = await this.opts.host.watch(
+      dispose = await this.opts.host.watch(
         (devices) => this.#onDevices(devices),
         () => this.#onWatchError(),
       );
-      if (this.#stopped) {
-        await dispose().catch(() => {});
-        return;
-      }
-      this.#dispose = dispose;
     } catch (e) {
-      if (!this.#stopped) this.#sink?.status({ state: "error", message: String(e) });
+      if (!this.#stopped) this.opts.log?.(`watch failed: ${String(e)}`);
+      return false;
     }
+    if (this.#stopped) {
+      await dispose().catch(() => {});
+      return true;
+    }
+    this.#dispose = dispose;
+    return true;
   }
 
   #onWatchError(): void {
     if (this.#stopped || this.#reconnecting) return;
-    this.#reconnecting = true;
     const dispose = this.#dispose;
     this.#dispose = null;
     void dispose?.().catch(() => {});
+    this.#beginReconnect();
+  }
+
+  #beginReconnect(): void {
+    if (this.#stopped || this.#reconnecting) return;
+    this.#reconnecting = true;
     this.opts.log?.("adb device tracking failed, reconnecting");
     this.#sink?.status({ state: "error", message: "Lost connection to the adb server, reconnecting..." });
     this.#reconnectAbort = new AbortController();
@@ -126,11 +136,14 @@ export class DeviceSource implements MediaSource {
       try {
         await this.opts.host.ensureServer();
         if (this.#stopped) return;
-        await this.#watch();
+        const watched = await this.#watch();
         if (this.#stopped) return;
-        this.#reconnecting = false;
-        this.#reconnectAbort = null;
-        return;
+        if (watched) {
+          this.#reconnecting = false;
+          this.#reconnectAbort = null;
+          return;
+        }
+        attempt++;
       } catch (e) {
         this.opts.log?.(`reconnect attempt failed: ${String(e)}`);
         attempt++;

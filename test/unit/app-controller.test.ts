@@ -409,3 +409,66 @@ test("does not start two sessions when the device list flips before the first op
 
   expect(sessionsFor).toEqual(["B"]);
 });
+
+test("continues backing off when watch() itself fails during reconnect, even though ensureServer succeeds", async () => {
+  const watcher = fakeWatcher();
+  const delays: number[] = [];
+  let onError: ((err: Error) => void) | undefined;
+  let watchCallCount = 0;
+  watcher.host.watch = async (onChangeFn, onErrorFn) => {
+    watchCallCount++;
+    onError = onErrorFn;
+    // The 1st call (initial start()) succeeds. The 2nd-4th calls (reconnect
+    // attempts) fail. The 5th call succeeds.
+    if (watchCallCount >= 2 && watchCallCount <= 4) {
+      throw new Error(`watch failed (${watchCallCount})`);
+    }
+    return async () => {};
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink, statuses } = fakeSink();
+  await source.start(sink);
+  expect(watchCallCount).toBe(1);
+
+  onError?.(new Error("observer died"));
+  await flush();
+
+  expect(delays).toEqual([1000, 2000, 4000, 8000]);
+  expect(watchCallCount).toBe(5);
+  expect(watcher.ensureServerCalls).toBe(4);
+  expect(statuses).toContainEqual({
+    state: "error",
+    message: "Lost connection to the adb server, reconnecting...",
+  });
+});
+
+test("stop while host.watch() itself is in flight disposes the subscription it just installed", async () => {
+  const watcher = fakeWatcher();
+  let resolveWatch!: (dispose: () => Promise<void>) => void;
+  const watchGate = new Promise<() => Promise<void>>((resolve) => {
+    resolveWatch = resolve;
+  });
+  let disposeCalls = 0;
+  watcher.host.watch = async () => watchGate;
+
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession() });
+  const { sink } = fakeSink();
+  const startPromise = source.start(sink);
+  await flush();
+
+  await source.stop();
+
+  resolveWatch(async () => {
+    disposeCalls++;
+  });
+  await flush();
+  await startPromise;
+
+  expect(disposeCalls).toBe(1);
+});

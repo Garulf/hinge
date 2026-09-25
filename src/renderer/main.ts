@@ -20,6 +20,7 @@ import { MediaGate } from "./media-gate";
 import { PausableTarget } from "./pausable-target";
 import { PortClient, receivePort } from "./port-client";
 import { ScaleController } from "./scale-controller";
+import { ViewMemory } from "./view-memory";
 import { PhoneScene } from "./scene/phone-scene";
 import { VideoPipe } from "./video-pipe";
 
@@ -103,7 +104,8 @@ function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
   if (fullscreen) scale.fitFullscreen(rotation, { w: innerWidth, h: innerHeight });
   const pxPerMm = scale.pxPerMm;
   if (pxPerMm === null) return;
-  const size = bodySizePx(FOLD7_BODY, bodyIsOpen(out), rotation, pxPerMm);
+  const open = bodyIsOpen(out);
+  const size = bodySizePx(FOLD7_BODY, open, rotation, pxPerMm);
   const viewport = { w: innerWidth, h: innerHeight };
   const body = bodyRectIn(viewport, size, rotation, fullscreen);
   placeStage(fullscreen ? body : null);
@@ -146,11 +148,31 @@ function applySettings(next: Settings): void {
   settings = next;
   scene.setColourway(colourwayFor(colourways, next.colourway).materials);
   chrome.settingsChanged(next);
-  if (currentSerial) scale.useSaved(next.devices[currentSerial]?.pxPerMm);
 }
-void window.hinge.settings().then((loaded) => {
-  if (!settings) applySettings(loaded);
-});
+
+let views: ViewMemory | null = null;
+
+/**
+ * Held back until the settings are in, so the first phone's saved scale and
+ * view are known when its streaming status arrives; later settings changes
+ * never touch scale or view, which only change on a device change.
+ */
+const settingsReady = window.hinge
+  .settings()
+  .catch(() => null)
+  .then((loaded: Settings | null) => {
+    if (loaded && !settings) applySettings(loaded);
+    views = new ViewMemory(
+      {
+        apply: (view) => director.setView(view),
+        save: (serial, view) => {
+          void window.hinge.saveSettings({ view });
+          if (serial) void window.hinge.saveDeviceSettings(serial, { view });
+        },
+      },
+      loaded?.view ?? "work",
+    );
+  });
 window.hinge.onSettings(applySettings);
 
 window.hinge.onFullscreen((on) => {
@@ -164,7 +186,9 @@ function onStatus(status: SessionStatus): void {
   scene.setStatus(statusText(status));
   if (status.state !== "streaming") return;
   currentSerial = status.serial;
-  scale.useSaved(settings?.devices[status.serial]?.pxPerMm);
+  const saved = settings?.devices[status.serial];
+  scale.useDevice(status.serial, saved?.pxPerMm);
+  views?.useDevice(status.serial, saved?.view);
 }
 
 function onSize(w: number, h: number): void {
@@ -196,7 +220,6 @@ const audioPipe = new AudioPipe({
 
 const canvas = stage.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
-let view: "work" | "showcase" = "work";
 let fpsTimer: ReturnType<typeof setInterval> | null = null;
 
 /** scrcpy prints its FPS counter to stdout; hinge draws it on the bottom bezel. */
@@ -231,8 +254,7 @@ function pixelPerfect(): void {
 function onAction(action: HingeAction): void {
   switch (action) {
     case "toggle-view":
-      view = view === "work" ? "showcase" : "work";
-      director.setView(view);
+      views?.toggle();
       break;
     case "quit":
       window.hinge.quit();
@@ -322,7 +344,7 @@ function onStreamMessage(msg: StreamMessage): void {
 
 const streamGate = new MediaGate(onStreamMessage, scene.ready, SCENE_READY_CAP_MS);
 
-void receivePort().then((port) => {
+void Promise.all([receivePort(), settingsReady]).then(([port]) => {
   client = new PortClient(port);
   client.on((msg) => {
     if (msg.kind === "status") onStatus(msg.status);

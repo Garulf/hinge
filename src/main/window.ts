@@ -6,7 +6,8 @@ import type { MainToRenderer, RendererToMain } from "../shared/wire";
 import type { Rotation } from "../shared/screen-uv";
 import { anchoredWindowBounds } from "./window-resize";
 
-export function createPhoneWindow(): { win: BrowserWindow; port: PortLike } {
+/** onMoved fires when a drag ends or the window system reports a finished move. */
+export function createPhoneWindow(opts?: { onMoved?: () => void }): { win: BrowserWindow; port: PortLike } {
   const win = new BrowserWindow({
     width: 360,
     height: 760,
@@ -27,7 +28,7 @@ export function createPhoneWindow(): { win: BrowserWindow; port: PortLike } {
 
   const port = trackedPort(win);
 
-  registerWindowIpc(win);
+  registerWindowIpc(win, opts?.onMoved ?? (() => {}));
 
   return { win, port };
 }
@@ -63,7 +64,7 @@ function trackedPort(win: BrowserWindow): PortLike {
   };
 }
 
-function registerWindowIpc(win: BrowserWindow): void {
+function registerWindowIpc(win: BrowserWindow, onMoved: () => void): void {
   let dragTimer: ReturnType<typeof setInterval> | null = null;
   let dragSize: { width: number; height: number } | null = null;
   let placedRotation: Rotation | null = null;
@@ -109,8 +110,11 @@ function registerWindowIpc(win: BrowserWindow): void {
 
   ipcMain.on("hinge:end-drag", (event) => {
     if (event.sender !== win.webContents) return;
+    const wasDragging = dragTimer !== null;
     stopDrag();
+    if (wasDragging) onMoved();
   });
+  win.on("moved", onMoved);
 
   win.on("blur", stopDrag);
 

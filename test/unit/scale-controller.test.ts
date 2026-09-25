@@ -23,15 +23,34 @@ test("starts at the default once the work area is known", () => {
 
 test("a saved per-phone scale wins over the default, whichever arrives first", () => {
   const early = setup();
-  early.scale.useSaved(4);
+  early.scale.useDevice("A", 4);
   early.scale.setWorkArea(WORK_AREA);
   expect(early.applied).toEqual([4]);
 
   const late = setup();
   late.scale.setWorkArea(WORK_AREA);
-  late.scale.useSaved(4);
+  late.scale.useDevice("A", 4);
   expect(late.applied).toEqual([BASE, 4]);
   expect(late.persisted).toEqual([]);
+});
+
+test("a phone with no saved scale gets the default, not the previous phone's scale", () => {
+  const { scale, applied } = setup();
+  scale.setWorkArea(WORK_AREA);
+  scale.useDevice("A", 4);
+  scale.useDevice("B", undefined);
+  expect(applied).toEqual([BASE, 4, BASE]);
+});
+
+test("the same phone streaming again keeps the scale on screen, so quick steps never jump back", () => {
+  const { scale, applied } = setup();
+  scale.setWorkArea(WORK_AREA);
+  scale.useDevice("A", undefined);
+  scale.step(-1);
+  scale.step(-1);
+  scale.useDevice("A", BASE * 0.9);
+  expect(applied.at(-1)).toBeCloseTo(BASE * 0.8);
+  expect(scale.percent()).toBe(80);
 });
 
 test("stepping moves 10 percent at a time, persists, and stops where the phone fills the work area", () => {
@@ -64,7 +83,7 @@ test("fullscreen fits the phone to the screen, blocks scaling, and restores the 
   expect(applied.at(-1)! * FOLD7_BODY.heightMm).toBeLessThanOrEqual(1080);
   expect(scale.step(1)).toBe(false);
   expect(scale.pixelPerfect({ w: 1080, h: 2520 }, { w: 65, h: 151.7 }, 1)).toBe(false);
-  scale.useSaved(3);
+  scale.useDevice("A", 3);
   const before = applied.length;
   scale.fitFullscreen(0, { w: 1920, h: 1080 });
   expect(applied.length).toBe(before);

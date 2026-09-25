@@ -1,6 +1,6 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen } from "electron";
 import { AdbHost } from "./adb-host";
 import type { ClipboardHost } from "./clipboard-sync";
 import { bindSource, DeviceSource, type SessionFactory } from "./app-controller";
@@ -21,6 +21,7 @@ import { loadSettings, type SettingsStore } from "./settings";
 import { bridgeSettings } from "./settings-bridge";
 import { vendorPaths } from "./vendor-paths";
 import { createPhoneWindow } from "./window";
+import { DevicePlacement } from "./window-position";
 import { createWirelessDeps } from "./wireless";
 
 function reportAndExit(e: unknown): never {
@@ -173,8 +174,18 @@ async function runMode(opts: RunOptions): Promise<void> {
   const logger = createLogger(join(app.getPath("logs"), "hinge.log"));
   const settingsPath = join(app.getPath("userData"), "settings.json");
   const settings = await loadSettings(settingsPath);
-  const { win, port } = createPhoneWindow();
+  let placement: DevicePlacement | null = null;
+  const { win, port } = createPhoneWindow({ onMoved: () => placement?.moved() });
   bridgeSettings(win, settings, ipcMain, settingsPath);
+  placement = new DevicePlacement({
+    getContentBounds: () => win.getContentBounds(),
+    setContentBounds: (bounds) => win.setContentBounds(bounds),
+    workAreaFor: (rect) => screen.getDisplayMatching(rect).workArea,
+    saved: (serial) => settings.current.devices[serial]?.windowPosition,
+    save: (serial, corner) => {
+      settings.saveDevice(serial, { windowPosition: corner }).catch((e) => logger.log(`failed to save the window position: ${String(e)}`));
+    },
+  });
 
   let source: MediaSource;
   let closeRecording: () => Promise<void> = async () => {};
@@ -187,7 +198,7 @@ async function runMode(opts: RunOptions): Promise<void> {
     source = errorSource(String(e));
   }
 
-  bindSource(source, port, { logPath: logger.path });
+  bindSource(source, port, { logPath: logger.path, onStatus: (status) => placement?.status(status) });
 
   let shuttingDown: Promise<void> | null = null;
   win.on("closed", () => {

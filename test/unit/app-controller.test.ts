@@ -1679,3 +1679,14 @@ test("a device command to a source without device access is answered with an err
     { kind: "device-command-result", id: "cmd-2", result: { type: "pair", ok: false, connectedAddress: null, message: "no phone connection in this mode" } },
   ]);
 });
+
+test("every status the source reports is also handed to onStatus, for main's own use", async () => {
+  const seen: SessionStatus[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  let sink!: MediaSink;
+  bindSource({ start: async (s) => { sink = s; }, control: () => {}, stop: async () => {} }, { postMessage: () => {}, onMessage: (fn) => { handler = fn; } }, { onStatus: (s) => seen.push(s) });
+  handler({ kind: "ready" });
+  await Promise.resolve();
+  sink.status({ state: "streaming", serial: "A", model: null });
+  expect(seen).toEqual([{ state: "streaming", serial: "A", model: null }]);
+});

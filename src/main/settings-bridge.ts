@@ -33,8 +33,9 @@ export function sanitisePatch(patch: unknown): SettingsPatch {
 
 export function sanitiseDevicePatch(patch: unknown): DeviceSettings {
   if (typeof patch !== "object" || patch === null) return {};
-  const { pxPerMm, windowPosition } = patch as Record<string, unknown>;
+  const { pxPerMm, windowPosition, view } = patch as Record<string, unknown>;
   const result: DeviceSettings = {};
+  if (view === "work" || view === "showcase") result.view = view;
   if (typeof pxPerMm === "number" && Number.isFinite(pxPerMm) && pxPerMm > 0) result.pxPerMm = pxPerMm;
   if (typeof windowPosition === "object" && windowPosition !== null) {
     const { x, y } = windowPosition as Record<string, unknown>;

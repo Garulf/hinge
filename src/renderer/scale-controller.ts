@@ -21,7 +21,7 @@ export class ScaleController {
   #max = Infinity;
   #windowed: number | null = null;
   #fullscreen: number | null = null;
-  #saved: number | null = null;
+  #device: { serial: string; saved: number | null } | null = null;
 
   constructor(deps: ScaleDeps) {
     this.#deps = deps;
@@ -44,14 +44,19 @@ export class ScaleController {
   setWorkArea(heightPx: number): void {
     this.#base = defaultPxPerMm(FOLD7_BODY, heightPx);
     this.#max = heightPx / FOLD7_BODY.heightMm;
-    this.#setWindowed(this.#saved ?? this.#windowed ?? this.#base);
+    this.#setWindowed(this.#device?.saved ?? this.#windowed ?? this.#base);
   }
 
-  /** The scale saved for the phone that just connected, if any. */
-  useSaved(pxPerMm: number | undefined): void {
-    if (pxPerMm === undefined || pxPerMm === this.#saved) return;
-    this.#saved = pxPerMm;
-    if (this.#base !== null) this.#setWindowed(pxPerMm);
+  /**
+   * A phone started streaming: switching to a different phone takes its
+   * saved scale, or the default if it has none; the same phone again keeps
+   * whatever scale is on screen. Settings echoes of this controller's own
+   * saves never come through here, so a quick run of steps cannot jitter.
+   */
+  useDevice(serial: string, saved: number | undefined): void {
+    if (this.#device?.serial === serial) return;
+    this.#device = { serial, saved: saved ?? null };
+    if (this.#base !== null) this.#setWindowed(saved ?? this.#base);
   }
 
   step(direction: 1 | -1): boolean {
@@ -81,7 +86,7 @@ export class ScaleController {
   }
 
   #choose(pxPerMm: number): void {
-    this.#saved = pxPerMm;
+    if (this.#device) this.#device.saved = pxPerMm;
     this.#setWindowed(pxPerMm);
     this.#deps.persist(pxPerMm);
   }

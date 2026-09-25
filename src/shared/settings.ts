@@ -3,8 +3,10 @@ import type { ModifierKey } from "./modifiers";
 export type ShortcutModifier = ModifierKey;
 
 export interface DeviceSettings {
+  /** The window's top-right corner: the fixed half's edge, which folding keeps in place. */
   windowPosition?: { x: number; y: number };
   pxPerMm?: number;
+  view?: "work" | "showcase";
 }
 
 export interface Settings {

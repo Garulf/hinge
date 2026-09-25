@@ -28,6 +28,8 @@ test("sanitisePatch keeps known keys with values of the right type and drops the
 test("sanitiseDevicePatch keeps a positive pxPerMm and a numeric position only", () => {
   expect(sanitiseDevicePatch({ pxPerMm: 5.5, windowPosition: { x: 1, y: 2 }, other: 1 })).toEqual({ pxPerMm: 5.5, windowPosition: { x: 1, y: 2 } });
   expect(sanitiseDevicePatch({ pxPerMm: 0, windowPosition: { x: "1", y: 2 } })).toEqual({});
+  expect(sanitiseDevicePatch({ view: "showcase" })).toEqual({ view: "showcase" });
+  expect(sanitiseDevicePatch({ view: "sideways" })).toEqual({});
 });
 
 function fakes() {

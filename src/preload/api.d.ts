@@ -6,6 +6,8 @@ export interface HingeApi {
   endDrag(): void;
   /** The size of the display work area the window is on, in CSS px. */
   workArea(): Promise<{ width: number; height: number }>;
+  /** Called when the work area may have changed: display settings, a move to another display, or a restored window position. */
+  onWorkAreaChanged(fn: () => void): void;
   /** Resolves a dropped File to its absolute filesystem path; renderer File objects no longer expose .path directly. */
   getPathForFile(file: File): string;
   settings(): Promise<Settings>;

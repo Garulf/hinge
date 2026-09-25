@@ -19,12 +19,15 @@ test("a saved corner off the display (monitor gone, or resolution changed) is cl
   expect(restoredBounds({ x: 0, y: 0, width: 400, height: 880 }, { x: 100, y: -300 }, workAreaFor)).toEqual({ x: 0, y: 0, width: 400, height: 880 });
 });
 
-function setup(saved: Record<string, Corner> = {}) {
+function setup(saved: Record<string, Corner> = {}, opts: { fullscreen?: () => boolean } = {}) {
   let bounds: Rect = { x: 10, y: 20, width: 400, height: 880 };
   const moves: Rect[] = [];
   const saves: [string, Corner][] = [];
   const timers: (() => void)[] = [];
+  const restored: number[] = [];
   const placement = new DevicePlacement({
+    isFullScreen: opts.fullscreen,
+    restored: () => restored.push(moves.length),
     getContentBounds: () => bounds,
     setContentBounds: (b) => {
       bounds = b;
@@ -36,7 +39,7 @@ function setup(saved: Record<string, Corner> = {}) {
     setTimeout: (fn) => timers.push(fn),
     clearTimeout: () => timers.splice(0, timers.length),
   });
-  return { placement, moves, saves, timers, move: (b: Rect) => (bounds = b) };
+  return { placement, moves, saves, timers, restored, move: (b: Rect) => (bounds = b), bounds: () => bounds };
 }
 
 test("a phone with a saved corner moves the window there when it streams, once per phone", () => {
@@ -70,4 +73,54 @@ test("a save still pending when another phone starts streaming is dropped, not w
   placement.status({ state: "streaming", serial: "B", model: null, deviceId: "B" });
   expect(timers).toHaveLength(0);
   expect(saves).toEqual([]);
+});
+
+test("closing the window writes a pending save at once, and nothing is saved or read after the window is gone", () => {
+  const { placement, saves, timers, move } = setup();
+  placement.status({ state: "streaming", serial: "A", model: null, deviceId: "A" });
+  move({ x: 300, y: 40, width: 400, height: 880 });
+  placement.moved();
+  placement.flush();
+  expect(saves).toEqual([["A", { x: 700, y: 40 }]]);
+  expect(timers).toHaveLength(0);
+
+  placement.moved();
+  placement.closed();
+  expect(timers).toHaveLength(0);
+  placement.flush();
+  placement.moved();
+  expect(timers).toHaveLength(0);
+  expect(saves).toHaveLength(1);
+});
+
+test("a phone starting to stream while fullscreen keeps the fullscreen window where it is", () => {
+  let fullscreen = true;
+  const { placement, moves } = setup({ A: { x: 1000, y: 100 }, B: { x: 900, y: 50 } }, { fullscreen: () => fullscreen });
+  placement.status({ state: "streaming", serial: "A", model: null, deviceId: "A" });
+  expect(moves).toEqual([]);
+  fullscreen = false;
+  placement.status({ state: "streaming", serial: "B", model: null, deviceId: "B" });
+  expect(moves).toEqual([{ x: 500, y: 50, width: 400, height: 880 }]);
+});
+
+test("at startup the last phone's corner is applied before it streams, so streaming it does not move the window again", () => {
+  const { placement, moves, restored } = setup({ A: { x: 1000, y: 100 } });
+  placement.preApply("A");
+  expect(moves).toEqual([{ x: 600, y: 100, width: 400, height: 880 }]);
+  placement.status({ state: "streaming", serial: "10.0.0.5:40111", model: null, deviceId: "A" });
+  expect(moves).toHaveLength(1);
+  expect(restored).toEqual([1]);
+
+  const none = setup();
+  none.placement.preApply("A");
+  none.placement.preApply(null);
+  expect(none.moves).toEqual([]);
+  expect(none.restored).toEqual([]);
+});
+
+test("every restore is reported, so the renderer can re-read the work area of the display the window landed on", () => {
+  const { placement, restored } = setup({ A: { x: 1000, y: 100 }, B: { x: 2500, y: 100 } });
+  placement.status({ state: "streaming", serial: "A", model: null, deviceId: "A" });
+  placement.status({ state: "streaming", serial: "B", model: null, deviceId: "B" });
+  expect(restored).toEqual([1, 2]);
 });

@@ -36,6 +36,9 @@ const api: HingeApi = {
   beginDrag: () => ipcRenderer.send("hinge:begin-drag"),
   endDrag: () => ipcRenderer.send("hinge:end-drag"),
   workArea: () => ipcRenderer.invoke("hinge:work-area"),
+  onWorkAreaChanged: (fn) => {
+    ipcRenderer.on("hinge:work-area-changed", () => fn());
+  },
   getPathForFile: (file) => webUtils.getPathForFile(file),
   settings: () => ipcRenderer.invoke("hinge:settings-get"),
   settingsPath: () => ipcRenderer.invoke("hinge:settings-path"),

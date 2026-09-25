@@ -5,7 +5,7 @@ import { bodyIsOpen, FoldDirector, type DirectorOutput } from "../shared/fold-di
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
 import { bodySizePx, deviceAlignedSize, FOLD7_BODY, unionSize } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
-import type { Settings } from "../shared/settings";
+import { startupDevice, type Settings } from "../shared/settings";
 import { defaultModifiers, normaliseModifiers, type HingeAction } from "../shared/shortcuts";
 import { viewWindowSize } from "../shared/view-window";
 import { WindowSizer } from "../shared/window-sizer";
@@ -172,7 +172,13 @@ const scale = new ScaleController({
     if (currentDeviceId) void window.hinge.saveDeviceSettings(currentDeviceId, { pxPerMm });
   },
 });
-void window.hinge.workArea().then(({ width, height }) => scale.setWorkArea({ w: width, h: height }));
+function readWorkArea(): void {
+  void window.hinge.workArea().then(({ width, height }) => {
+    if (width > 0 && height > 0) scale.setWorkArea({ w: width, h: height });
+  });
+}
+readWorkArea();
+window.hinge.onWorkAreaChanged(readWorkArea);
 
 const commands = new DeviceCommands((msg) => client?.send(msg));
 const chrome = new Chrome(document.body, {
@@ -195,13 +201,17 @@ let views: ViewMemory | null = null;
 /**
  * Held back until the settings are in, so the first phone's saved scale and
  * view are known when its streaming status arrives; later settings changes
- * never touch scale or view, which only change on a device change.
+ * never touch scale or view, which only change on a device change. The last
+ * phone's scale and view are applied at once, so the window does not jump
+ * when it starts streaming.
  */
 const settingsReady = window.hinge
   .settings()
   .catch(() => null)
   .then((loaded: Settings | null) => {
     if (loaded && !settings) applySettings(loaded);
+    const last = loaded ? startupDevice(loaded) : null;
+    if (last) scale.useDevice(last.id, last.saved.pxPerMm);
     views = new ViewMemory(
       {
         apply: (view, { instant }) => scene.setView(view, { instant }),
@@ -210,8 +220,9 @@ const settingsReady = window.hinge
           if (id) void window.hinge.saveDeviceSettings(id, { view });
         },
       },
-      loaded?.view ?? "work",
+      last?.saved.view ?? loaded?.view ?? "work",
     );
+    if (last) views.useDevice(last.id, last.saved.view);
   });
 window.hinge.onSettings(applySettings);
 

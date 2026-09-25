@@ -172,24 +172,54 @@ function shutdown(source: MediaSource, closeRecording: () => Promise<void>): Pro
   ]);
 }
 
+/** A second launch hands over to the running window instead of opening another adb session on the same phone. */
+function holdSingleInstance(): boolean {
+  if (app.requestSingleInstanceLock()) return true;
+  app.quit();
+  return false;
+}
+
+function focusWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
 async function runMode(opts: RunOptions): Promise<void> {
   if (opts.userData) app.setPath("userData", opts.userData);
+  if (!holdSingleInstance()) return;
   await app.whenReady();
   const logger = createLogger(join(app.getPath("logs"), "hinge.log"));
   const settingsPath = join(app.getPath("userData"), "settings.json");
   const settings = await loadSettings(settingsPath);
   let placement: DevicePlacement | null = null;
-  const { win, port } = createPhoneWindow({ onMoved: () => placement?.moved() });
+  let workAreaChanged = (): void => {};
+  const { win, port } = createPhoneWindow({
+    onMoved: () => {
+      placement?.moved();
+      workAreaChanged();
+    },
+  });
+  app.on("second-instance", () => focusWindow(win));
+  workAreaChanged = () => {
+    if (!win.isDestroyed()) win.webContents.send("hinge:work-area-changed");
+  };
+  screen.on("display-metrics-changed", workAreaChanged);
   bridgeSettings(win, settings, ipcMain, settingsPath);
   placement = new DevicePlacement({
     getContentBounds: () => win.getContentBounds(),
     setContentBounds: (bounds) => win.setContentBounds(bounds),
     workAreaFor: (rect) => screen.getDisplayMatching(rect).workArea,
-    saved: (serial) => settings.current.devices[serial]?.windowPosition,
-    save: (serial, corner) => {
-      settings.saveDevice(serial, { windowPosition: corner }).catch((e) => logger.log(`failed to save the window position: ${String(e)}`));
+    saved: (id) => settings.current.devices[id]?.windowPosition,
+    save: (id, corner) => {
+      settings.saveDevice(id, { windowPosition: corner }).catch((e) => logger.log(`failed to save the window position: ${String(e)}`));
     },
+    isFullScreen: () => win.isFullScreen(),
+    restored: () => workAreaChanged(),
   });
+  placement.preApply(settings.current.lastDevice);
+  win.on("close", () => placement?.flush());
 
   let source: MediaSource;
   let closeRecording: () => Promise<void> = async () => {};
@@ -206,6 +236,8 @@ async function runMode(opts: RunOptions): Promise<void> {
 
   let shuttingDown: Promise<void> | null = null;
   win.on("closed", () => {
+    placement?.closed();
+    screen.off("display-metrics-changed", workAreaChanged);
     shuttingDown = shutdown(source, closeRecording).then(() => app.quit());
   });
   app.on("window-all-closed", () => {

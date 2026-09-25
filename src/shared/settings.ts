@@ -29,3 +29,10 @@ export interface Settings {
 }
 
 export type SettingsPatch = Partial<Omit<Settings, "version" | "devices" | "legacyDevices">>;
+
+/** The phone last connected and what was saved for it, so its scale, view and window corner can be in place before it streams. */
+export function startupDevice(settings: Settings): { id: string; saved: DeviceSettings } | null {
+  const id = settings.lastDevice;
+  if (!id) return null;
+  return { id, saved: settings.devices[id] ?? settings.legacyDevices?.[id] ?? {} };
+}

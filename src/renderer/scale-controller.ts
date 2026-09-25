@@ -43,6 +43,7 @@ export class ScaleController {
   }
 
   setWorkArea(area: { w: number; h: number }): void {
+    if (this.#workArea?.w === area.w && this.#workArea.h === area.h) return;
     this.#workArea = area;
     this.#base = defaultPxPerMm(FOLD7_BODY, area.h);
     this.#max = area.h / FOLD7_BODY.heightMm;

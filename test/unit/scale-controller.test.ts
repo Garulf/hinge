@@ -102,3 +102,13 @@ test("the showcase size follows the current scale and is fitted to the work area
   narrow.scale.setWorkArea({ w: 300, h: 1000 });
   expect(narrow.scale.showcaseSize(0, 1)!.w).toBeLessThanOrEqual(300);
 });
+
+test("the same work area again changes nothing; a different one rebases the default", () => {
+  const { scale, applied } = setup();
+  scale.setWorkArea(WORK_AREA);
+  scale.setWorkArea({ ...WORK_AREA });
+  expect(applied).toEqual([BASE]);
+  scale.setWorkArea({ w: 1600, h: 2000 });
+  expect(applied).toEqual([BASE, BASE]);
+  expect(scale.percent()).toBe(50);
+});

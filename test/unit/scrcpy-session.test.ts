@@ -27,7 +27,10 @@ function neverEndingStream(): ReadableStream<{ type: "data"; data: Uint8Array }>
   });
 }
 
-function oneShotClient(reader: () => ReadableStream<{ type: "data"; data: Uint8Array }>) {
+function oneShotClient(
+  reader: () => ReadableStream<{ type: "data"; data: Uint8Array }>,
+  opts?: { controller?: unknown; clipboard?: ReadableStream<string> },
+) {
   return {
     videoStream: Promise.resolve({
       metadata: { codec: 1, deviceName: "Pixel" },
@@ -36,12 +39,16 @@ function oneShotClient(reader: () => ReadableStream<{ type: "data"; data: Uint8A
       stream: reader(),
     }),
     output: new ReadableStream<string>({ start: (c) => c.close() }),
-    controller: {},
+    controller: opts?.controller ?? {},
+    clipboard: opts?.clipboard,
     close: async () => {},
   };
 }
 
-function baseOpts(deps: Partial<ScrcpyServerDeps>, extra?: Partial<{ firstPacketTimeoutMs: number; log: (l: string) => void }>) {
+function baseOpts(
+  deps: Partial<ScrcpyServerDeps>,
+  extra?: Partial<{ firstPacketTimeoutMs: number; log: (l: string) => void; clipboardHost: { readText: () => Promise<string>; writeText: (t: string) => Promise<void> } }>,
+) {
   return {
     adb: {} as never,
     serial: "S1",
@@ -219,4 +226,71 @@ test("stop() guards the pump: no packet or end event is posted for reads that se
 
   expect(sink2.packets).toHaveLength(1);
   expect(sink2.endCalls()).toBe(0);
+});
+
+function flush(): Promise<void> {
+  return new Promise((r) => setImmediate(r));
+}
+
+test("a successful session drains client.clipboard and writes device clipboard changes to the PC clipboard", async () => {
+  let clipboardController!: ReadableStreamDefaultController<string>;
+  const clipboard = new ReadableStream<string>({ start: (c) => { clipboardController = c; } });
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(() => videoStream, { clipboard }) as never,
+  };
+  const written: string[] = [];
+  const session = new ScrcpySession(
+    baseOpts(deps, { clipboardHost: { readText: async () => "", writeText: async (t) => { written.push(t); } } }),
+  );
+  const { sink } = fakeSink();
+  await session.start(sink);
+
+  clipboardController.enqueue("copied on the phone");
+  await flush();
+
+  expect(written).toEqual(["copied on the phone"]);
+  await session.stop();
+});
+
+test("control(clipboard-paste) reads the PC clipboard and sets the device clipboard with a fresh sequence, then that echo is not looped back to the PC clipboard", async () => {
+  let clipboardController!: ReadableStreamDefaultController<string>;
+  const clipboard = new ReadableStream<string>({ start: (c) => { clipboardController = c; } });
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  const setClipboardCalls: unknown[] = [];
+  const controller = {
+    setClipboard: async (m: unknown) => {
+      setClipboardCalls.push(m);
+    },
+  };
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(() => videoStream, { clipboard, controller }) as never,
+  };
+  const written: string[] = [];
+  const session = new ScrcpySession(
+    baseOpts(deps, { clipboardHost: { readText: async () => "from the pc", writeText: async (t) => { written.push(t); } } }),
+  );
+  const { sink } = fakeSink();
+  await session.start(sink);
+
+  session.control({ type: "clipboard-paste", asText: false });
+  await flush();
+
+  expect(setClipboardCalls).toEqual([{ content: "from the pc", sequence: 1n, paste: true }]);
+
+  // the device applying that set is reported back over client.clipboard as
+  // a "change" to the identical content; it must not bounce to the PC.
+  clipboardController.enqueue("from the pc");
+  await flush();
+  expect(written).toEqual([]);
+
+  await session.stop();
 });

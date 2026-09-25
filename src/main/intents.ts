@@ -25,6 +25,18 @@ export interface ControllerLike {
   injectText(text: string): Promise<void>;
   backOrScreenOn(action: number): Promise<void>;
   resetVideo(): Promise<void>;
+  setClipboard(m: { content: string; sequence: bigint; paste: boolean }): Promise<void>;
+}
+
+/**
+ * Only needed for "clipboard-paste": reading the PC clipboard and issuing a
+ * fresh echo-suppression sequence are both main-only concerns the renderer
+ * cannot resolve itself, so the unresolved intent carries no content and
+ * these deps fill it in here instead.
+ */
+export interface ApplyIntentDeps {
+  readPcClipboard?: () => Promise<string>;
+  beginClipboardPush?: (content: string) => bigint;
 }
 
 const TOUCH_ACTION: Record<TouchAction, number> = {
@@ -39,7 +51,7 @@ const KEY_ACTION: Record<"down" | "up", number> = {
   up: 1,
 };
 
-export function applyIntent(c: ControllerLike, intent: ControlIntent): Promise<void> {
+export function applyIntent(c: ControllerLike, intent: ControlIntent, deps?: ApplyIntentDeps): Promise<void> {
   switch (intent.type) {
     case "touch":
       return c.injectTouch({
@@ -75,5 +87,18 @@ export function applyIntent(c: ControllerLike, intent: ControlIntent): Promise<v
       return c.backOrScreenOn(KEY_ACTION[intent.action]);
     case "reset-video":
       return c.resetVideo();
+    case "clipboard-paste": {
+      const readPcClipboard = deps?.readPcClipboard;
+      if (!readPcClipboard) return Promise.resolve();
+      return (async () => {
+        const content = await readPcClipboard();
+        if (intent.asText) {
+          await c.injectText(content);
+          return;
+        }
+        const sequence = deps?.beginClipboardPush ? deps.beginClipboardPush(content) : 0n;
+        await c.setClipboard({ content, sequence, paste: true });
+      })();
+    }
   }
 }

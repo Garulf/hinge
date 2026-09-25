@@ -3,7 +3,8 @@ import type { Adb } from "@yume-chan/adb";
 import { AdbScrcpyClient, AdbScrcpyExitedError, AdbScrcpyOptions4_1 } from "@yume-chan/adb-scrcpy";
 import { DefaultServerPath, type ScrcpyVideoStreamPacket } from "@yume-chan/scrcpy";
 import { PushReadableStream } from "@yume-chan/stream-extra";
-import { applyIntent } from "./intents";
+import { createClipboardSync, type ClipboardHost, type ClipboardSync } from "./clipboard-sync";
+import { applyIntent, type ApplyIntentDeps } from "./intents";
 import type { MediaSink, MediaSource } from "./media-source";
 import { buildInit, type StreamSettings } from "./scrcpy-init";
 import { toWire, type ControlIntent } from "../shared/wire";
@@ -45,6 +46,8 @@ export class ScrcpySession implements MediaSource {
   readonly ended: Promise<void>;
   readonly #deps: ScrcpyServerDeps;
   readonly #firstPacketTimeoutMs: number;
+  readonly #clipboardHost: ClipboardHost | undefined;
+  #clipboardSync: ClipboardSync | null = null;
 
   constructor(
     private readonly opts: {
@@ -56,10 +59,13 @@ export class ScrcpySession implements MediaSource {
       log?: (line: string) => void;
       deps?: Partial<ScrcpyServerDeps>;
       firstPacketTimeoutMs?: number;
+      /** Absent in contexts with no PC clipboard access (e.g. the probe mode): clipboard sync and clipboard-paste are then both no-ops. */
+      clipboardHost?: ClipboardHost;
     },
   ) {
     this.#deps = { ...defaultDeps, ...opts.deps };
     this.#firstPacketTimeoutMs = opts.firstPacketTimeoutMs ?? FIRST_PACKET_TIMEOUT_MS;
+    this.#clipboardHost = opts.clipboardHost;
     this.ended = new Promise((resolve) => {
       this.#resolveEnded = resolve;
     });
@@ -88,12 +94,34 @@ export class ScrcpySession implements MediaSource {
   control(intent: ControlIntent): void {
     const controller = this.#client?.controller;
     if (!controller) return;
-    applyIntent(controller, intent).catch((e) => this.opts.log?.(`control failed: ${String(e)}`));
+    applyIntent(controller, intent, this.#clipboardDeps()).catch((e) => this.opts.log?.(`control failed: ${String(e)}`));
   }
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#clipboardSync?.stop();
+    this.#clipboardSync = null;
     await this.#client?.close().catch(() => {});
+  }
+
+  #clipboardDeps(): ApplyIntentDeps {
+    const host = this.#clipboardHost;
+    if (!host) return {};
+    return {
+      readPcClipboard: () => host.readText(),
+      beginClipboardPush: (content) => this.#clipboardSync?.beginPush(content) ?? 0n,
+    };
+  }
+
+  /** client.clipboard blocks on backpressure once clipboardAutosync is on, so this must run for the life of every successful attempt, not just when a clipboard host happens to be wired. */
+  #startClipboardSync(client: Client): void {
+    const sync = createClipboardSync({
+      stream: client.clipboard,
+      host: this.#clipboardHost ?? { readText: async () => "", writeText: async () => {} },
+      log: this.opts.log,
+    });
+    this.#clipboardSync = sync;
+    void sync.start();
   }
 
   async #tryAttempt(
@@ -152,6 +180,7 @@ export class ScrcpySession implements MediaSource {
       });
       sink.status({ state: "streaming", serial: this.opts.serial, model: this.opts.model });
       sink.videoPacket(toWire(first.value));
+      this.#startClipboardSync(client);
       void this.#pump(reader, sink);
       return "started";
     } catch (e) {

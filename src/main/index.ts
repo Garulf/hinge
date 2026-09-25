@@ -1,7 +1,8 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, Menu } from "electron";
+import { app, BrowserWindow, clipboard, dialog, Menu } from "electron";
 import { AdbHost } from "./adb-host";
+import type { ClipboardHost } from "./clipboard-sync";
 import { bindSource, DeviceSource, type SessionFactory } from "./app-controller";
 import { parseArgs, reportStartupError } from "./cli";
 import { createLogger, type Logger } from "./logger";
@@ -91,6 +92,7 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
   const host = new AdbHost({ adbPath: paths.adb });
   await host.ensureServer();
 
+  const clipboardHost: ClipboardHost = { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) };
   const createSession: SessionFactory = (device, adb) =>
     new ScrcpySession({
       adb,
@@ -99,6 +101,7 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
       serverPath: paths.scrcpyServer,
       settings: DEFAULT_STREAM_SETTINGS,
       log,
+      clipboardHost,
     });
 
   if (!opts.record) {

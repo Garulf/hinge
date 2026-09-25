@@ -22,7 +22,14 @@ export type ControlIntent =
   | { type: "key"; action: "down" | "up"; keyCode: number; repeat: number; metaState: number }
   | { type: "text"; text: string }
   | { type: "back-or-screen-on"; action: "down" | "up" }
-  | { type: "reset-video" };
+  | { type: "reset-video" }
+  /**
+   * Unresolved: main fills in the PC clipboard content and (for a real
+   * paste) a fresh sequence number, since neither is available to the
+   * renderer. asText true injects the text directly (MOD+Shift+v); false
+   * sets the device clipboard and pastes (Ctrl+V, MOD+v).
+   */
+  | { type: "clipboard-paste"; asText: boolean };
 
 export interface PostureMessage { kind: "posture"; reading: PostureReading }
 

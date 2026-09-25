@@ -27,8 +27,9 @@ export function buildInit(s: StreamSettings, attempt: 0 | 1 | 2): Record<string,
     // Windows Firewall prompts for a reverse tunnel (listens on all interfaces); a
     // forward tunnel only binds localhost on the device side.
     tunnelForward: true,
-    // ClipboardStream blocks on backpressure (M5 drains it); off until then.
-    clipboardAutosync: false,
+    // ClipboardSync (M5) drains client.clipboard continuously, which is
+    // required whenever this is on: the stream blocks on backpressure.
+    clipboardAutosync: true,
     powerOn: true,
     stayAwake: false,
     sendDeviceMeta: true,

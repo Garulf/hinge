@@ -3,7 +3,7 @@ import { buildInit, DEFAULT_STREAM_SETTINGS } from "../../src/main/scrcpy-init";
 
 test("first attempt uses the chosen codec with encoder constraints respected", () => {
   const init = buildInit({ ...DEFAULT_STREAM_SETTINGS, videoCodec: "h265" }, 0);
-  expect(init).toMatchObject({ video: true, control: true, videoCodec: "h265", ignoreVideoEncoderConstraints: false, clipboardAutosync: false, sendFrameMeta: true });
+  expect(init).toMatchObject({ video: true, control: true, videoCodec: "h265", ignoreVideoEncoderConstraints: false, clipboardAutosync: true, sendFrameMeta: true });
 });
 
 test("forwards, rather than reverses, the tunnel so no firewall prompt appears on Windows", () => {

@@ -5,7 +5,6 @@ import type { VideoStreamInfo, WireMediaPacket } from "../shared/wire";
 import type { FrameTarget } from "./texture-renderer";
 import { TextureFrameRenderer } from "./texture-renderer";
 
-type HardwarePreference = "prefer-hardware" | "prefer-software";
 type SizeChangedListener = (size: { width: number; height: number }) => void;
 
 interface DecoderHandle {
@@ -18,14 +17,14 @@ interface DecoderHandle {
 export type DecoderFactory = (options: {
   codec: number;
   renderer: TextureFrameRenderer;
-  hardwareAcceleration: HardwarePreference;
+  hardwareAcceleration: "no-preference";
   optimizeForLatency: boolean;
 }) => DecoderHandle;
 
 function defaultDecoderFactory(options: {
   codec: number;
   renderer: TextureFrameRenderer;
-  hardwareAcceleration: HardwarePreference;
+  hardwareAcceleration: "no-preference";
   optimizeForLatency: boolean;
 }): DecoderHandle {
   return new WebCodecsVideoDecoder({ ...options, codec: options.codec as ScrcpyVideoCodecId });
@@ -43,37 +42,34 @@ export class VideoPipe {
   readonly #target: FrameTarget;
   readonly #onSize: (w: number, h: number) => void;
   readonly #createDecoder: DecoderFactory;
+  readonly #onError: (message: string) => void;
 
   #info: VideoStreamInfo | null = null;
   #controller: ReadableStreamDefaultController<ScrcpyVideoStreamPacket> | null = null;
   #decoder: DecoderHandle | null = null;
   #unsubscribeSize: (() => void) | null = null;
   #lastSize = { width: 0, height: 0 };
-  #fellBackToSoftware = false;
-  #waitingForConfig = false;
+  // Invalidates a pipeTo() rejection handler from a decoder that has since
+  // been torn down by a later start()/end(), so a stale async error can't
+  // clobber the status overlay for the stream that replaced it.
+  #generation = 0;
 
-  constructor(target: FrameTarget, onSize: (w: number, h: number) => void, deps?: { createDecoder?: DecoderFactory }) {
+  constructor(target: FrameTarget, onSize: (w: number, h: number) => void, deps?: { createDecoder?: DecoderFactory; onError?: (message: string) => void }) {
     this.#target = target;
     this.#onSize = onSize;
     this.#createDecoder = deps?.createDecoder ?? defaultDecoderFactory;
+    this.#onError = deps?.onError ?? (() => {});
   }
 
   start(info: VideoStreamInfo): void {
     this.#teardown();
     this.#info = info;
-    this.#fellBackToSoftware = false;
-    this.#waitingForConfig = false;
     this.#lastSize = { width: info.width, height: info.height };
     this.#onSize(info.width, info.height);
-    this.#openStream("prefer-hardware");
+    this.#openStream();
   }
 
   push(packet: WireMediaPacket): void {
-    // After the decoder is recreated mid-stream (software fallback), the
-    // codec transform throws on a data chunk that arrives before its own
-    // configuration chunk; drop such chunks instead of killing the pipe.
-    if (this.#waitingForConfig && packet.type === "data") return;
-    if (packet.type === "configuration") this.#waitingForConfig = false;
     this.#controller?.enqueue(reconstruct(packet));
   }
 
@@ -86,9 +82,10 @@ export class VideoPipe {
     return { framesDecoded: this.#decoder?.framesDecoded ?? 0, width: this.#lastSize.width, height: this.#lastSize.height };
   }
 
-  #openStream(hardwareAcceleration: HardwarePreference): void {
+  #openStream(): void {
     const info = this.#info;
     if (!info) return;
+    const generation = this.#generation;
     const readable = new ReadableStream<ScrcpyVideoStreamPacket>({
       start: (controller) => {
         this.#controller = controller;
@@ -97,7 +94,7 @@ export class VideoPipe {
     const decoder = this.#createDecoder({
       codec: info.codecId,
       renderer: new TextureFrameRenderer(this.#target),
-      hardwareAcceleration,
+      hardwareAcceleration: "no-preference",
       optimizeForLatency: true,
     });
     this.#decoder = decoder;
@@ -105,21 +102,15 @@ export class VideoPipe {
       this.#lastSize = { width: e.width, height: e.height };
       this.#onSize(e.width, e.height);
     });
-    readable.pipeTo(decoder.writable).catch((e: unknown) => this.#onPipeError(e, hardwareAcceleration));
-  }
-
-  #onPipeError(e: unknown, previousMode: HardwarePreference): void {
-    if (!(e instanceof DOMException) || this.#fellBackToSoftware || previousMode === "prefer-software") {
-      console.error("video decode pipe stopped", e);
-      return;
-    }
-    this.#fellBackToSoftware = true;
-    this.#waitingForConfig = true;
-    this.#disposeDecoder();
-    this.#openStream("prefer-software");
+    readable.pipeTo(decoder.writable).catch((e: unknown) => {
+      if (generation !== this.#generation) return;
+      console.error("video decode pipe failed", e);
+      this.#onError(e instanceof Error ? e.message : String(e));
+    });
   }
 
   #teardown(): void {
+    this.#generation++;
     try {
       this.#controller?.close();
     } catch {

@@ -37,7 +37,9 @@ async function onSize(w: number, h: number): Promise<void> {
   window.hinge.setContentSize(layout.window.w, layout.window.h);
 }
 
-const pipe = new VideoPipe(scene, (w, h) => void onSize(w, h));
+const pipe = new VideoPipe(scene, (w, h) => void onSize(w, h), {
+  onError: (message) => scene.setStatus(`Video error: ${message}`),
+});
 
 const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");

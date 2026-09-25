@@ -3,6 +3,7 @@ import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeom
 import type { WorkLayout } from "../../shared/layout";
 import { StatusOverlay } from "../status-overlay";
 import type { FrameTarget } from "../texture-renderer";
+import { FrameLifecycle } from "./frame-lifecycle";
 
 const SLAB_DEPTH = 10;
 const SCREEN_Z = 6;
@@ -18,9 +19,11 @@ export class PhoneScene implements FrameTarget {
   readonly #slab: THREE.Mesh;
   readonly #screen: THREE.Mesh;
   readonly #overlay: StatusOverlay;
+  readonly #frames: FrameLifecycle;
   #dirty = true;
 
   constructor(canvasParent: HTMLElement) {
+    this.#frames = new FrameLifecycle(() => this.#renderNow());
     this.#renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     canvasParent.appendChild(this.#renderer.domElement);
 
@@ -51,8 +54,13 @@ export class PhoneScene implements FrameTarget {
   }
 
   setFrame(frame: VideoFrame): void {
+    this.#frames.setFrame(frame);
     this.#videoTexture.setFrame(frame);
     this.#dirty = true;
+  }
+
+  end(): void {
+    this.#frames.end();
   }
 
   applyLayout(layout: WorkLayout): void {
@@ -96,6 +104,11 @@ export class PhoneScene implements FrameTarget {
   #renderFrame(): void {
     if (!this.#dirty) return;
     this.#dirty = false;
+    this.#renderNow();
+  }
+
+  #renderNow(): void {
     this.#renderer.render(this.#scene, this.#camera);
+    this.#frames.onRendered();
   }
 }

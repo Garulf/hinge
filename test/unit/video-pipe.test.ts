@@ -19,6 +19,26 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** Mimics PhoneScene/FrameLifecycle's frame ownership (findings I3): closes
+ * the current frame only when end() is called, not as soon as a new one
+ * arrives (that part is exercised in frame-lifecycle.test.ts already). */
+function fakeSceneTarget() {
+  const frames: { closed: boolean }[] = [];
+  let current: { closed: boolean; close(): void } | null = null;
+  return {
+    disposed: false,
+    frames,
+    setFrame: (f: { closed: boolean; close(): void }) => {
+      current = f;
+      frames.push(f);
+    },
+    end: () => {
+      current?.close();
+      current = null;
+    },
+  };
+}
+
 /**
  * Forwards manufactured VideoFrames into the real TextureFrameRenderer so
  * frame-closing behaviour can be observed without a real VideoDecoder.
@@ -51,8 +71,7 @@ function trackingDecoderFactory(disposeLog: unknown[]) {
 
 test("a second video-start tears down the previous decoder and closes its held frame", async () => {
   const disposeLog: unknown[] = [];
-  const frames: unknown[] = [];
-  const target = { disposed: false, setFrame: (f: unknown) => frames.push(f) };
+  const target = fakeSceneTarget();
   const onSize = vi.fn();
   const pipe = new VideoPipe(target as never, onSize, { createDecoder: trackingDecoderFactory(disposeLog) });
 
@@ -60,8 +79,8 @@ test("a second video-start tears down the previous decoder and closes its held f
   pipe.push(dataPacket());
   await flush();
 
-  expect(frames).toHaveLength(1);
-  const firstFrame = frames[0] as { closed: boolean };
+  expect(target.frames).toHaveLength(1);
+  const firstFrame = target.frames[0];
   expect(firstFrame.closed).toBe(false);
 
   pipe.start(info);
@@ -71,28 +90,62 @@ test("a second video-start tears down the previous decoder and closes its held f
   expect(firstFrame.closed).toBe(true);
 });
 
-test("a DOMException from the decoder triggers one software fallback", async () => {
+test("start() always asks for hardwareAcceleration no-preference (I2 ruling: no custom fallback)", () => {
   const calls: string[] = [];
-  const target = { disposed: false, setFrame: () => {} };
   const factory: DecoderFactory = (opts) => {
     calls.push(opts.hardwareAcceleration);
-    const shouldFail = opts.hardwareAcceleration === "prefer-hardware";
-    return {
-      writable: new WritableStream<ScrcpyVideoStreamPacket>({
-        write: () => {
-          if (shouldFail) throw new DOMException("no hardware decoder", "NotSupportedError");
-        },
-      }),
-      sizeChanged: () => () => {},
-      framesDecoded: 0,
-      dispose: () => {},
-    };
+    return { writable: new WritableStream<ScrcpyVideoStreamPacket>(), sizeChanged: () => () => {}, framesDecoded: 0 };
   };
-  const pipe = new VideoPipe(target as never, () => {}, { createDecoder: factory });
+  const pipe = new VideoPipe(fakeSceneTarget() as never, () => {}, { createDecoder: factory });
+
+  pipe.start(info);
+
+  expect(calls).toEqual(["no-preference"]);
+});
+
+test("a genuine decode failure is reported through onError", async () => {
+  const onError = vi.fn();
+  const factory: DecoderFactory = () => ({
+    writable: new WritableStream<ScrcpyVideoStreamPacket>({
+      write: () => {
+        throw new Error("no decoder available");
+      },
+    }),
+    sizeChanged: () => () => {},
+    framesDecoded: 0,
+  });
+  const pipe = new VideoPipe(fakeSceneTarget() as never, () => {}, { createDecoder: factory, onError });
 
   pipe.start(info);
   pipe.push(dataPacket());
   await flush();
 
-  expect(calls).toEqual(["prefer-hardware", "prefer-software"]);
+  expect(onError).toHaveBeenCalledWith("no decoder available");
+});
+
+test("a stale pipe's error after a later start() does not call onError", async () => {
+  const onError = vi.fn();
+  let created = 0;
+  const factory: DecoderFactory = () => {
+    created += 1;
+    const failsOnWrite = created === 1;
+    return {
+      writable: new WritableStream<ScrcpyVideoStreamPacket>({
+        write: () => {
+          if (failsOnWrite) throw new Error("boom from the superseded pipe");
+        },
+      }),
+      sizeChanged: () => () => {},
+      framesDecoded: 0,
+    };
+  };
+  const pipe = new VideoPipe(fakeSceneTarget() as never, () => {}, { createDecoder: factory, onError });
+
+  pipe.start(info);
+  pipe.push(dataPacket());
+  // Supersede the first pipe before its async rejection has a chance to run.
+  pipe.start(info);
+  await flush();
+
+  expect(onError).not.toHaveBeenCalled();
 });

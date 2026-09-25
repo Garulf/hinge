@@ -1,0 +1,14 @@
+appId: net.garulf.hinge
+productName: hinge
+directories: { output: dist }
+files: ["out/**", "package.json"]
+extraResources:
+  - { from: vendor/scrcpy-server-v4.1, to: vendor/scrcpy-server-v4.1 }
+win:
+  target: [nsis, portable]
+  signAndEditExecutable: false
+  extraResources: [{ from: vendor/platform-tools-win, to: vendor/platform-tools-win }]
+linux:
+  target: [AppImage, deb]
+  category: Utility
+  extraResources: [{ from: vendor/platform-tools-linux, to: vendor/platform-tools-linux }]

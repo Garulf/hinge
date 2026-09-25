@@ -166,7 +166,7 @@ test("the default print-states read is bounded by a 3s timeout and the sampler s
     const neverClosingStream = new ReadableStream<Uint8Array>({ start: () => {} });
     const adb = {
       subprocess: {
-        shellProtocol: { spawn: async () => ({ stdout: neverClosingStream }) },
+        shellProtocol: { spawn: async () => ({ stdout: neverClosingStream, kill: async () => {} }) },
       },
     } as unknown as Adb;
     const logs: string[] = [];
@@ -178,6 +178,40 @@ test("the default print-states read is bounded by a 3s timeout and the sampler s
 
     expect(logs.some((l) => l.includes("print-states") && l.includes("3000ms"))).toBe(true);
     expect(startSample).toHaveBeenCalledTimes(1);
+    await stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a print-states read that times out kills its shell and releases the stream it was reading", async () => {
+  vi.useFakeTimers();
+  try {
+    const { sink } = fakeSink();
+    let cancelled = false;
+    const neverClosingStream = new ReadableStream<Uint8Array>({
+      start: () => {},
+      cancel: () => {
+        cancelled = true;
+      },
+    });
+    let kills = 0;
+    const process = {
+      stdout: neverClosingStream,
+      kill: async () => {
+        kills++;
+      },
+    };
+    const adb = { subprocess: { shellProtocol: { spawn: async () => process } } } as unknown as Adb;
+    const startSample = vi.fn(async () => neverEndingHandle());
+
+    const stopPromise = startFoldMonitor(adb, sink, () => {}, { startSample });
+    await vi.advanceTimersByTimeAsync(3000);
+    const stop = await stopPromise;
+
+    expect(kills).toBe(1);
+    expect(cancelled).toBe(true);
+    expect(neverClosingStream.locked).toBe(false);
     await stop();
   } finally {
     vi.useRealTimers();

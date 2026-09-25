@@ -90,13 +90,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
+/** A shell that never answers is killed and its stream let go, so the adb socket behind it does not stay open for the session. */
 async function defaultReadStatesText(adb: Adb): Promise<string> {
   const shell = adb.subprocess.shellProtocol;
   const spawned = shell
     ? await shell.spawn("cmd device_state print-states")
     : await adb.subprocess.noneProtocol.spawn("cmd device_state print-states");
   const reader = stdoutOf(spawned).pipeThrough(new TextDecoderStream()).getReader();
-  return withTimeout(readAllText(reader), PRINT_STATES_TIMEOUT_MS, "print-states did not respond");
+  try {
+    return await withTimeout(readAllText(reader), PRINT_STATES_TIMEOUT_MS, "print-states did not respond");
+  } catch (e) {
+    await reader.cancel().catch(() => {});
+    await Promise.resolve(spawned.kill()).catch(() => {});
+    throw e;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 const SAMPLER_RESTART_DELAY_MS = 2000;

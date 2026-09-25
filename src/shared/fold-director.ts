@@ -55,11 +55,18 @@ export class FoldDirector {
 
   posture(reading: PostureReading): void {
     if (reading.posture !== null) {
+      const changed = reading.posture !== this.#lastPosture;
       this.#lastPosture = reading.posture;
-      if ((reading.posture === "half" || reading.posture === "open") && this.#workTarget === 0) {
-        this.#workTarget = 180;
-      } else if ((reading.posture === "closed" || reading.posture === "tent") && this.#workTarget === 180) {
-        this.#workTarget = 0;
+      // A reading is delivered again whenever any field changes (rotation
+      // included), so only a genuine posture change may nudge the target;
+      // otherwise a rotation-only reading would re-lead a target the stream
+      // already had the final word on.
+      if (changed) {
+        if ((reading.posture === "half" || reading.posture === "open") && this.#workTarget === 0) {
+          this.#workTarget = 180;
+        } else if ((reading.posture === "closed" || reading.posture === "tent") && this.#workTarget === 180) {
+          this.#workTarget = 0;
+        }
       }
     }
     if (reading.rotation !== null) this.#lastRotation = reading.rotation;
@@ -129,8 +136,13 @@ export class FoldDirector {
   #rotation(): 0 | 1 | 2 | 3 {
     const cls = this.#announcedClass;
     if (cls && !cls.rotated) return 0;
-    if (this.#lastRotation !== null) return this.#lastRotation;
-    if (cls && cls.rotated) return 1;
-    return 0;
+    if (cls && cls.rotated) {
+      // Only 1 and 3 are valid rotations for a rotated class; a stale 0 or 2
+      // (from before the device turned, or a posture reading that predates
+      // this class) cannot be shown as an unrotated stream.
+      if (this.#lastRotation === 1 || this.#lastRotation === 3) return this.#lastRotation;
+      return 1;
+    }
+    return this.#lastRotation ?? 0;
   }
 }

@@ -41,11 +41,12 @@ function defaultAudioDecoderFactory(options: {
 }
 
 /**
- * The post-decode PCM sink. No production default is provided here: the real
- * one (`@yume-chan/pcm-player`) is not an installed dependency in this
- * worktree, so wiring it lives entirely in its own adapter file
- * (audio-player-adapter.ts) behind this interface, kept out of AudioPipe so
- * this module never has to know the package exists.
+ * The post-decode PCM sink. The buffer policy (target/max latency, drop on
+ * overflow, underrun handling) is not this pipe's job: it lives entirely in
+ * the player (an AudioWorklet backed by a PcmRing, see
+ * src/renderer/audio/worklet-player.ts), since only the player's own
+ * real-time render callback can actually act on it. This pipe only decodes
+ * and forwards.
  */
 export interface PcmPlayerLike {
   start(): Promise<void>;
@@ -58,38 +59,28 @@ export type PcmPlayerFactory = (sampleRate: number, channelCount: number) => Pcm
 export interface AudioPipeDeps {
   createPlayer: PcmPlayerFactory;
   createDecoder?: AudioDecoderFactory;
-  now?: () => number;
   /** Fired at most once per stream: decode failure or player start failure both turn audio off for the rest of the session. */
   onError?: (message: string) => void;
 }
 
-const TARGET_LATENCY_MS = 40;
-const MAX_BUFFER_MS = 120;
-
 export class AudioPipe {
   readonly #createDecoder: AudioDecoderFactory;
   readonly #createPlayer: PcmPlayerFactory;
-  readonly #now: () => number;
   readonly #onError: (message: string) => void;
 
   #decoder: AudioDecoderHandle | null = null;
   #player: PcmPlayerLike | null = null;
   #failed = false;
-  #playStartMs: number | null = null;
-  #firedMs = 0;
 
   constructor(deps: AudioPipeDeps) {
     this.#createDecoder = deps.createDecoder ?? defaultAudioDecoderFactory;
     this.#createPlayer = deps.createPlayer;
-    this.#now = deps.now ?? (() => performance.now());
     this.#onError = deps.onError ?? (() => {});
   }
 
   start(info: AudioStreamInfo): void {
     this.#teardown();
     this.#failed = false;
-    this.#playStartMs = null;
-    this.#firedMs = 0;
 
     const player = this.#createPlayer(info.sampleRate, info.channels);
     this.#player = player;
@@ -125,18 +116,11 @@ export class AudioPipe {
     this.#teardown();
   }
 
-  /** Estimated duration of audio handed to the player that real-time playback has not yet reached. Exposed for tests and any future latency display. */
-  bufferedMs(): number {
-    if (this.#playStartMs === null) return 0;
-    return Math.max(0, this.#firedMs - (this.#now() - this.#playStartMs));
-  }
-
   #onDecoded(data: DecodedAudioLike): void {
     if (this.#failed) {
       data.close();
       return;
     }
-    const durationMs = (data.numberOfFrames / data.sampleRate) * 1000;
     const planes: Float32Array[] = [];
     for (let channel = 0; channel < data.numberOfChannels; channel++) {
       const plane = new Float32Array(data.numberOfFrames);
@@ -144,16 +128,6 @@ export class AudioPipe {
       planes.push(plane);
     }
     data.close();
-
-    const now = this.#now();
-    if (this.#playStartMs === null) this.#playStartMs = now;
-    const elapsed = now - this.#playStartMs;
-    const prospective = Math.max(0, this.#firedMs - elapsed) + durationMs;
-    // Samples already handed to the player cannot be un-queued; the only
-    // lever against runaway latency is to stop counting the stale backlog,
-    // resyncing to the target instead of letting it climb further.
-    this.#firedMs = prospective > MAX_BUFFER_MS ? elapsed + TARGET_LATENCY_MS : this.#firedMs + durationMs;
-
     this.#player?.feed(planes);
   }
 
@@ -177,7 +151,5 @@ export class AudioPipe {
       // already stopped or errored
     }
     this.#player = null;
-    this.#playStartMs = null;
-    this.#firedMs = 0;
   }
 }

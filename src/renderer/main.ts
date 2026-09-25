@@ -6,7 +6,7 @@ import type { Rotation } from "../shared/screen-uv";
 import { WindowSizer } from "../shared/window-sizer";
 import type { SessionStatus } from "../shared/wire";
 import { AudioPipe } from "./audio-pipe";
-import { pcmPlayerFactory } from "./audio-player-adapter";
+import { createWorkletPlayer } from "./audio/worklet-player";
 import { InputRouter } from "./input/input-router";
 import { PortClient, receivePort } from "./port-client";
 import { PhoneScene } from "./scene/phone-scene";
@@ -80,21 +80,24 @@ function onDecodeError(message: string): void {
 }
 
 const pipe = new VideoPipe(scene, onSize, { onError: onDecodeError, onFirstFrame });
-// Task 7 wires the actual toast; a failure here just goes to the console for now.
-const audioPipe = new AudioPipe({ createPlayer: pcmPlayerFactory, onError: (message) => console.error("audio:", message) });
+// No toast UI yet: a failure here just goes to the console for now.
+const audioPipe = new AudioPipe({ createPlayer: createWorkletPlayer, onError: (message) => console.error("audio:", message) });
 
 const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
 new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
 
-// Thin on purpose: Task 7 owns drop feedback (per-file toasts); this only
+// Thin on purpose: no toast UI yet for per-file drop feedback; this only
 // resolves dropped files to real paths and hands them to main.
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", (e) => {
   e.preventDefault();
   const files = e.dataTransfer?.files;
   if (!files || files.length === 0) return;
-  const paths = Array.from(files).map((file) => window.hinge.getPathForFile(file));
+  const paths = Array.from(files)
+    .map((file) => window.hinge.getPathForFile(file))
+    .filter((path) => path !== "");
+  if (paths.length === 0) return;
   client?.send({ kind: "drop-files", paths });
 });
 

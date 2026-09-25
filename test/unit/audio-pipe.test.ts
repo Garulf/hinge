@@ -83,10 +83,10 @@ test("push() decodes data packets and skips configuration packets", () => {
   expect(decoder.decodes).toEqual([{ timestamp: 123, data: new Uint8Array([2, 3]) }]);
 });
 
-test("a decoded chunk is converted to planar Float32Arrays, one per channel, and fed to the player", () => {
+test("a decoded chunk is converted to planar Float32Arrays, one per channel, and fed to the player unconditionally (the buffer policy lives in the player)", () => {
   const decoder = fakeDecoderFactory();
   const player = fakePlayer();
-  const pipe = new AudioPipe({ createDecoder: decoder.factory, createPlayer: player.factory, now: () => 0 });
+  const pipe = new AudioPipe({ createDecoder: decoder.factory, createPlayer: player.factory });
   pipe.start(INFO);
 
   decoder.emit(fakeDecoded(20, 48000, 2));
@@ -97,37 +97,15 @@ test("a decoded chunk is converted to planar Float32Arrays, one per channel, and
   expect(player.fed[0][0].length).toBe(960); // 20ms @ 48kHz
 });
 
-test("buffer policy: feeding audio far faster than it can be playing never lets the estimated buffer exceed 120ms", () => {
+test("every decoded chunk reaches the player even under a burst: this pipe never throttles or drops (that is the player's job)", () => {
   const decoder = fakeDecoderFactory();
   const player = fakePlayer();
-  let clock = 0;
-  const pipe = new AudioPipe({ createDecoder: decoder.factory, createPlayer: player.factory, now: () => clock });
+  const pipe = new AudioPipe({ createDecoder: decoder.factory, createPlayer: player.factory });
   pipe.start(INFO);
 
-  // A burst: 40 chunks of 20ms each (800ms of audio) arriving back-to-back
-  // while the fake clock barely advances, simulating decode/receipt far
-  // outpacing real-time playback.
-  for (let i = 0; i < 40; i++) {
-    decoder.emit(fakeDecoded(20, 48000, 2));
-    expect(pipe.bufferedMs()).toBeLessThanOrEqual(120);
-    clock += 1; // a little wall-clock time passes between arrivals, not enough to drain 20ms
-  }
+  for (let i = 0; i < 40; i++) decoder.emit(fakeDecoded(20, 48000, 2));
 
-  expect(player.fed.length).toBe(40); // every chunk still reaches the player; only our own backlog accounting drops
-});
-
-test("buffer policy: once real time catches up, the estimated buffer drains back toward the target instead of staying pinned high", () => {
-  const decoder = fakeDecoderFactory();
-  const player = fakePlayer();
-  let clock = 0;
-  const pipe = new AudioPipe({ createDecoder: decoder.factory, createPlayer: player.factory, now: () => clock });
-  pipe.start(INFO);
-
-  for (let i = 0; i < 10; i++) decoder.emit(fakeDecoded(20, 48000, 2)); // 200ms decoded instantly at clock=0
-  expect(pipe.bufferedMs()).toBeLessThanOrEqual(120);
-
-  clock += 200; // real time catches all the way up
-  expect(pipe.bufferedMs()).toBe(0);
+  expect(player.fed.length).toBe(40);
 });
 
 test("a decode error turns audio off (further push()es are ignored) and reports exactly one error", () => {
@@ -147,20 +125,17 @@ test("a decode error turns audio off (further push()es are ignored) and reports 
   expect(player.stopped()).toBe(1);
 });
 
-test("end() stops the player and decoder and start() on a new stream resets the buffer clock", () => {
+test("end() stops the player and decoder, and start() on a new stream creates a fresh player and decoder", () => {
   const decoder = fakeDecoderFactory();
   const player = fakePlayer();
-  let clock = 0;
-  const pipe = new AudioPipe({ createDecoder: decoder.factory, createPlayer: player.factory, now: () => clock });
+  const pipe = new AudioPipe({ createDecoder: decoder.factory, createPlayer: player.factory });
   pipe.start(INFO);
   decoder.emit(fakeDecoded(100, 48000, 2));
-  expect(pipe.bufferedMs()).toBeGreaterThan(0);
+  expect(player.fed).toHaveLength(1);
 
   pipe.end();
   expect(player.stopped()).toBe(1);
-  expect(pipe.bufferedMs()).toBe(0);
 
-  clock = 1000;
   pipe.start(INFO);
-  expect(pipe.bufferedMs()).toBe(0);
+  expect(player.calls).toHaveLength(2);
 });

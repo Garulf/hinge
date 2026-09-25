@@ -19,6 +19,7 @@
     "test/unit/scale-controller.test.ts",
     "test/unit/view-memory.test.ts",
     "test/unit/toast-queue.test.ts",
+    "test/unit/dom-place.test.ts",
     "test/unit/hit-zone.test.ts",
     "test/unit/device-commands.test.ts",
     "test/unit/toast-text.test.ts",

@@ -63,8 +63,10 @@ test("the top bezel depth follows the lit screen and the rotation", () => {
   expect(topBezelMm(FOLD7_BODY, false, 0, null)).toBe(4);
 });
 
-test("the pill is the bezel's depth, within 22 to 32 px", () => {
-  expect(pillHeightPx(18.7)).toBe(22);
+test("the pill is the bezel's depth, within 14 to 32 px, so it stays on the bezel at any scale", () => {
+  expect(pillHeightPx(10)).toBe(14);
+  expect(pillHeightPx(15.2)).toBe(15);
+  expect(pillHeightPx(18.7)).toBe(19);
   expect(pillHeightPx(26.4)).toBe(26);
   expect(pillHeightPx(60)).toBe(32);
 });

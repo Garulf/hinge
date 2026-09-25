@@ -15,7 +15,7 @@ export interface Box {
 
 export const MENU_EDGE_PX = 24;
 const FALLBACK_BEZEL_MM = 4;
-const PILL_MIN_PX = 22;
+const PILL_MIN_PX = 14;
 const PILL_MAX_PX = 32;
 export const MENU_HIDE_DELAY_MS = 700;
 const PANEL_MARGIN_PX = 8;

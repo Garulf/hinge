@@ -9,7 +9,8 @@ import type { VideoFrameRenderer } from "@yume-chan/scrcpy-decoder-webcodecs";
  * finish with whatever frame is still current.
  */
 export interface FrameTarget {
-  setFrame(frame: VideoFrame): void;
+  /** firstOfSize: the first decoded frame at a new stream size (after a start or a fold). */
+  setFrame(frame: VideoFrame, firstOfSize?: boolean): void;
   end(): void;
   disposed: boolean;
 }

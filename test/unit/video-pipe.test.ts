@@ -217,6 +217,23 @@ test("onFrame fires for every frame of the current size and never for a frame le
   expect(onFrame).toHaveBeenCalledTimes(3);
 });
 
+test("the target is told which frame is the first of a new stream size, and a leftover frame of the old size never is", async () => {
+  const { factory, handles } = manualDecoderFactory();
+  const firsts: boolean[] = [];
+  const target = { disposed: false, setFrame: (_f: VideoFrame, first?: boolean) => firsts.push(first === true), end: () => {} };
+  const pipe = new VideoPipe(target, () => {}, { createDecoder: factory });
+
+  pipe.start({ ...info, width: 1080, height: 2520 });
+  const decoder = handles[0];
+  await decoder.emit(sizedFrame(1080, 2520));
+  await decoder.emit(sizedFrame(1080, 2520));
+  decoder.setSize(1968, 2184);
+  await decoder.emit(sizedFrame(1080, 2520));
+  await decoder.emit(sizedFrame(1968, 2184));
+  await decoder.emit(sizedFrame(1968, 2184));
+  expect(firsts).toEqual([true, false, false, true, false]);
+});
+
 test("after a decode failure the pipe drops packets until a configuration arrives, then decodes on a fresh decoder", async () => {
   const onError = vi.fn();
   const written: ScrcpyVideoStreamPacket[][] = [];

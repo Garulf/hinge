@@ -29,8 +29,14 @@ export function svgIcon(markup: string): SVGSVGElement {
   return template.content.firstElementChild as SVGSVGElement;
 }
 
+const placed = new WeakMap<HTMLElement, { left: string; top: string; width: string | null }>();
+
+/** Called every frame, so a style is only written when its rounded value changes; unchanged writes still cost the frame a style pass. */
 export function place(node: HTMLElement, box: { x: number; y: number; w?: number }): void {
-  node.style.left = `${Math.round(box.x)}px`;
-  node.style.top = `${Math.round(box.y)}px`;
-  if (box.w !== undefined) node.style.width = `${Math.round(box.w)}px`;
+  const next = { left: `${Math.round(box.x)}px`, top: `${Math.round(box.y)}px`, width: box.w === undefined ? null : `${Math.round(box.w)}px` };
+  const last = placed.get(node);
+  placed.set(node, { ...next, width: next.width ?? last?.width ?? null });
+  if (last?.left !== next.left) node.style.left = next.left;
+  if (last?.top !== next.top) node.style.top = next.top;
+  if (next.width !== null && last?.width !== next.width) node.style.width = next.width;
 }

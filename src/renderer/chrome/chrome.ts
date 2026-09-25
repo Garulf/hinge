@@ -64,6 +64,9 @@ export class Chrome {
   #overChrome = false;
   #settings: Settings | null = null;
   #pill = 0;
+  #shown = false;
+  #panelMaxHeight = "";
+  #toastsKey = "";
   #swallowEscapeUp = false;
 
   constructor(parent: HTMLElement, deps: ChromeDeps) {
@@ -133,14 +136,22 @@ export class Chrome {
       this.#menu.style.setProperty("--pill", `${pill}px`);
     }
     const menuTop = body.y + Math.max(0, (layout.bezelPx - pill) / 2);
-    this.#menu.classList.toggle("shown", this.#visibility.visible(nowMs, this.#open !== null));
+    const shown = this.#visibility.visible(nowMs, this.#open !== null);
+    if (shown !== this.#shown) {
+      this.#shown = shown;
+      this.#menu.classList.toggle("shown", shown);
+    }
     place(this.#menu, { x: body.x + (body.w - menuWidth(pill)) / 2, y: menuTop });
 
     if (this.#open) {
       const panel = this.#panels[this.#open];
       const box = panelBox(body, layout.window, panel.size, menuTop + pill + PANEL_GAP_PX);
       place(panel.node, box);
-      panel.node.style.maxHeight = `${Math.max(120, layout.window.h - box.y - 8)}px`;
+      const maxHeight = `${Math.max(120, layout.window.h - box.y - 8)}px`;
+      if (maxHeight !== this.#panelMaxHeight) {
+        this.#panelMaxHeight = maxHeight;
+        panel.node.style.maxHeight = maxHeight;
+      }
     }
 
     const toastTop = body.y + Math.max(layout.bezelPx, pill) + TOAST_GAP_PX;
@@ -151,6 +162,9 @@ export class Chrome {
   }
 
   #renderToasts(toasts: Toast[]): void {
+    const key = toasts.map((t) => `${t.id}\u0000${t.text}\u0000${t.tone}\u0000${t.progress}`).join("\u0001");
+    if (key === this.#toastsKey) return;
+    this.#toastsKey = key;
     const live = new Set(toasts.map((t) => t.id));
     for (const [id, node] of this.#toastNodes) {
       if (!live.has(id)) {
@@ -187,6 +201,7 @@ export class Chrome {
     if (this.#open === name) return;
     if (this.#open) this.#panels[this.#open].node.remove();
     this.#open = name;
+    this.#panelMaxHeight = "";
     for (const panelName of ["device", "colour", "settings"] as const) this.#buttons.get(panelName)?.setAttribute("aria-pressed", String(panelName === name));
     if (!name) return;
     const panel = this.#panels[name];

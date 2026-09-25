@@ -169,9 +169,10 @@ export class VideoPipe {
 
   #deliver(frame: VideoFrame): void {
     const current = frameHasSize(frame, this.#lastSize);
-    this.#target.setFrame(frame);
+    const first = current && this.#awaitingFirstFrame;
+    this.#target.setFrame(frame, first);
     if (!current) return;
-    if (this.#awaitingFirstFrame) {
+    if (first) {
       this.#awaitingFirstFrame = false;
       this.#onFirstFrame(this.#lastSize.width, this.#lastSize.height);
     }

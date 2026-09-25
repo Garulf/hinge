@@ -106,7 +106,7 @@ function onDecodeError(message: string): void {
   else scene.setStatus(`Video error: ${message}`);
 }
 
-const pipe = new VideoPipe(scene, onSize, { onError: onDecodeError, onFirstFrame });
+const pipe = new VideoPipe(scene, onSize, { onError: onDecodeError, onFirstFrame, onFrame: () => director.frame() });
 // audioPipe has no UI surface to report failures through; logged only.
 const audioPipe = new AudioPipe({ createPlayer: createWorkletPlayer, onError: (message) => console.error("audio:", message) });
 

@@ -22,6 +22,7 @@ const FADE_IN_MS = 150;
 const INNER_VISIBLE_ANGLE = 25;
 const FRESH_CLASS_MS = 1000;
 const POSTURE_LEAD_MS = 1500;
+const LEAD_DISPUTE_FRAME_MS = 300;
 
 function stepBrightness(value: number, target: number, dtMs: number): number {
   if (value === target) return value;
@@ -45,6 +46,10 @@ function classTarget(cls: ScreenClass): number {
   return cls.screen === "inner" ? 180 : 0;
 }
 
+function postureTarget(posture: Posture): number {
+  return posture === "half" || posture === "open" ? 180 : 0;
+}
+
 export class FoldDirector {
   #view: ViewMode;
   #workAngle: Spring;
@@ -66,6 +71,7 @@ export class FoldDirector {
   #nowMs = 0;
   #classAtMs = 0;
   #leadAtMs: number | null = null;
+  #lastFrameAtMs: number | null = null;
 
   constructor(opts?: { view?: ViewMode; settleMs?: number }) {
     this.#view = opts?.view ?? "work";
@@ -76,13 +82,14 @@ export class FoldDirector {
 
   posture(reading: PostureReading): void {
     if (reading.posture !== null) {
-      const changed = reading.posture !== this.#lastPosture;
+      const previous = this.#lastPosture;
       this.#lastPosture = reading.posture;
       // A reading is delivered again whenever any field changes (rotation
-      // included), so only a genuine posture change may nudge the target;
-      // otherwise a rotation-only reading would re-lead a target the stream
+      // included, or half and open trading places while the phone rests
+      // near the detent), so only a posture that points the other way may
+      // nudge the target; otherwise it would re-lead a target the stream
       // already had the final word on.
-      if (changed) this.#nudge(reading.posture);
+      if (previous === null || postureTarget(previous) !== postureTarget(reading.posture)) this.#nudge(reading.posture);
     }
     if (reading.rotation !== null) this.#lastRotation = reading.rotation;
     if (reading.rotation === 1 || reading.rotation === 3) this.#lastLandscape = reading.rotation;
@@ -90,17 +97,15 @@ export class FoldDirector {
 
   /**
    * A posture sample can lag the stream by a sampling interval or more, so
-   * one that contradicts a class announced moments ago is stale; and a lead
-   * the stream never follows (no class change) runs out, handing the target
-   * back to the last announced class.
+   * one that contradicts a class announced moments ago is stale (and within
+   * that window every nudge does); a lead the stream disputes runs out,
+   * handing the target back to the last announced class.
    */
   #nudge(posture: Posture): void {
-    let target: number | null = null;
-    if ((posture === "half" || posture === "open") && this.#workTarget === 0) target = 180;
-    else if ((posture === "closed" || posture === "tent") && this.#workTarget === 180) target = 0;
-    if (target === null) return;
+    const target = postureTarget(posture);
+    if (target === this.#workTarget) return;
     const cls = this.#announcedClass;
-    if (cls && this.#nowMs - this.#classAtMs < FRESH_CLASS_MS && target !== classTarget(cls)) return;
+    if (cls && this.#nowMs - this.#classAtMs < FRESH_CLASS_MS) return;
     this.#workTarget = target;
     this.#leadAtMs = cls ? this.#nowMs : null;
   }
@@ -118,6 +123,11 @@ export class FoldDirector {
       this.#brightness[cls.screen] = 0;
       this.#brightnessTarget[cls.screen] = 0;
     }
+  }
+
+  /** Every decoded frame of the announced class. */
+  frame(): void {
+    this.#lastFrameAtMs = this.#nowMs;
   }
 
   firstFrame(): void {
@@ -162,9 +172,16 @@ export class FoldDirector {
     };
   }
 
+  /**
+   * A screen that goes dark on a fold sends no frames, so the stream only
+   * disputes a lead by still sending frames of its class well after the
+   * posture changed; without that the lead stands.
+   */
   #expireLead(): void {
     const cls = this.#announcedClass;
-    if (this.#leadAtMs === null || !cls || this.#nowMs - this.#leadAtMs < POSTURE_LEAD_MS) return;
+    const leadAt = this.#leadAtMs;
+    if (leadAt === null || !cls || this.#nowMs - leadAt < POSTURE_LEAD_MS) return;
+    if (this.#lastFrameAtMs === null || this.#lastFrameAtMs < leadAt + LEAD_DISPUTE_FRAME_MS) return;
     this.#leadAtMs = null;
     this.#workTarget = classTarget(cls);
   }

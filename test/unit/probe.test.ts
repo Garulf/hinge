@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { waitForDevice, type DeviceLister } from "../../src/main/probe";
+import { PROBE_TIMELINE_EXTRA_COMMANDS, waitForDevice, type DeviceLister } from "../../src/main/probe";
 
 function hostOf(devices: Awaited<ReturnType<DeviceLister["getDevices"]>>): { client: DeviceLister } {
   return { client: { getDevices: async () => devices } };
@@ -28,4 +28,8 @@ test("shows a prompt to allow USB debugging instead of waiting silently on an un
   const device = await waitForDevice(host, null, (t) => progress.push(t));
   expect(device.state).toBe("device");
   expect(progress).toContain("Allow USB debugging on your phone");
+});
+
+test("the probe's timeline samples wm size alongside the posture commands", () => {
+  expect(PROBE_TIMELINE_EXTRA_COMMANDS).toContain("wm size");
 });

@@ -113,6 +113,7 @@ function registerWindowIpc(win: BrowserWindow): void {
   });
 
   win.on("blur", stopDrag);
+  win.on("closed", stopDrag);
 }
 
 function sizeOf(bounds: { width: number; height: number }): { width: number; height: number } {

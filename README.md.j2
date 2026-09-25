@@ -38,6 +38,24 @@ connects to whatever device `adb` sees. Relevant flags:
   report to the desktop, or to the path given with `--out <file>`
 - `--seconds <n>` how long `--probe` samples for (default 90)
 
+A bare file name given to `--record` or `--out` (no directory in the path)
+lands on the desktop; a path with a directory is used as given.
+
+Each run writes `hinge.log` to the app's logs directory (truncated at
+startup, no rotation) with server output, connection attempts and errors.
+An error shown in the window or the probe result page names the log file.
+
+### Windows
+
+From a `cmd.exe` prompt in the installed or unpacked directory:
+
+```bat
+hinge.exe --serial 10.0.0.23:5555
+hinge.exe --probe --seconds 60
+```
+
+The window is frameless; close it with Alt+F4 or from the taskbar.
+
 ## Development commands
 
 ```sh

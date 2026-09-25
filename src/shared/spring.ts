@@ -31,7 +31,15 @@ export class Spring {
     }
   }
 
+  /**
+   * epsilon * omega is the velocity below which, at this spring's own decay
+   * rate, position would move less than epsilon before it mattered again:
+   * scaling by omega (rather than a flat velocity bound) keeps this already
+   * satisfied by the time the 180 degree reference step reaches its position
+   * tolerance, so it rejects a spring merely passing through target without
+   * pushing settling later than the design's 450 ms plus or minus 50 window.
+   */
   settled(epsilon = 0.5): boolean {
-    return Math.abs(this.target - this.value) <= epsilon;
+    return Math.abs(this.target - this.value) <= epsilon && Math.abs(this.velocity) <= epsilon * this.#omega;
   }
 }

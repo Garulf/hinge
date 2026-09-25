@@ -70,9 +70,17 @@ function buildEvents() {
 
     events.push({ t, kind: "video-packet", packet: { type: "session", width: seg.w, height: seg.h, isClientResize: false } });
 
+    // Real scrcpy sends a configuration packet only when the encoder
+    // (re)starts, not before every periodic keyframe; x264's repeat-headers
+    // still reinserts SPS/PPS before every GOP boundary in the raw stream so
+    // each keyframe is independently decodable, but only the first access
+    // unit's config is surfaced as its own packet here, matching scrcpy's
+    // cadence. See findings I2b.
+    let configEmitted = false;
     for (const au of accessUnits) {
-      if (au.config) {
+      if (au.config && !configEmitted) {
         events.push({ t, kind: "video-packet", packet: { type: "configuration", data: au.config } });
+        configEmitted = true;
       }
       events.push({
         t,

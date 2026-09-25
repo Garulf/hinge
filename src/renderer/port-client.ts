@@ -8,6 +8,7 @@ import type { MainToRenderer, RendererToMain } from "../shared/wire";
 export function receivePort(): Promise<MessagePort> {
   return new Promise((resolve) => {
     function onMessage(e: MessageEvent<unknown>): void {
+      if (e.source !== window) return;
       const port = e.ports[0];
       if (e.data === "hinge:port" && port) {
         window.removeEventListener("message", onMessage);

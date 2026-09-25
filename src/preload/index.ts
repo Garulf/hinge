@@ -25,7 +25,7 @@ ipcRenderer.on("hinge:port", (event) => {
 });
 
 window.addEventListener("message", (event) => {
-  if (event.data === "hinge:request-port") {
+  if (event.source === window && event.data === "hinge:request-port") {
     requested = true;
     deliverIfReady();
   }

@@ -16,27 +16,41 @@ test("replays the synthetic fold recording and follows the size change", async (
       return api ? api.stats() : { framesDecoded: 0, width: 0, height: 0, cls: null, window: { w: 0, h: 0 } };
     });
 
-  // Each segment lasts only 1-2 real-time seconds, and software H.264 decode
-  // under Xvfb + SwiftShader is slow enough that gating a segment's
-  // assertions on a frame count can outlast the segment itself. Confirm each
-  // classification (and grab its screenshot) as soon as any frame has
-  // decoded, then check the >10 threshold once at the end, by which point
-  // the run has been decoding for multiple segments.
-  await expect.poll(async () => (await stats()).cls?.screen, { timeout: 15_000 }).toBe("cover");
-  await expect.poll(async () => (await stats()).framesDecoded, { timeout: 15_000 }).toBeGreaterThan(0);
-  const cover = await stats();
-  expect(cover.cls).toEqual({ screen: "cover", rotated: false });
-  expect(cover.window.h / cover.window.w).toBeGreaterThan(1.9);
+  function aspect(s: Stats): number {
+    return s.window.w > 0 ? s.window.h / s.window.w : 0;
+  }
+
+  // Polling a condition and then re-fetching stats() separately is its own
+  // small race, and cls itself can briefly disagree with window.{w,h}: cls
+  // updates synchronously in the renderer, but the actual OS window resize
+  // is an async round trip through main. Capture the exact reading that
+  // satisfies the full predicate, aspect ratio included, instead of
+  // re-fetching or checking the aspect only afterwards.
+  let cover: Stats | null = null;
+  await expect
+    .poll(
+      async () => {
+        const s = await stats();
+        if (s.framesDecoded > 10 && s.cls?.screen === "cover" && !s.cls.rotated && aspect(s) > 1.9) cover = s;
+        return cover !== null;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  expect(cover!.cls).toEqual({ screen: "cover", rotated: false });
   await page.screenshot({ path: "test-results/cover.png" });
 
-  await expect.poll(async () => (await stats()).cls?.screen, { timeout: 15_000 }).toBe("inner");
-  // By now the whole 2-second cover segment has already been decoded in the
-  // background, so this threshold has plenty of headroom before the
-  // 1-second rotated segment ends the recording and tears the decoder down.
-  await expect.poll(async () => (await stats()).framesDecoded, { timeout: 15_000 }).toBeGreaterThan(10);
-  const inner = await stats();
-  expect(inner.window.h / inner.window.w).toBeGreaterThan(1.0);
-  expect(inner.window.h / inner.window.w).toBeLessThan(1.2);
+  let inner: Stats | null = null;
+  await expect
+    .poll(
+      async () => {
+        const s = await stats();
+        if (s.cls?.screen === "inner" && !s.cls.rotated && aspect(s) > 1.0 && aspect(s) < 1.2) inner = s;
+        return inner !== null;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
   await page.screenshot({ path: "test-results/inner.png" });
 
   await expect.poll(async () => (await stats()).cls?.rotated, { timeout: 15_000 }).toBe(true);

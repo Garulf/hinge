@@ -17,13 +17,14 @@ const DEVICE_NAME = "synthetic-fold7";
 // and then catches up in a burst, and a software GL on a busy machine can
 // stall for seconds more while it builds pipelines, so the first segment
 // runs well past both, and every segment is long enough to settle in each
-// pose at a few frames per second.
+// pose at a few frames per second. The open pose also has to outlast the
+// e2e's round trip to the showcase view and back on a software GL.
 //
 // testsrc2's six bars put a colour boundary exactly on the inner screen's
 // crease, where it reads as a seam; smptebars' seven put a bar's middle there.
 const SEGMENTS = [
   { w: 544, h: 1264, secs: 14, label: "COVER", source: "testsrc2" },
-  { w: 984, h: 1092, secs: 10, label: "INNER", source: "smptebars" },
+  { w: 984, h: 1092, secs: 30, label: "INNER", source: "smptebars" },
   { w: 1092, h: 984, secs: 10, label: "INNER LAND", source: "smptebars" },
 ];
 

@@ -80,8 +80,9 @@ controls, quit with MOD+q, or close it with Alt+F4 or from the taskbar.
 
 ### Window controls
 
-Hovering within a few pixels of the phone's top edge shows a small bar of
-buttons:
+Hovering the bezel along the phone's top edge shows a small bar of buttons
+(the screen below it stays the phone's, so pulling down the notification
+shade from the top still works):
 
 - **Devices** lists the phones adb can see (USB, Wi-Fi and mDNS), lets you
   switch to another one, switch a USB phone to Wi-Fi, disconnect a Wi-Fi
@@ -97,7 +98,8 @@ buttons:
 
 Panels open inside the window (it grows while one needs the room) and close
 with Escape or a click elsewhere. Short notices appear under the phone's top
-bezel for three seconds.
+bezel for three seconds; the Devices panel also shows pairing and connection
+errors in its own status line.
 
 ### Shortcuts
 
@@ -135,8 +137,8 @@ right Alt, Super and Ctrl in Settings. The table follows
 | Two-finger vertical slide | Shift+drag |
 | Two-finger horizontal slide | Ctrl+Shift+drag |
 
-Every other Ctrl shortcut goes to the phone. AltGr (Ctrl+Alt on Windows)
-types its character. The clipboard syncs both ways on its own: copy on the
+Other Ctrl shortcuts go to the phone, unless Ctrl is set as MOD. AltGr
+(Ctrl+Alt on Windows) types its character. The clipboard syncs both ways on its own: copy on the
 phone and paste on the PC.
 
 ### Phone audio
@@ -176,7 +178,8 @@ Settings are saved as `settings.json` in the app's data folder:
 `~/.config/hinge/settings.json` on Linux. The Settings panel shows the full
 path. A file that can't be read is kept as `settings.json.bad` and defaults
 are used. Besides the panel's options it holds the colourway, the last
-device, and the size you picked for each phone.
+device, and for each phone the window's position, the size you picked and
+the view (work or 3D) it was last in.
 
 ## Development commands
 

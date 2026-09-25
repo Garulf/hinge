@@ -18,6 +18,9 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  artifactName: "hinge-${version}-${os}-${arch}-setup.${ext}"
+portable:
+  artifactName: "hinge-${version}-${os}-${arch}-portable.${ext}"
 linux:
   target: [AppImage, deb]
   category: Utility

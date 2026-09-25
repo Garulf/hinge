@@ -865,6 +865,114 @@ test("a stopped session's late ended cannot detach a newer session started on th
   expect(statuses.filter((s) => s.state === "error")).toEqual([]);
 });
 
+test("a run superseded by a same-serial reconnect during host.open() does not overwrite the newer run's session", async () => {
+  const watcher = fakeWatcher();
+  const sessions: FakeSession[] = [];
+  let openCalls = 0;
+  let releaseFirstOpen!: () => void;
+  watcher.host.open = async (serial) => {
+    openCalls++;
+    if (openCalls === 1) {
+      await new Promise<void>((resolve) => {
+        releaseFirstOpen = resolve;
+      });
+    }
+    return { marker: serial, call: openCalls } as never;
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  // Run A starts (host.open() gated), then the device drops and reappears
+  // on the identical serial before A's open() resolves: teardown, then a
+  // fresh run B whose open() resolves immediately.
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(openCalls).toBe(1);
+
+  watcher.emit([]);
+  await flush();
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(openCalls).toBe(2);
+  expect(sessions).toHaveLength(1);
+  const runB = sessions[0];
+
+  // Run A's gated open() now resolves late: it must not create a second
+  // session or otherwise clobber run B.
+  releaseFirstOpen();
+  await flush();
+
+  expect(sessions).toHaveLength(1);
+  expect(runB.stopped).toBe(false);
+
+  await source.stop();
+  expect(runB.stopped).toBe(true);
+});
+
+test("a fold monitor still starting when its run is superseded by a same-serial reconnect is stopped immediately instead of leaking into #stopPosture", async () => {
+  const watcher = fakeWatcher();
+  const sessions: FakeSession[] = [];
+  const monitorStops: string[] = [];
+  let monitorCall = 0;
+  let releaseFirstMonitor!: () => void;
+  const foldMonitor: FoldMonitorStarter = async () => {
+    monitorCall++;
+    const id = `monitor-${monitorCall}`;
+    if (monitorCall === 1) {
+      await new Promise<void>((resolve) => {
+        releaseFirstMonitor = resolve;
+      });
+    }
+    return async () => {
+      monitorStops.push(id);
+    };
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+    foldMonitor,
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(monitorCall).toBe(1);
+  // The monitor is not awaited: the session is created immediately regardless.
+  expect(sessions).toHaveLength(1);
+
+  // The device drops and reappears on the identical serial: run A's session
+  // is torn down (its monitor is still pending, not yet assigned to
+  // #stopPosture) and a fresh run B connects with its own monitor.
+  watcher.emit([]);
+  await flush();
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(monitorCall).toBe(2);
+  expect(sessions).toHaveLength(2);
+
+  // Run A's gated monitor now resolves late: it must be stopped immediately,
+  // not assigned over run B's live monitor.
+  releaseFirstMonitor();
+  await flush();
+  expect(monitorStops).toEqual(["monitor-1"]);
+
+  await source.stop();
+  expect(monitorStops).toEqual(["monitor-1", "monitor-2"]);
+});
+
 test("host.open failures are logged and get the same backoff retry as an exhausted session-start ladder", async () => {
   const watcher = fakeWatcher();
   const delays: number[] = [];

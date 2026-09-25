@@ -98,6 +98,7 @@ export class DeviceSource implements MediaSource {
   #sessionRetryAttempt = 0;
   #sessionRetryAbort: AbortController | null = null;
   #lastSessionError: string | null = null;
+  #runToken = 0;
 
   constructor(
     private readonly opts: {
@@ -225,6 +226,7 @@ export class DeviceSource implements MediaSource {
   }
 
   #teardownSession(): void {
+    this.#runToken++;
     const session = this.#session;
     this.#session = null;
     this.#sessionSerial = null;
@@ -241,10 +243,23 @@ export class DeviceSource implements MediaSource {
   #connect(device: DeviceSummary): void {
     this.#sessionSerial = device.serial;
     this.#sessionEverStreamed = false;
-    void this.#run(device);
+    const run = ++this.#runToken;
+    void this.#run(device, run);
   }
 
-  async #run(device: DeviceSummary): Promise<void> {
+  /**
+   * `run` is a token captured once, at the moment this call started: every
+   * check below compares against the CURRENT #runToken rather than the
+   * device serial, so a run superseded by a same-serial reconnect (the
+   * device drops and reappears while this run is still awaiting adb) is
+   * recognised as stale even though the serial is unchanged. The fold
+   * monitor is started without being awaited, so a slow print-states/sampler
+   * round trip never delays createSession()/session.start(); its stop
+   * function is held locally and only published to #stopPosture once this
+   * run is confirmed still current, otherwise it is stopped immediately
+   * instead of being discarded (which would leak it).
+   */
+  async #run(device: DeviceSummary, run: number): Promise<void> {
     const sink = this.#sink;
     if (!sink) return;
     const observedSink: MediaSink = {
@@ -260,31 +275,38 @@ export class DeviceSource implements MediaSource {
     };
     try {
       const adb = await this.opts.host.open(device.serial);
-      if (this.#stopped || this.#sessionSerial !== device.serial) return;
-      if (this.opts.foldMonitor) {
-        try {
-          this.#stopPosture = await this.opts.foldMonitor(adb, sink, this.opts.log ?? (() => {}));
-        } catch (e) {
-          this.opts.log?.(`fold monitor failed to start: ${String(e)}`);
-        }
-        if (this.#stopped || this.#sessionSerial !== device.serial) {
-          await this.#stopPostureSampler();
-          return;
-        }
-      }
+      if (this.#stopped || this.#runToken !== run) return;
+
+      if (this.opts.foldMonitor) void this.#startFoldMonitor(run, adb, sink);
+
       const session = this.opts.createSession(device, adb);
       this.#session = session;
       session.ended?.then(() => this.#onSessionEnded(session));
       await session.start(observedSink);
     } catch (e) {
-      await this.#stopPostureSampler();
-      if (this.#stopped || this.#sessionSerial !== device.serial) return;
+      if (this.#stopped || this.#runToken !== run) return;
+      this.#runToken++;
       this.#session = null;
       this.#sessionSerial = null;
       this.opts.log?.(`session start failed: ${String(e)}`);
       this.#lastSessionError = String(e);
       this.#beginSessionRetry();
     }
+  }
+
+  async #startFoldMonitor(run: number, adb: Adb, sink: MediaSink): Promise<void> {
+    let stop: (() => Promise<void>) | null = null;
+    try {
+      stop = await this.opts.foldMonitor!(adb, sink, this.opts.log ?? (() => {}));
+    } catch (e) {
+      this.opts.log?.(`fold monitor failed to start: ${String(e)}`);
+      return;
+    }
+    if (this.#stopped || this.#runToken !== run) {
+      await stop().catch(() => {});
+      return;
+    }
+    this.#stopPosture = stop;
   }
 
   /**
@@ -294,6 +316,7 @@ export class DeviceSource implements MediaSource {
    */
   #onSessionEnded(session: MediaSource): void {
     if (this.#stopped || this.#session !== session) return;
+    this.#runToken++;
     const streamed = this.#sessionEverStreamed;
     this.#session = null;
     this.#sessionSerial = null;

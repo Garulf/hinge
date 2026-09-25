@@ -51,6 +51,12 @@ export class WindowSizer {
     if (settled) this.#send(target, rotation);
   }
 
+  /** Requests a size that tracks an animation frame by frame (the view transition), shrinking as readily as growing. */
+  follow(size: Size, rotation: Rotation): void {
+    this.#target = size;
+    this.#send(size, rotation);
+  }
+
   /**
    * With nudgeLostResizes (X11 only): a resize requested while the
    * compositor is stalled can leave the page at its old size even though

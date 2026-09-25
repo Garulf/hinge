@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { bodyIsOpen, FoldDirector } from "../../src/shared/fold-director";
 import { Spring } from "../../src/shared/spring";
 import type { PostureReading } from "../../src/shared/posture";
@@ -15,6 +15,15 @@ const INNER_ROTATED: ScreenClass = { screen: "inner", rotated: true };
 function ticks(director: FoldDirector, n: number, dtMs = 16) {
   let out;
   for (let i = 0; i < n; i++) out = director.tick(dtMs);
+  return out!;
+}
+
+function ticksWithFrames(director: FoldDirector, n: number, dtMs = 16) {
+  let out;
+  for (let i = 0; i < n; i++) {
+    out = director.tick(dtMs);
+    director.frame();
+  }
   return out!;
 }
 
@@ -121,6 +130,7 @@ test("a rotation-only reading (same posture) does not re-lead a target the strea
   ticks(director, 70);
   director.posture(reading({ posture: "open" })); // leads to 180 before the stream catches up
   director.streamClass(COVER); // stream reclaims: target back to 0
+  ticks(director, 70); // past the second in which any contradicting posture is ignored anyway
 
   director.posture(reading({ posture: "open", rotation: 1 })); // same posture value, only rotation changed
   const out = ticks(director, 60);
@@ -135,6 +145,7 @@ test("mirror: a rotation-only reading does not re-lead a target the stream alrea
   ticks(director, 70);
   director.posture(reading({ posture: "closed" })); // leads to 0 before the stream catches up
   director.streamClass(INNER); // stream reclaims: target back to 180
+  ticks(director, 70); // past the second in which any contradicting posture is ignored anyway
 
   director.posture(reading({ posture: "closed", rotation: 2 })); // same posture value, only rotation changed
   const out = ticks(director, 60);
@@ -323,7 +334,23 @@ test("a posture nudge that contradicts a stream class announced within the last 
   expect(out.angle).toBe(0);
 });
 
-test("a posture nudge that agrees with a fresh stream class, or arrives after the second, still leads", () => {
+test("a posture that agrees with a stream class announced moments ago keeps the class's target", () => {
+  const director = new FoldDirector();
+  director.streamClass(COVER);
+  director.firstFrame();
+  director.posture(reading({ posture: "closed" }));
+  ticksWithFrames(director, 70);
+
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticksWithFrames(director, 6); // about 100 ms: the class is still fresh
+  director.posture(reading({ posture: "open" }));
+  const out = ticksWithFrames(director, 200);
+  expect(out.lit).toBe("inner");
+  expect(out.angle).toBe(180);
+});
+
+test("a posture nudge that arrives after the fresh-class second still leads", () => {
   const director = new FoldDirector();
   director.streamClass(COVER);
   director.firstFrame();
@@ -333,17 +360,17 @@ test("a posture nudge that agrees with a fresh stream class, or arrives after th
   expect(out.angle).toBeGreaterThan(90);
 });
 
-test("a posture lead expires after 1500 ms without a class change and the target returns to the lit class", () => {
+test("a posture lead expires after 1500 ms when frames of the lit class keep arriving, and the target returns to that class", () => {
   const director = new FoldDirector();
   director.streamClass(COVER);
   director.firstFrame();
-  ticks(director, 70);
+  ticksWithFrames(director, 70);
 
   director.posture(reading({ posture: "open" }));
-  const leading = ticks(director, 90); // 1440 ms: still leading
+  const leading = ticksWithFrames(director, 90); // 1440 ms: still leading
   expect(leading.angle).toBe(180);
 
-  const expired = ticks(director, 70); // past 1500 ms, then settled back
+  const expired = ticksWithFrames(director, 70); // past 1500 ms, then settled back
   expect(expired.lit).toBe("cover");
   expect(expired.angle).toBe(0);
 });
@@ -395,4 +422,163 @@ test("bodyIsOpen: closing with the inner class still lit (the cover stays off) s
   expect(closed.lit).toBe("inner");
   expect(closed.angle).toBe(0);
   expect(bodyIsOpen(closed)).toBe(false);
+});
+
+test("a posture close with the cover left dark (no frames at all) keeps the closed pose past the lead window", () => {
+  const director = new FoldDirector();
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  director.posture(reading({ posture: "closed" }));
+  const out = ticks(director, 250); // 4 s with the stream silent
+  expect(out.lit).toBe("inner");
+  expect(out.angle).toBe(0);
+});
+
+test("frames that stop within 300 ms of the lead starting do not let it expire", () => {
+  const director = new FoldDirector();
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  director.posture(reading({ posture: "closed" }));
+  ticksWithFrames(director, 17); // frames up to about 270 ms into the lead, then the screen goes dark
+  const out = ticks(director, 230);
+  expect(out.angle).toBe(0);
+});
+
+test("a stream that keeps sending frames of the other class after 300 ms still wins once the lead runs out", () => {
+  const director = new FoldDirector();
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  director.posture(reading({ posture: "closed" }));
+  ticks(director, 25); // 400 ms without frames
+  director.frame(); // one frame of the inner class well after the lead began
+  const out = ticks(director, 150);
+  expect(out.lit).toBe("inner");
+  expect(out.angle).toBe(180);
+});
+
+test("posture flickering between half and open with the cover lit does not cycle the model open and closed", () => {
+  const director = new FoldDirector();
+  director.streamClass(COVER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  let posture: "half" | "open" = "half";
+  let opens = 0;
+  let wasOpen = false;
+  let sinceToggleMs = 1900;
+  let out = director.tick(0);
+  for (let elapsed = 0; elapsed < 15_000; elapsed += 16) {
+    if (sinceToggleMs >= 1900) {
+      director.posture(reading({ posture }));
+      posture = posture === "half" ? "open" : "half";
+      sinceToggleMs = 0;
+    }
+    out = director.tick(16);
+    director.frame();
+    sinceToggleMs += 16;
+    const open = out.angle > 90;
+    if (open && !wasOpen) opens++;
+    wasOpen = open;
+  }
+  expect(opens).toBeLessThanOrEqual(1);
+  expect(out.lit).toBe("cover");
+  expect(out.angle).toBe(0);
+});
+
+test("the displayed angle blends from the work angle to the true angle, so a view toggle mid-fold stays continuous", () => {
+  const drive = (d: FoldDirector) => {
+    d.streamClass(COVER);
+    d.firstFrame();
+    ticks(d, 70);
+    d.posture(reading({ posture: "half" }));
+    d.streamClass(INNER);
+    d.firstFrame();
+  };
+  const work = new FoldDirector();
+  const showcase = new FoldDirector({ view: "showcase" });
+  const blended = new FoldDirector();
+  for (const d of [work, showcase, blended]) drive(d);
+
+  for (let i = 0; i < 60; i++) {
+    const blend = Math.min(1, Math.max(0, (i - 5) / 37));
+    blended.setView(blend > 0 ? "showcase" : "work", blend);
+    const a = work.tick(16).angle;
+    const b = showcase.tick(16).angle;
+    const out = blended.tick(16);
+    expect(out.angle).toBeCloseTo(a + (b - a) * blend, 9);
+    expect(out.innerVisible).toBe(out.angle >= 25);
+  }
+  const rest = ticks(blended, 30);
+  expect(rest.angle).toBe(100);
+  expect(rest.trueAngle).toBe(100);
+});
+
+test("setView without a blend shows the whole view it names", () => {
+  const director = new FoldDirector();
+  director.streamClass(INNER);
+  director.firstFrame();
+  director.posture(reading({ posture: "half" }));
+  ticks(director, 70);
+  director.setView("showcase");
+  expect(director.tick(16).angle).toBe(100);
+  director.setView("work");
+  expect(director.tick(16).angle).toBe(180);
+});
+
+test("a lead that runs out with no frames at all asks the stream for frames once, then holds while none come", () => {
+  const requestFrames = vi.fn();
+  const director = new FoldDirector({ requestFrames });
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  director.posture(reading({ posture: "closed" }));
+  ticks(director, 90); // 1440 ms: not yet
+  expect(requestFrames).not.toHaveBeenCalled();
+  const held = ticks(director, 160);
+  expect(requestFrames).toHaveBeenCalledOnce();
+  expect(held.angle).toBe(0);
+});
+
+test("frames that answer the probe let the stream have its word", () => {
+  const requestFrames = vi.fn();
+  const director = new FoldDirector({ requestFrames });
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  director.posture(reading({ posture: "closed" }));
+  ticks(director, 100);
+  expect(requestFrames).toHaveBeenCalledOnce();
+  const out = ticksWithFrames(director, 60);
+  expect(out.angle).toBe(180);
+  expect(requestFrames).toHaveBeenCalledOnce();
+});
+
+test("each new lead may probe once; a class change ends a lead without a probe", () => {
+  const requestFrames = vi.fn();
+  const director = new FoldDirector({ requestFrames });
+  director.streamClass(COVER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  director.posture(reading({ posture: "open" }));
+  ticks(director, 20);
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticks(director, 150);
+  expect(requestFrames).not.toHaveBeenCalled();
+
+  director.posture(reading({ posture: "closed" }));
+  ticks(director, 150);
+  director.posture(reading({ posture: "open" }));
+  director.posture(reading({ posture: "closed" }));
+  ticks(director, 150);
+  expect(requestFrames).toHaveBeenCalledTimes(2);
 });

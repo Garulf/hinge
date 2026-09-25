@@ -22,7 +22,13 @@ export class ViewTransition {
   }
 
   toggle(): void {
-    this.target = this.target === "work" ? "showcase" : "work";
+    this.setTarget(this.target === "work" ? "showcase" : "work");
+  }
+
+  /** Eases toward `target` from wherever the blend stands, or with `instant` lands on it at once. */
+  setTarget(target: "work" | "showcase", opts?: { instant?: boolean }): void {
+    this.target = target;
+    if (opts?.instant) this.#p = target === "showcase" ? 1 : 0;
   }
 
   tick(dtMs: number): { t: number; active: boolean } {

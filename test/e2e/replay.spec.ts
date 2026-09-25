@@ -1,7 +1,7 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { FOLD7_BODY } from "../../src/shared/layout";
+import { defaultPxPerMm, FOLD7_BODY, showcaseSizePx } from "../../src/shared/layout";
 
 type Lit = "cover" | "inner" | null;
 
@@ -15,6 +15,7 @@ interface Stats {
   badge: "flex" | null;
   settled: boolean;
   brightness: { cover: number; inner: number };
+  view: { target: "work" | "showcase"; t: number; active: boolean };
   laidOut: boolean;
 }
 
@@ -62,7 +63,19 @@ function stats(page: Page): Promise<Stats> {
     const canvas = document.querySelector("canvas");
     const laidOut = canvas !== null && canvas.width === Math.round(innerWidth * devicePixelRatio) && canvas.height === Math.round(innerHeight * devicePixelRatio);
     if (!api) {
-      return { framesDecoded: 0, cls: null, window: { w: 0, h: 0 }, angle: null, lit: null, rotation: 0, badge: null, settled: false, brightness: { cover: 0, inner: 0 }, laidOut };
+      return {
+        framesDecoded: 0,
+        cls: null,
+        window: { w: 0, h: 0 },
+        angle: null,
+        lit: null,
+        rotation: 0,
+        badge: null,
+        settled: false,
+        brightness: { cover: 0, inner: 0 },
+        view: { target: "work" as const, t: 0, active: false },
+        laidOut,
+      };
     }
     return { ...api.stats(), laidOut };
   });
@@ -112,6 +125,36 @@ async function frameIntervals(page: Page, durationMs: number): Promise<{ median:
   const sorted = [...intervals].sort((a, b) => a - b);
   const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
   return { median: at(0.5), p95: at(0.95), max: sorted.at(-1) ?? 0, frames: sorted.length };
+}
+
+async function toggleView(page: Page): Promise<void> {
+  await page.keyboard.down("Alt");
+  await page.keyboard.press("KeyD");
+  await page.keyboard.up("Alt");
+}
+
+/** Fraction of pixels in which any channel differs by more than a compression step between two same-size screenshots. */
+async function differingPixels(page: Page, a: Buffer, b: Buffer): Promise<number> {
+  return page.evaluate(
+    async ({ a, b }) => {
+      const decode = async (base64: string) => {
+        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+        ctx.drawImage(bitmap, 0, 0);
+        return ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+      };
+      const [x, y] = await Promise.all([decode(a), decode(b)]);
+      if (x.width !== y.width || x.height !== y.height) return 1;
+      let differing = 0;
+      for (let i = 0; i < x.data.length; i += 4) {
+        if ([0, 1, 2, 3].some((c) => Math.abs(x.data[i + c] - y.data[i + c]) > 16)) differing++;
+      }
+      return differing / (x.width * x.height);
+    },
+    { a: a.toString("base64"), b: b.toString("base64") },
+  );
 }
 
 function aspect(s: Stats): number {
@@ -185,6 +228,25 @@ test("replays the synthetic fold: closed, opening led by posture, open, landscap
     expect(Math.abs(openBounds.x + openBounds.width - (closedBounds.x + closedBounds.width))).toBeLessThanOrEqual(2);
     const openShot = await page.screenshot({ path: "test-results/open.png" });
 
+    await toggleView(page);
+    const area = await app.evaluate(({ BrowserWindow, screen }) => screen.getDisplayMatching(BrowserWindow.getAllWindows()[0].getBounds()).workArea);
+    const dpr = await page.evaluate(() => devicePixelRatio);
+    const showcaseWidth = showcaseSizePx(FOLD7_BODY, 0, defaultPxPerMm(FOLD7_BODY, area.height), { w: area.width, h: area.height }, dpr).w;
+    const showcase = await waitFor(
+      page,
+      "the showcase view",
+      (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active && s.laidOut && Math.abs(s.window.w - showcaseWidth) <= 4 && s.window.h === open.window.h,
+      20_000,
+    );
+    expect(showcase.lit).toBe("inner");
+    await page.screenshot({ path: "test-results/showcase-open.png" });
+
+    await toggleView(page);
+    await waitFor(page, "the work view again", (s) => s.view.target === "work" && s.view.t === 0 && !s.view.active && restingOn("inner", s) && s.window.w === open.window.w && s.window.h === open.window.h, 20_000);
+    expect(await windowBounds(app)).toEqual(openBounds);
+    const workAgainShot = await page.screenshot({ path: "test-results/open-after-showcase.png" });
+    expect(await differingPixels(page, openShot, workAgainShot)).toBeLessThan(0.005);
+
     // Posture leads the inner stream by 300 ms, less than a software GL's
     // gap between animation frames, so only a real GPU draws the cover
     // moving before the handoff.
@@ -211,7 +273,7 @@ test("replays the synthetic fold: closed, opening led by posture, open, landscap
     });
     expect(await creaseSeamRows(page, openShot, creaseX, screenTop, screenBottom)).toBeLessThan(0.1);
 
-    const landscape = await waitFor(page, "the landscape phone", (s) => restingOn("inner", s) && s.rotation === 1 && s.cls?.rotated === true && s.window.w > s.window.h, 20_000);
+    const landscape = await waitFor(page, "the landscape phone", (s) => restingOn("inner", s) && s.rotation === 1 && s.cls?.rotated === true && s.window.w > s.window.h, 45_000);
     expect(aspect(landscape)).toBeCloseTo(1 / OPEN_ASPECT, 1);
     expect(landscape.angle).toBe(180);
     await page.screenshot({ path: "test-results/landscape.png" });

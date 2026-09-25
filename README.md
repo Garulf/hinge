@@ -18,7 +18,7 @@ r37.0.1) and `scrcpy-server-v4.1` into `vendor/` (gitignored). Pass `--only win`
 
 ## Status
 
-Early development, M3 (fold reaction). The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, with touch and keyboard input routed back to the device. The 3D showcase view, audio and packaged releases are later milestones.
+Early development, M4 (showcase view). The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, with touch and keyboard input routed back to the device, in a flat work view or a 3D showcase view. Audio and packaged releases are later milestones.
 
 ## Running
 
@@ -62,6 +62,25 @@ percent of the screen's height) and follows the phone as you fold it:
   shows a small "Flex" badge on the top bezel.
 - Turn the phone to landscape and the model turns with it around the
   window's centre; touches still land where you click on the video.
+
+### Showcase view
+
+Left Alt+D (or left Super+D) switches between the flat work view and a 3D
+showcase view, easing the camera and the window size over 600 ms; press it
+again mid-way to turn back from where it is.
+
+- The showcase looks at the phone from a three-quarter angle, slightly from
+  above, lit by a studio environment, with a soft shadow under it and a
+  glass reflection on the screens, and the inner screen's crease catches
+  the light. It shows the phone's real posture: tented, half open or flat.
+  The window widens for it, but never past the edge of the screen.
+- Dragging on the lit screen still touches the phone. Dragging anywhere
+  else turns the phone around; two seconds after you let go it eases back.
+- Shift+drag off the screen moves the window, since a plain drag turns the
+  phone there.
+- Pointer input on the screen is paused for the 600 ms of the switch; keys
+  still reach the phone.
+- Back in the work view the camera and window are exactly as before.
 
 ### Windows
 

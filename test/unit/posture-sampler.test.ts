@@ -1,7 +1,7 @@
 import type { Adb } from "@yume-chan/adb";
 import { ReadableStream } from "@yume-chan/stream-extra";
 import { expect, test } from "vitest";
-import { SampleAssembler, SAMPLER_SCRIPT, startSampler } from "../../src/main/posture-sampler";
+import { SampleAssembler, SAMPLER_SCRIPT, samplerScript, startSampler } from "../../src/main/posture-sampler";
 
 test("a sample is flushed on its own end marker, not held until the next tick", () => {
   const a = new SampleAssembler();
@@ -119,4 +119,29 @@ test("ended resolves once stop() kills the process and its stdout closes", async
   await new Promise((r) => setImmediate(r));
 
   expect(endedResolved).toBe(true);
+});
+
+test("extra commands run inside each sample, after the posture commands and before the end marker", () => {
+  const lines = samplerScript(["wm size"]).split("\n").map((l) => l.trim());
+  const extra = lines.findIndex((l) => l.startsWith("wm size"));
+  expect(extra).toBeGreaterThan(lines.findIndex((l) => l.startsWith("dumpsys window displays")));
+  expect(lines[extra + 1]).toMatch(/^echo "@@hinge-end/);
+});
+
+test("startSampler runs the live script unless extra commands are asked for", async () => {
+  const scripts: string[] = [];
+  const adb = {
+    subprocess: {
+      shellProtocol: {
+        spawn: async (script: string) => {
+          scripts.push(script);
+          return { stdout: new ReadableStream<Uint8Array>(), kill: () => {} };
+        },
+      },
+    },
+  } as unknown as Adb;
+  await startSampler(adb, () => {});
+  await startSampler(adb, () => {}, { extraCommands: ["wm size"] });
+  expect(scripts[0]).toBe(SAMPLER_SCRIPT);
+  expect(scripts[1]).toMatch(/wm size/);
 });

@@ -39,6 +39,9 @@ const ONE_SHOT = [
   "dumpsys sensorservice | grep -iE -A3 'hinge|fold'",
 ];
 
+/** Not needed for a posture reading, but the probe's timeline shows when the reported display size changes against the device state. */
+export const PROBE_TIMELINE_EXTRA_COMMANDS = ["wm size"];
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -126,13 +129,17 @@ async function runSampler(
   let previous: string[] | null = null;
   let latest = "(waiting for a sample)";
 
-  const { stop } = await startSampler(adb, (sample) => {
-    latest = sample.lines[0] ?? "(no reading)";
-    if (previous === null || !sameLines(previous, sample.lines)) {
-      timeline.push({ ms: Date.now() - start, lines: sample.lines });
-      previous = sample.lines;
-    }
-  });
+  const { stop } = await startSampler(
+    adb,
+    (sample) => {
+      latest = sample.lines[0] ?? "(no reading)";
+      if (previous === null || !sameLines(previous, sample.lines)) {
+        timeline.push({ ms: Date.now() - start, lines: sample.lines });
+        previous = sample.lines;
+      }
+    },
+    { extraCommands: PROBE_TIMELINE_EXTRA_COMMANDS },
+  );
 
   const endAt = Date.now() + seconds * 1000;
   while (Date.now() < endAt) {

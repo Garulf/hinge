@@ -44,8 +44,8 @@ export class Spring {
   }
 
   /** Lands exactly on target once settled, so a finished move rests on the exact pose instead of creeping toward it. */
-  snapIfSettled(): void {
-    if (!this.settled()) return;
+  snapIfSettled(epsilon?: number): void {
+    if (!this.settled(epsilon)) return;
     this.value = this.target;
     this.velocity = 0;
   }

@@ -52,6 +52,8 @@ export interface VideoPipeDeps {
   onError?: (message: string) => void;
   /** The first decoded frame at each new stream size, after start() or a size change. */
   onFirstFrame?: (w: number, h: number) => void;
+  /** Every decoded frame of the current stream size (after onFirstFrame for the first). */
+  onFrame?: () => void;
 }
 
 export class VideoPipe {
@@ -61,6 +63,7 @@ export class VideoPipe {
   readonly #createDecoder: DecoderFactory;
   readonly #onError: (message: string) => void;
   readonly #onFirstFrame: (w: number, h: number) => void;
+  readonly #onFrame: () => void;
   #awaitingFirstFrame = false;
   #awaitingConfiguration = false;
 
@@ -80,6 +83,7 @@ export class VideoPipe {
     this.#createDecoder = deps?.createDecoder ?? defaultDecoderFactory;
     this.#onError = deps?.onError ?? (() => {});
     this.#onFirstFrame = deps?.onFirstFrame ?? (() => {});
+    this.#onFrame = deps?.onFrame ?? (() => {});
     this.#frames = {
       get disposed() {
         return target.disposed;
@@ -164,12 +168,14 @@ export class VideoPipe {
   }
 
   #deliver(frame: VideoFrame): void {
-    const first = this.#awaitingFirstFrame && frameHasSize(frame, this.#lastSize);
+    const current = frameHasSize(frame, this.#lastSize);
     this.#target.setFrame(frame);
-    if (first) {
+    if (!current) return;
+    if (this.#awaitingFirstFrame) {
       this.#awaitingFirstFrame = false;
       this.#onFirstFrame(this.#lastSize.width, this.#lastSize.height);
     }
+    this.#onFrame();
   }
 
   #teardown(): void {

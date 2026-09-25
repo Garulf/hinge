@@ -67,3 +67,12 @@ test("a new drag during the hold or the spring-back cancels it and resumes from 
   const stillHeld = orbit.tick(4132, 16);
   expect(stillHeld.yaw).toBeCloseTo(afterNudge.yaw, 5);
 });
+
+test("the spring-back comes to rest exactly on the rest pose", () => {
+  const orbit = new Orbit({ yaw: -28, pitch: 12 }, LIMITS);
+  orbit.drag(100, -50);
+  orbit.release(0);
+  let pose = orbit.tick(0, 0);
+  for (let now = 16; now <= 5000; now += 16) pose = orbit.tick(now, 16);
+  expect(pose).toEqual({ yaw: -28, pitch: 12 });
+});

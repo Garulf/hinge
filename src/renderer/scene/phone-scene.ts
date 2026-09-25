@@ -2,9 +2,13 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import type { ScreenClass, ScreenKind } from "../../shared/fold7";
 import type { DirectorOutput, FoldDirector } from "../../shared/fold-director";
+import { Orbit } from "../../shared/orbit";
 import type { Rotation } from "../../shared/screen-uv";
+import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST } from "../../shared/showcase-camera";
+import { ViewTransition } from "../../shared/view-transition";
 import { StatusOverlay } from "../status-overlay";
 import type { FrameTarget } from "../texture-renderer";
+import { ContactShadow } from "./contact-shadow";
 import { FoldModel, type ScreenExtras } from "./fold-model";
 import { FrameLifecycle } from "./frame-lifecycle";
 import { ScreenMaterial } from "./screen-material";
@@ -118,14 +122,24 @@ function anchorCanvas(canvas: HTMLCanvasElement, rotation: Rotation): void {
   }
 }
 
+/** Where the view transition stands: t 0 is the work view, 1 the showcase; active while it moves between them. */
+export interface ViewState {
+  target: "work" | "showcase";
+  t: number;
+  active: boolean;
+}
+
 export interface PhoneSceneOptions {
   loadModel: () => Promise<ArrayBuffer>;
-  onTick?: (out: DirectorOutput, rotation: Rotation) => void;
+  onTick?: (out: DirectorOutput, rotation: Rotation, view: ViewState) => void;
 }
+
+const SHADOW = { size: 0.3, height: 0.08, blur: 3.5, darkness: 6, opacity: 0.35 };
 
 /**
  * The phone model in an orthographic work view at a fixed physical scale,
- * posed every animation frame by the FoldDirector. The live stream texture
+ * posed every animation frame by the FoldDirector, and a perspective
+ * showcase view that the view transition blends to. The live stream texture
  * sits on whichever screen the stream belongs to; a screen losing the stream
  * keeps a clone of its last frame until its fade-out ends.
  */
@@ -141,6 +155,11 @@ export class PhoneScene implements FrameTarget {
   readonly #renderer: THREE.WebGLRenderer;
   readonly #scene = new THREE.Scene();
   readonly #camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1);
+  readonly #showcaseCamera = new THREE.PerspectiveCamera();
+  readonly #transition = new ViewTransition();
+  readonly #orbit = new Orbit(SHOWCASE_REST, SHOWCASE_LIMITS);
+  readonly #shadow: ContactShadow;
+  readonly #poseBox = new THREE.Box3();
   readonly #pivot = new THREE.Group();
   readonly #overlayScene = new THREE.Scene();
   readonly #overlayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
@@ -149,7 +168,7 @@ export class PhoneScene implements FrameTarget {
   readonly #frames = new FrameLifecycle<ScreenKind>(() => this.#renderNow());
   readonly #routing = new ScreenRouting();
   readonly #director: FoldDirector;
-  readonly #onTick: (out: DirectorOutput, rotation: Rotation) => void;
+  readonly #onTick: (out: DirectorOutput, rotation: Rotation, view: ViewState) => void;
   readonly #cloneTextures = new Map<ScreenKind, THREE.VideoFrameTexture>();
 
   #model: FoldModel | null = null;
@@ -163,6 +182,11 @@ export class PhoneScene implements FrameTarget {
   #angle: number | null = null;
   #out: DirectorOutput | null = null;
   #lastTime: number | null = null;
+  #view: ViewState = { target: "work", t: 0, active: false };
+  #orbitPose = { ...SHOWCASE_REST };
+  #rendered = { t: 0, yaw: SHOWCASE_REST.yaw, pitch: SHOWCASE_REST.pitch };
+  #shadowPose: string | null = null;
+  #shadowSkippedLast = false;
   #frameDirty = true;
   #layoutDirty = true;
   #renderedSettled = false;
@@ -181,6 +205,8 @@ export class PhoneScene implements FrameTarget {
 
     this.#light(software);
     this.#scene.add(this.#pivot);
+    this.#shadow = new ContactShadow(this.#renderer, { ...SHADOW, resolution: software ? 256 : 512 });
+    this.#scene.add(this.#shadow.group);
     this.#camera.position.z = 0.5;
 
     this.#overlay.mesh.renderOrder = 1;
@@ -257,8 +283,36 @@ export class PhoneScene implements FrameTarget {
     this.#layoutDirty = true;
   }
 
+  /** The work view's orthographic camera. */
   camera(): THREE.OrthographicCamera {
     return this.#camera;
+  }
+
+  /** The camera the last frame was drawn with: orthographic in the work view, perspective from the first step toward the showcase. */
+  activeCamera(): THREE.Camera {
+    return this.#view.t > 0 ? this.#showcaseCamera : this.#camera;
+  }
+
+  /** The one way to change views: eases over 600 ms from wherever the blend stands, or with `instant` switches at once. */
+  setView(view: "work" | "showcase", opts?: { instant?: boolean }): void {
+    this.#transition.setTarget(view, opts);
+  }
+
+  toggleView(): void {
+    this.setView(this.#transition.target === "work" ? "showcase" : "work");
+  }
+
+  view(): ViewState {
+    return this.#view;
+  }
+
+  /** Turns the phone with a pointer drag (in CSS px) as if it were held: the camera swings the opposite way. */
+  orbitBy(dxPx: number, dyPx: number): void {
+    this.#orbit.drag(-dxPx, dyPx);
+  }
+
+  releaseOrbit(): void {
+    this.#orbit.release(performance.now());
   }
 
   /** The screen showing the stream, or null before the model or a stream and while the lit inner screen is folded away. */
@@ -283,6 +337,8 @@ export class PhoneScene implements FrameTarget {
     this.#materials = { cover: new ScreenMaterial(model.cover.extras), inner: new ScreenMaterial(model.inner.extras) };
     model.cover.mesh.material = this.#materials.cover;
     model.inner.mesh.material = this.#materials.inner;
+    for (const screen of SCREENS) this.#materials[screen].setEnvironment(this.#scene.environment);
+    this.#materials.inner.setCreaseBand(model.creaseBand());
     const videoScreen = this.#routing.videoScreen;
     if (videoScreen) this.#materials[videoScreen].setVideo(this.#live);
 
@@ -314,11 +370,15 @@ export class PhoneScene implements FrameTarget {
     for (const o of hidden) o.visible = true;
     model.setInnerVisible(true);
     this.#applyLayout();
+    this.#captureShadow();
+    this.#shadow.setStrength(1);
     await this.#renderer.compileAsync(this.#scene, this.#camera);
     await this.#renderer.compileAsync(this.#overlayScene, this.#overlayCamera);
     for (const program of this.#renderer.info.programs ?? []) program.getUniforms();
     for (const o of hidden) o.visible = false;
     this.#overlay.mesh.visible = this.#overlay.text !== null;
+    this.#shadow.setStrength(0);
+    this.#shadowPose = null;
     this.#layoutDirty = true;
   }
 
@@ -387,6 +447,10 @@ export class PhoneScene implements FrameTarget {
   #animationFrame(time: number): void {
     const dt = this.#lastTime === null ? 0 : Math.min(MAX_TICK_MS, Math.max(0, time - this.#lastTime));
     this.#lastTime = time;
+    const { t, active } = this.#transition.tick(dt);
+    this.#view = { target: this.#transition.target, t, active };
+    this.#director.setView(this.#transition.target, t);
+    this.#orbitPose = this.#orbit.tick(performance.now(), dt);
     const out = this.#director.tick(dt);
     this.#out = out;
     const rotation = this.#routing.rotation(out.rotation);
@@ -398,16 +462,23 @@ export class PhoneScene implements FrameTarget {
     for (const screen of SCREENS) {
       if (this.#cloneTextures.has(screen) && this.#brightness(out, screen) === 0) this.#releaseClone(screen);
     }
-    this.#onTick(out, rotation);
+    this.#onTick(out, rotation, this.#view);
 
     // The tick that settles still moved the pose (the last fade step, the
     // snap onto the target angle), so skipping starts only after it is drawn.
-    if (out.settled && this.#renderedSettled && !this.#frameDirty && !this.#layoutDirty) return;
+    if (out.settled && this.#renderedSettled && !this.#frameDirty && !this.#layoutDirty && !this.#cameraMoved()) return;
     if (this.#layoutDirty) this.#applyLayout();
     this.#frameDirty = false;
     this.#layoutDirty = false;
     this.#renderedSettled = out.settled;
     this.#renderNow();
+  }
+
+  #cameraMoved(): boolean {
+    const { t } = this.#view;
+    const rendered = this.#rendered;
+    if (t !== rendered.t) return true;
+    return t > 0 && (this.#orbitPose.yaw !== rendered.yaw || this.#orbitPose.pitch !== rendered.pitch);
   }
 
   #brightness(out: DirectorOutput, screen: ScreenKind): number {
@@ -428,9 +499,15 @@ export class PhoneScene implements FrameTarget {
     const videoScreen = this.#routing.videoScreen;
     if (videoScreen) materials[videoScreen].setRotation(rotation);
     if (this.#badge) {
-      this.#badge.visible = out.badge === "flex";
+      this.#badge.visible = out.badge === "flex" && this.#view.t < 1;
       this.#badge.material.rotation = (rotation * Math.PI) / 2;
+      this.#badge.material.opacity = 1 - this.#view.t;
     }
+    for (const screen of SCREENS) {
+      materials[screen].setGlass(this.#view.t);
+      materials[screen].setCrease(this.#view.t);
+    }
+    this.#shadow.setStrength(this.#view.t);
   }
 
   #applyLayout(): void {
@@ -482,10 +559,13 @@ export class PhoneScene implements FrameTarget {
       box = new THREE.Box3().setFromObject(mesh);
     }
     const projected = new THREE.Box2();
+    const camera = this.activeCamera();
     for (const x of [box.min.x, box.max.x]) {
       for (const y of [box.min.y, box.max.y]) {
-        const ndc = new THREE.Vector3(x, y, box.max.z).project(this.#camera);
-        projected.expandByPoint(new THREE.Vector2((ndc.x * w) / 2, (ndc.y * h) / 2));
+        for (const z of [box.min.z, box.max.z]) {
+          const ndc = new THREE.Vector3(x, y, z).project(camera);
+          projected.expandByPoint(new THREE.Vector2((ndc.x * w) / 2, (ndc.y * h) / 2));
+        }
       }
     }
     const size = projected.getSize(new THREE.Vector2());
@@ -494,10 +574,61 @@ export class PhoneScene implements FrameTarget {
     this.#overlay.mesh.position.set(centre.x, centre.y, 0);
   }
 
+  /**
+   * Aims the perspective camera for the blend and grounds the shadow under
+   * the current pose; the shadow map is redrawn only when the pose changed,
+   * since it moves with the model.
+   */
+  #placeShowcase(model: FoldModel): void {
+    const box = model.poseBox(this.#poseBox);
+    const centre = box.getCenter(new THREE.Vector3());
+    const { w, h } = this.#viewport;
+    const rig = blendedCamera({
+      t: this.#view.t,
+      workCentre: { x: 0, y: 0, z: 0 },
+      workHalfHeight: h / (this.#pxPerMm * 1000) / 2,
+      subjectCentre: centre,
+      subjectRadius: model.openRadius(),
+      yawDeg: this.#orbitPose.yaw,
+      pitchDeg: this.#orbitPose.pitch,
+    });
+    const camera = this.#showcaseCamera;
+    camera.fov = rig.fovDeg;
+    camera.aspect = w / h;
+    camera.near = rig.near;
+    camera.far = rig.far;
+    camera.position.set(rig.position.x, rig.position.y, rig.position.z);
+    camera.lookAt(rig.target.x, rig.target.y, rig.target.z);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
+
+    this.#shadow.place(centre.x, box.min.y, centre.z);
+    if (this.#shadowPoseKey() === this.#shadowPose) return;
+    // A software GL pays for the shadow's depth and blur passes on the CPU,
+    // so while a fold moves the pose it is redrawn on every other frame.
+    if (this.#software && !this.#shadowSkippedLast && this.#shadowPose !== null) {
+      this.#shadowSkippedLast = true;
+      return;
+    }
+    this.#shadowSkippedLast = false;
+    this.#captureShadow();
+  }
+
+  #shadowPoseKey(): string {
+    return `${this.#angle}|${this.#rotation}`;
+  }
+
+  #captureShadow(): void {
+    this.#shadow.capture(this.#scene, this.#badge ? [this.#badge] : []);
+    this.#shadowPose = this.#shadowPoseKey();
+  }
+
   #renderNow(): void {
     this.#scene.updateMatrixWorld();
+    if (this.#view.t > 0 && this.#model) this.#placeShowcase(this.#model);
+    this.#rendered = { t: this.#view.t, yaw: this.#orbitPose.yaw, pitch: this.#orbitPose.pitch };
     this.#renderer.clear();
-    this.#renderer.render(this.#scene, this.#camera);
+    this.#renderer.render(this.#scene, this.activeCamera());
     this.#frames.onRendered();
     if (this.#overlay.mesh.visible) {
       this.#placeOverlay();

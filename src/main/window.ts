@@ -4,7 +4,7 @@ import type { MessagePortMain } from "electron";
 import type { PortLike } from "./app-controller";
 import type { MainToRenderer, RendererToMain } from "../shared/wire";
 import type { Rotation } from "../shared/screen-uv";
-import { anchoredWindowBounds } from "./window-resize";
+import { WindowPlacer } from "./window-resize";
 
 export function createPhoneWindow(): { win: BrowserWindow; port: PortLike } {
   const win = new BrowserWindow({
@@ -66,7 +66,7 @@ function trackedPort(win: BrowserWindow): PortLike {
 function registerWindowIpc(win: BrowserWindow): void {
   let dragTimer: ReturnType<typeof setInterval> | null = null;
   let dragSize: { width: number; height: number } | null = null;
-  let placedRotation: Rotation | null = null;
+  const placer = new WindowPlacer();
 
   const stopDrag = () => {
     if (dragTimer !== null) {
@@ -80,14 +80,14 @@ function registerWindowIpc(win: BrowserWindow): void {
     if (event.sender !== win.webContents) return;
     const current = win.getContentBounds();
     const area = screen.getDisplayMatching(win.getBounds()).workArea;
-    win.setContentBounds(anchoredWindowBounds(current, { w: width, h: height }, rotation, placedRotation, area));
-    placedRotation = rotation;
+    win.setContentBounds(placer.place(current, { w: width, h: height }, rotation, area));
     if (dragSize) dragSize = sizeOf(win.getBounds());
   });
 
-  ipcMain.handle("hinge:work-area-height", (event) => {
-    if (event.sender !== win.webContents) return 0;
-    return screen.getDisplayMatching(win.getBounds()).workArea.height;
+  ipcMain.handle("hinge:work-area", (event) => {
+    if (event.sender !== win.webContents) return { width: 0, height: 0 };
+    const { width, height } = screen.getDisplayMatching(win.getBounds()).workArea;
+    return { width, height };
   });
 
   // setPosition() at a fractional scale factor recomputes the size from
@@ -113,6 +113,7 @@ function registerWindowIpc(win: BrowserWindow): void {
   });
 
   win.on("blur", stopDrag);
+  win.on("closed", stopDrag);
 }
 
 function sizeOf(bounds: { width: number; height: number }): { width: number; height: number } {

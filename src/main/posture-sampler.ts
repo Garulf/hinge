@@ -1,16 +1,22 @@
 import type { Adb } from "@yume-chan/adb";
 import { SplitStringStream, TextDecoderStream, type ReadableStream } from "@yume-chan/stream-extra";
 
-export const SAMPLER_SCRIPT = [
-  "i=0",
-  "while true; do",
-  '  i=$((i+1)); echo "@@hinge-tick $i"',
-  "  cmd device_state print-state 2>&1",
-  "  dumpsys window displays 2>/dev/null | grep -m1 -E '^ *mRotation='",
-  '  echo "@@hinge-end $i"',
-  "  sleep 0.25",
-  "done",
-].join("\n");
+/** The live sampler's loop; `extraCommands` run inside each sample, after the ones the posture reading needs. */
+export function samplerScript(extraCommands: readonly string[] = []): string {
+  return [
+    "i=0",
+    "while true; do",
+    '  i=$((i+1)); echo "@@hinge-tick $i"',
+    "  cmd device_state print-state 2>&1",
+    "  dumpsys window displays 2>/dev/null | grep -m1 -E '^ *mRotation='",
+    ...extraCommands.map((command) => `  ${command} 2>&1`),
+    '  echo "@@hinge-end $i"',
+    "  sleep 0.25",
+    "done",
+  ].join("\n");
+}
+
+export const SAMPLER_SCRIPT = samplerScript();
 
 export interface PostureSample {
   tick: number;
@@ -68,9 +74,11 @@ export interface SamplerHandle {
 export async function startSampler(
   adb: Adb,
   onSample: (sample: PostureSample) => void,
+  opts?: { extraCommands?: readonly string[] },
 ): Promise<SamplerHandle> {
+  const script = samplerScript(opts?.extraCommands);
   const shell = adb.subprocess.shellProtocol;
-  const spawned = shell ? await shell.spawn(SAMPLER_SCRIPT) : await adb.subprocess.noneProtocol.spawn(SAMPLER_SCRIPT);
+  const spawned = shell ? await shell.spawn(script) : await adb.subprocess.noneProtocol.spawn(script);
 
   const assembler = new SampleAssembler();
 

@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:e2e": "npm run build && xvfb-run -a playwright test",
     "fetch-vendor": "node scripts/fetch-vendor.mjs",
+    "make-icon": "node scripts/make-icon.mjs",
     "make-fixture": "node --experimental-strip-types scripts/make-synthetic-recording.mjs",
     "pack:win": "npm run build && electron-builder --win --dir",
     "pack:linux": "npm run build && electron-builder --linux --dir"
@@ -29,11 +30,14 @@
   },
   "devDependencies": {
     "@playwright/test": "1.63",
+    "@resvg/resvg-js": "2.6.2",
     "@types/node": "^22.20.4",
     "@types/three": "^0.186.0",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "extract-zip": "2.0.1",
+    "png-to-ico": "3.0.2",
     "typescript": "^7.0.2",
     "vite": "^7.3.6",
     "vitest": "^5.0.1"

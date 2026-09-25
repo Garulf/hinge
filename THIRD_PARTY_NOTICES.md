@@ -7,7 +7,9 @@ are listed here.
 
 `vendor/scrcpy-server-v4.1` (fetched by `npm run fetch-vendor`, packaged as
 `resources/vendor/scrcpy-server-v4.1`) is built from
-[scrcpy](https://github.com/Genymobile/scrcpy) v4.1, unmodified.
+[scrcpy](https://github.com/Genymobile/scrcpy) v4.1, unmodified. The full
+licence text ships alongside it in every packaged build as
+[LICENSE-scrcpy](LICENSE-scrcpy), packaged at `resources/LICENSE-scrcpy`.
 
 ```
 Copyright (C) 2018 Genymobile

@@ -112,7 +112,36 @@ test("a startClient() that hangs forever fails that attempt on the same timeout 
   expect(startCount).toBe(3);
   const last = statuses.at(-1);
   expect(last?.state).toBe("error");
-  expect(last?.state === "error" && last.message).toMatch(/scrcpy server did not start/);
+  expect(last?.state === "error" && last.message).toMatch(/scrcpy server did not start within \d+ms/);
+});
+
+test("a startClient() that resolves after its own timeout has already moved the attempt on is closed instead of leaked", async () => {
+  const resolvers: Array<(c: { close: () => Promise<void> }) => void> = [];
+  const closeCalls: number[] = [];
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () =>
+      new Promise((resolve) => {
+        resolvers.push((c) => resolve(c as never));
+      }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps, { firstPacketTimeoutMs: 5 }));
+  const { sink } = fakeSink();
+  await session.start(sink);
+
+  expect(resolvers).toHaveLength(3);
+
+  // The first attempt's startClient() resolves well after its own 5ms
+  // timeout already rejected that attempt and moved on to the next one.
+  resolvers[0]({
+    close: async () => {
+      closeCalls.push(0);
+    },
+  });
+  await new Promise((r) => setImmediate(r));
+
+  expect(closeCalls).toEqual([0]);
 });
 
 test("a videoStream that hangs forever fails that attempt on the same timeout as the first packet, instead of hanging", async () => {

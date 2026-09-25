@@ -66,9 +66,11 @@ function closeRecordStream(stream: WriteStream, writer: ReturnType<typeof create
   return async () => {
     // A stream that already failed cannot be waited on further: drain()
     // resolves immediately and end() would just wait on an already-dead
-    // stream, needlessly stretching shutdown.
+    // stream, needlessly stretching shutdown. Re-checked after drain() too,
+    // since the stream can fail while drain() is waiting on it.
     if (writer.failed) return;
     await writer.drain();
+    if (writer.failed) return;
     await new Promise<void>((resolve) => {
       stream.once("finish", () => resolve());
       stream.once("error", () => resolve());

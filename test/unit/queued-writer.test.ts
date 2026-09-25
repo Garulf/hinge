@@ -13,6 +13,8 @@ function fakeStream(returnsFalseFor: number[] = []): WritableLike & { writes: Ui
     },
     once(event, listener) {
       if (event === "drain") drainListener = listener as () => void;
+    },
+    on(event, listener) {
       if (event === "error") errorListener = listener as (e: Error) => void;
     },
     drain() {
@@ -109,6 +111,19 @@ test("a stream error marks the writer failed, drops the queue and stops acceptin
   writer.write(new Uint8Array([3]));
   stream.drain();
   expect(stream.writes).toEqual([new Uint8Array([1])]);
+});
+
+test("a second error event (e.g. one during end() after the write already failed) does not re-notify onError callbacks", () => {
+  const stream = fakeStream();
+  const writer = createQueuedWriter(stream);
+  const seen: Error[] = [];
+  writer.onError((e) => seen.push(e));
+
+  stream.error(new Error("first"));
+  stream.error(new Error("second"));
+
+  expect(seen).toEqual([new Error("first")]);
+  expect(writer.failed).toBe(true);
 });
 
 test("drain() resolves immediately after a failure instead of waiting for a drain that will never come", async () => {

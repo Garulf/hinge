@@ -94,3 +94,33 @@ test("feeds recorded posture lines through a PostureStream: a states line sets t
     { stateId: 2, posture: "half", rotation: 0 },
   ]);
 });
+
+test("resets the PostureStream on loop so a posture repeated at the seam is not deduped away", async () => {
+  const loopEvents: RecordedEvent[] = [
+    { t: 0, kind: "video-start", info: { codecId: 1, width: 10, height: 20, deviceName: null } },
+    { t: 0, kind: "posture-line", line: "@states 0=CLOSED,1=TENT" },
+    { t: 0, kind: "posture-line", line: "0 | mRotation=0" },
+    { t: 10, kind: "posture-line", line: "1 | mRotation=0" },
+    { t: 20, kind: "posture-line", line: "0 | mRotation=0" },
+  ];
+  const clock = new FakeClock();
+  const src = new ReplaySource("f.hrec", loopEvents, { clock, loop: true });
+  const postures: PostureReading[] = [];
+  const sink: MediaSink = {
+    videoStart: () => {},
+    videoPacket: () => {},
+    videoEnd: () => {},
+    status: () => {},
+    posture: (r) => postures.push(r),
+  };
+  await src.start(sink);
+  clock.advance(20);
+
+  // First pass: CLOSED, TENT, CLOSED (three distinct readings, each unlike
+  // its immediate predecessor). The loop's own t=0 events fire synchronously
+  // right after, as part of the same advance() call: without the reset, the
+  // second pass's first reading (CLOSED again) would be deduped away since
+  // it repeats where the first pass left off.
+  expect(postures).toHaveLength(4);
+  expect(postures.at(-1)).toEqual({ stateId: 0, posture: "closed", rotation: 0 });
+});

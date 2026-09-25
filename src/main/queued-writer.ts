@@ -1,7 +1,7 @@
 export interface WritableLike {
   write(chunk: Uint8Array): boolean;
   once(event: "drain", listener: () => void): void;
-  once(event: "error", listener: (e: Error) => void): void;
+  on(event: "error", listener: (e: Error) => void): void;
 }
 
 export interface QueuedWriter {
@@ -26,7 +26,11 @@ export function createQueuedWriter(stream: WritableLike): QueuedWriter {
   const errorCallbacks: Array<(e: Error) => void> = [];
   const drainWaiters: Array<() => void> = [];
 
-  stream.once("error", (e) => {
+  // A persistent listener, not once(): a stream can emit "error" more than
+  // once (e.g. once during a write and again on end()), and missing a later
+  // one would leave the writer thinking it is still healthy.
+  stream.on("error", (e) => {
+    if (failed) return;
     failed = true;
     queue.length = 0;
     for (const cb of errorCallbacks) cb(e);

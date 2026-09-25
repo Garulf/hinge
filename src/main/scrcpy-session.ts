@@ -112,7 +112,12 @@ export class ScrcpySession implements MediaSource {
       if (this.#stopped) return "stopped";
 
       const options = new AdbScrcpyOptions4_1(buildInit(this.opts.settings, attempt) as never);
-      client = await this.#withTimeout(this.#deps.startClient(this.opts.adb, options), "scrcpy server did not start");
+      const startPromise = this.#deps.startClient(this.opts.adb, options);
+      client = await this.#withTimeout(startPromise, "scrcpy server did not start within", () => {
+        // The timeout already moved on to the next attempt (or gave up); a
+        // client that shows up after that would otherwise never be closed.
+        void startPromise.then((late) => late.close().catch(() => {})).catch(() => {});
+      });
       this.#client = client;
       if (this.#stopped) {
         await client.close().catch(() => {});
@@ -169,13 +174,16 @@ export class ScrcpySession implements MediaSource {
   }
 
   /** startClient() and videoStream can hang just as easily as the first packet read if the server never comes up; give them the same bound. */
-  async #withTimeout<T>(value: Promise<T> | T, message: string): Promise<T> {
+  async #withTimeout<T>(value: Promise<T> | T, message: string, onTimeout?: () => void): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
         Promise.resolve(value),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`${message} ${this.#firstPacketTimeoutMs}ms`)), this.#firstPacketTimeoutMs);
+          timer = setTimeout(() => {
+            onTimeout?.();
+            reject(new Error(`${message} ${this.#firstPacketTimeoutMs}ms`));
+          }, this.#firstPacketTimeoutMs);
         }),
       ]);
     } finally {

@@ -57,8 +57,15 @@ export class ReplaySource implements MediaSource {
       const fire = () => {
         this.dispatch(sink, event);
         if (index === lastIndex) {
-          if (this.loop) this.schedule();
-          else sink.videoEnd();
+          if (this.loop) {
+            // A fresh pass must reproduce the exact same readings as the
+            // first one, including a reading that happens to repeat where
+            // the previous pass left off.
+            this.postureStream.reset();
+            this.schedule();
+          } else {
+            sink.videoEnd();
+          }
         }
       };
       if (event.t === 0) fire();

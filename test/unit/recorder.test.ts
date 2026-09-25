@@ -15,7 +15,8 @@ function fakeStream(): WritableLike & { chunks: Uint8Array[]; error: (e: Error) 
       chunks.push(chunk);
       return true;
     },
-    once(event, listener) {
+    once() {},
+    on(event, listener) {
       if (event === "error") errorListener = listener as (e: Error) => void;
     },
     error(e) {

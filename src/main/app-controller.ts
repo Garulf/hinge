@@ -259,8 +259,12 @@ export class DeviceSource implements MediaSource {
         this.#cancelTcpReconnect();
         this.#suppressedSerial = command.serial;
         if (this.#preferredSerial === command.serial) this.#preferredSerial = null;
-        await this.opts.wireless.disconnect(command.serial);
-        return { type: "disconnect", ok: true };
+        try {
+          await this.opts.wireless.disconnect(command.serial);
+          return { type: "disconnect", ok: true };
+        } catch (e) {
+          return { type: "disconnect", ok: false, message: String(e) };
+        }
       }
     }
   }

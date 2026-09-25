@@ -1455,6 +1455,20 @@ test("handleDeviceCommand('disconnect') disconnects a wireless device but refuse
   expect(calls.disconnect).toEqual([["10.0.0.5:5555"]]);
 });
 
+test("handleDeviceCommand('disconnect') reports failure when wireless.disconnect rejects, instead of throwing", async () => {
+  const watcher = fakeWatcher();
+  const { wireless } = fakeWireless();
+  wireless.disconnect = async () => {
+    throw new Error("device already gone");
+  };
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const result = await source.handleDeviceCommand!({ type: "disconnect", serial: "10.0.0.5:5555" });
+  expect(result).toEqual({ type: "disconnect", ok: false, message: expect.stringContaining("device already gone") });
+});
+
 test("an explicit disconnect suppresses TCP reconnect for that serial until the user picks it again", async () => {
   const watcher = fakeWatcher();
   const { wireless } = fakeWireless();

@@ -1,9 +1,24 @@
 import { encodeEvent, RECORDING_MAGIC, type RecordedEvent } from "../shared/recording";
 import type { MediaSink } from "./media-source";
+import type { QueuedWriter } from "./queued-writer";
 
-export function teeToRecording(sink: MediaSink, write: (chunk: Uint8Array) => void, now: () => number): MediaSink {
+/**
+ * Tees video and posture events into a recording via a QueuedWriter. Once the
+ * underlying stream errors, further recording writes are dropped (the writer
+ * itself refuses them) and a sticky "Recording failed" error status is posted
+ * once and then re-posted in place of every later status, so mirroring can
+ * keep running without the user believing the recording is still working.
+ */
+export function teeToRecording(sink: MediaSink, writer: QueuedWriter, now: () => number, log?: (line: string) => void): MediaSink {
   let wroteMagic = false;
   let firstNow: number | null = null;
+  let stickyMessage: string | null = null;
+
+  writer.onError((e) => {
+    stickyMessage = `Recording failed: ${String(e)}`;
+    log?.(stickyMessage);
+    sink.status({ state: "error", message: stickyMessage });
+  });
 
   function relTime(): number {
     if (firstNow === null) firstNow = now();
@@ -11,11 +26,12 @@ export function teeToRecording(sink: MediaSink, write: (chunk: Uint8Array) => vo
   }
 
   function record(build: (t: number) => RecordedEvent): void {
+    if (writer.failed) return;
     if (!wroteMagic) {
       wroteMagic = true;
-      write(RECORDING_MAGIC);
+      writer.write(RECORDING_MAGIC);
     }
-    write(encodeEvent(build(relTime())));
+    writer.write(encodeEvent(build(relTime())));
   }
 
   return {
@@ -31,6 +47,10 @@ export function teeToRecording(sink: MediaSink, write: (chunk: Uint8Array) => vo
       sink.videoEnd();
     },
     status(status) {
+      if (stickyMessage) {
+        sink.status({ state: "error", message: stickyMessage });
+        return;
+      }
       sink.status(status);
     },
     postureLine(line) {

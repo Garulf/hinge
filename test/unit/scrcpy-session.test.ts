@@ -95,6 +95,51 @@ test("a server that never emits a first packet fails that attempt on a timeout i
   expect(last?.state === "error" && last.message).toMatch(/no video packet within/);
 });
 
+test("a startClient() that hangs forever fails that attempt on the same timeout as the first packet, instead of hanging", async () => {
+  let startCount = 0;
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => {
+      startCount++;
+      return new Promise(() => {}) as never; // never resolves
+    },
+  };
+  const session = new ScrcpySession(baseOpts(deps, { firstPacketTimeoutMs: 5 }));
+  const { sink, statuses } = fakeSink();
+  await session.start(sink);
+
+  expect(startCount).toBe(3);
+  const last = statuses.at(-1);
+  expect(last?.state).toBe("error");
+  expect(last?.state === "error" && last.message).toMatch(/scrcpy server did not start/);
+});
+
+test("a videoStream that hangs forever fails that attempt on the same timeout as the first packet, instead of hanging", async () => {
+  let startCount = 0;
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => {
+      startCount++;
+      return {
+        videoStream: new Promise(() => {}), // never resolves
+        output: new ReadableStream<string>({ start: (c) => c.close() }),
+        controller: {},
+        close: async () => {},
+      } as never;
+    },
+  };
+  const session = new ScrcpySession(baseOpts(deps, { firstPacketTimeoutMs: 5 }));
+  const { sink, statuses } = fakeSink();
+  await session.start(sink);
+
+  expect(startCount).toBe(3);
+  const last = statuses.at(-1);
+  expect(last?.state).toBe("error");
+  expect(last?.state === "error" && last.message).toMatch(/no video stream within/);
+});
+
 test("a session that streams successfully posts one streaming status and the first packet", async () => {
   let controller!: ReadableStreamDefaultController<{ type: "data"; data: Uint8Array }>;
   const stream = new ReadableStream<{ type: "data"; data: Uint8Array }>({

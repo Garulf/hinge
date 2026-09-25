@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { parseArgs } from "../../src/main/cli";
+import { parseArgs, reportStartupError } from "../../src/main/cli";
 
 test("defaults to run mode", () => expect(parseArgs([])).toEqual({ mode: "run", serial: null, replay: null, record: null }));
 test("replay and serial", () => expect(parseArgs(["--replay", "a.hrec", "--serial", "X"])).toEqual({ mode: "run", serial: "X", replay: "a.hrec", record: null }));
@@ -9,3 +9,24 @@ test("probe with seconds and out", () => expect(parseArgs(["--probe", "--seconds
 test("ignores electron and chromium switches", () => expect(parseArgs(["--no-sandbox", "--enable-logging", "."]).mode).toBe("run"));
 test("rejects a missing --seconds value", () => expect(() => parseArgs(["--probe", "--seconds"])).toThrow(/--seconds/));
 test("rejects a non-numeric --seconds value", () => expect(() => parseArgs(["--probe", "--seconds", "soon"])).toThrow(/--seconds/));
+
+test("M6: a packaged win32 build routes a startup error to a dialog", () => {
+  expect(reportStartupError(new Error("bad --seconds"), { packaged: true, platform: "win32" })).toEqual({
+    channel: "dialog",
+    message: "Error: bad --seconds",
+  });
+});
+
+test("M6: an unpackaged (dev) run uses the console even on win32", () => {
+  expect(reportStartupError(new Error("bad --seconds"), { packaged: false, platform: "win32" })).toEqual({
+    channel: "console",
+    message: "Error: bad --seconds",
+  });
+});
+
+test("M6: a packaged non-Windows build uses the console", () => {
+  expect(reportStartupError(new Error("bad --seconds"), { packaged: true, platform: "linux" })).toEqual({
+    channel: "console",
+    message: "Error: bad --seconds",
+  });
+});

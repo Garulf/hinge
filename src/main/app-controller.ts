@@ -273,20 +273,26 @@ export class DeviceSource implements MediaSource {
       }
       const session = this.opts.createSession(device, adb);
       this.#session = session;
-      session.ended?.then(() => this.#onSessionEnded(device.serial));
+      session.ended?.then(() => this.#onSessionEnded(session));
       await session.start(observedSink);
     } catch (e) {
-      if (this.#sessionSerial === device.serial) {
-        this.#session = null;
-        this.#sessionSerial = null;
-      }
       await this.#stopPostureSampler();
-      observedSink.status({ state: "error", message: String(e) });
+      if (this.#stopped || this.#sessionSerial !== device.serial) return;
+      this.#session = null;
+      this.#sessionSerial = null;
+      this.opts.log?.(`session start failed: ${String(e)}`);
+      this.#lastSessionError = String(e);
+      this.#beginSessionRetry();
     }
   }
 
-  #onSessionEnded(serial: string): void {
-    if (this.#stopped || this.#sessionSerial !== serial) return;
+  /**
+   * Matched against the session object, not the device serial: a session
+   * that was already superseded by a newer one on the identical serial (a
+   * reconnect) must not have its own late "ended" detach the newer session.
+   */
+  #onSessionEnded(session: MediaSource): void {
+    if (this.#stopped || this.#session !== session) return;
     const streamed = this.#sessionEverStreamed;
     this.#session = null;
     this.#sessionSerial = null;

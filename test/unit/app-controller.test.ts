@@ -826,6 +826,88 @@ test("stop() stops a running posture sampler", async () => {
   expect(stops).toBe(1);
 });
 
+test("a stopped session's late ended cannot detach a newer session started on the same serial", async () => {
+  const watcher = fakeWatcher();
+  const sessions: FakeSession[] = [];
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink, statuses } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(sessions).toHaveLength(1);
+  const stale = sessions[0];
+
+  watcher.emit([]);
+  await flush();
+  expect(stale.stopped).toBe(true);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(sessions).toHaveLength(2);
+  const current = sessions[1];
+
+  // The stale session's ended promise resolves late, after it was already
+  // superseded by `current` on the identical serial.
+  stale.end();
+  await flush();
+
+  expect(sessions).toHaveLength(2);
+  expect(current.stopped).toBe(false);
+  expect(delays).toEqual([]);
+  expect(statuses.filter((s) => s.state === "error")).toEqual([]);
+});
+
+test("host.open failures are logged and get the same backoff retry as an exhausted session-start ladder", async () => {
+  const watcher = fakeWatcher();
+  const delays: number[] = [];
+  const logs: string[] = [];
+  let openCalls = 0;
+  watcher.host.open = async () => {
+    openCalls++;
+    throw new Error("device offline");
+  };
+  // A delay that never resolves on its own (only on abort) keeps the retry
+  // from automatically firing again and re-triggering the always-failing
+  // open() forever; the test only needs to observe the first retry.
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    delay: (ms, signal) => {
+      delays.push(ms);
+      return new Promise((resolve) => {
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    },
+    log: (l) => logs.push(l),
+  });
+  const { sink, statuses } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  expect(openCalls).toBe(1);
+  expect(logs.some((l) => l.includes("device offline"))).toBe(true);
+  expect(delays).toEqual([1000]);
+  expect(statuses).toContainEqual({ state: "error", message: "Error: device offline (retrying in 1s)" });
+});
+
 test("stop while host.watch() itself is in flight disposes the subscription it just installed", async () => {
   const watcher = fakeWatcher();
   let resolveWatch!: (dispose: () => Promise<void>) => void;

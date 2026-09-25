@@ -1,9 +1,9 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, Menu } from "electron";
+import { app, BrowserWindow, dialog, Menu } from "electron";
 import { AdbHost } from "./adb-host";
-import { bindSource, DeviceSource } from "./app-controller";
-import { parseArgs } from "./cli";
+import { bindSource, DeviceSource, type SessionFactory } from "./app-controller";
+import { parseArgs, reportStartupError } from "./cli";
 import { createLogger, type Logger } from "./logger";
 import type { MediaSink, MediaSource } from "./media-source";
 import { resolveOutputPath } from "./output-path";
@@ -18,12 +18,18 @@ import { DEFAULT_STREAM_SETTINGS } from "./scrcpy-init";
 import { vendorPaths } from "./vendor-paths";
 import { createPhoneWindow } from "./window";
 
+function reportAndExit(e: unknown): never {
+  const report = reportStartupError(e, { packaged: app.isPackaged, platform: process.platform });
+  if (report.channel === "dialog") dialog.showErrorBox("hinge", report.message);
+  else console.error(report.message);
+  process.exit(1);
+}
+
 let mode: ReturnType<typeof parseArgs>;
 try {
   mode = parseArgs(process.argv);
 } catch (e) {
-  console.error(String(e));
-  process.exit(1);
+  reportAndExit(e);
 }
 
 function errorSource(message: string): MediaSource {
@@ -56,17 +62,19 @@ function openRecordStream(path: string): Promise<{ stream: WriteStream } | { err
   });
 }
 
-function closeRecordStream(stream: WriteStream | null): () => Promise<void> {
-  return () =>
-    new Promise((resolve) => {
-      if (!stream) {
-        resolve();
-        return;
-      }
+function closeRecordStream(stream: WriteStream, writer: ReturnType<typeof createQueuedWriter>): () => Promise<void> {
+  return async () => {
+    // A stream that already failed cannot be waited on further: drain()
+    // resolves immediately and end() would just wait on an already-dead
+    // stream, needlessly stretching shutdown.
+    if (writer.failed) return;
+    await writer.drain();
+    await new Promise<void>((resolve) => {
       stream.once("finish", () => resolve());
       stream.once("error", () => resolve());
       stream.end();
     });
+  };
 }
 
 async function buildSource(opts: { serial: string | null; replay: string | null; record: string | null }, log: Logger["log"]): Promise<BuiltSource> {
@@ -81,44 +89,42 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
   const host = new AdbHost({ adbPath: paths.adb });
   await host.ensureServer();
 
-  let recordStream: WriteStream | null = null;
-  let recordSink: ((sink: MediaSink) => MediaSink) | undefined;
+  const createSession: SessionFactory = (device, adb) =>
+    new ScrcpySession({
+      adb,
+      serial: device.serial,
+      model: device.model,
+      serverPath: paths.scrcpyServer,
+      settings: DEFAULT_STREAM_SETTINGS,
+      log,
+    });
 
-  if (opts.record) {
-    const path = resolveOutputPath(opts.record, app.getPath("desktop"));
-    const opened = await openRecordStream(path);
-    if ("error" in opened) {
-      const message = `Could not open the recording file ${path}: ${opened.error}`;
-      log(message);
-      recordSink = (sink) => {
-        sink.status({ state: "error", message });
-        return sink;
-      };
-    } else {
-      recordStream = opened.stream;
-      const write = createQueuedWriter(opened.stream);
-      recordSink = (sink) => teeToRecording(sink, write, Date.now);
-    }
+  if (!opts.record) {
+    const source = new DeviceSource({ host, preferredSerial: opts.serial, log, createSession, posture: startSampler });
+    return { source, closeRecording: async () => {} };
   }
 
+  const path = resolveOutputPath(opts.record, app.getPath("desktop"));
+  const opened = await openRecordStream(path);
+  if ("error" in opened) {
+    // Refuse to mirror at all: starting a "record" session that silently
+    // is not recording would let the user believe they captured something
+    // they did not.
+    const message = `Could not open the recording file ${path}: ${opened.error}`;
+    log(message);
+    return { source: errorSource(message), closeRecording: async () => {} };
+  }
+
+  const writer = createQueuedWriter(opened.stream);
   const source = new DeviceSource({
     host,
     preferredSerial: opts.serial,
     log,
-    createSession: (device, adb) =>
-      new ScrcpySession({
-        adb,
-        serial: device.serial,
-        model: device.model,
-        serverPath: paths.scrcpyServer,
-        settings: DEFAULT_STREAM_SETTINGS,
-        log,
-      }),
-    recordSink,
+    createSession,
+    recordSink: (sink) => teeToRecording(sink, writer, Date.now, log),
     posture: startSampler,
   });
-
-  return { source, closeRecording: closeRecordStream(recordStream) };
+  return { source, closeRecording: closeRecordStream(opened.stream, writer) };
 }
 
 /** Waits for source.stop() and the recording stream to finish, but never blocks quitting for more than a few seconds. */
@@ -144,6 +150,7 @@ async function runMode(opts: { serial: string | null; replay: string | null; rec
     source = built.source;
     closeRecording = built.closeRecording;
   } catch (e) {
+    logger.log(`buildSource failed: ${String(e)}`);
     source = errorSource(String(e));
   }
 

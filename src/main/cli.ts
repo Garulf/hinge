@@ -42,3 +42,14 @@ export function parseArgs(argv: string[]): Mode {
   if (probe) return { mode: "probe", serial, seconds, out };
   return { mode: "run", serial, replay, record };
 }
+
+/**
+ * A packaged Windows build has no attached console, so a startup error (a
+ * bad --seconds value, say) logged with console.error is invisible to the
+ * user; route it to a dialog there instead. Anywhere else (dev, Linux) a
+ * console is normally visible, so keep using it.
+ */
+export function reportStartupError(e: unknown, opts: { packaged: boolean; platform: NodeJS.Platform }): { channel: "dialog" | "console"; message: string } {
+  const channel = opts.packaged && opts.platform === "win32" ? "dialog" : "console";
+  return { channel, message: String(e) };
+}

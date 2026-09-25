@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { InputRouter } from "../../src/renderer/input/input-router";
+import type { HingeAction } from "../../src/shared/shortcuts";
 import type { ControlIntent } from "../../src/shared/wire";
 
 type Handler = (e: Record<string, unknown>) => void;
@@ -60,12 +61,14 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
 });
 
-function setup(opts?: { rotation?: 0 | 1 | 2 | 3; video?: { w: number; h: number } }) {
+function setup(opts?: { rotation?: 0 | 1 | 2 | 3; video?: { w: number; h: number }; onAction?: (action: HingeAction) => void }) {
   const canvas = fakeCanvas();
   const scene = fakeScene(opts?.rotation);
   const sent: ControlIntent[] = [];
   const video = opts?.video ?? { w: 100, h: 100 };
-  const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => video, (intent) => sent.push(intent));
+  const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => video, (intent) => sent.push(intent), {
+    onAction: opts?.onAction,
+  });
   return { canvas, scene, sent, router };
 }
 
@@ -201,6 +204,78 @@ test("scrolling maps through the same rotation", () => {
   const { canvas, sent } = setup({ rotation: 1, video: { w: 200, h: 100 } });
   canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, ...POINT });
   expect(sent[0]).toMatchObject({ type: "scroll", x: 60, y: 80 });
+});
+
+function fireKey(type: "keydown" | "keyup", code: string, over: Record<string, unknown> = {}) {
+  const preventDefault = vi.fn();
+  fakeWindow.fire(type, { type, code, key: code, repeat: false, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, preventDefault, ...over });
+  return preventDefault;
+}
+
+test("left Alt+D fires the toggle-view action and is never forwarded to the phone", () => {
+  const onAction = vi.fn();
+  const { sent } = setup({ onAction });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  const preventDefault = fireKey("keydown", "KeyD", { altKey: true });
+
+  expect(onAction).toHaveBeenCalledOnce();
+  expect(onAction).toHaveBeenCalledWith("toggle-view");
+  expect(preventDefault).toHaveBeenCalledOnce();
+  expect(sent).toEqual([]);
+});
+
+test("left Super+D fires the toggle-view action", () => {
+  const onAction = vi.fn();
+  setup({ onAction });
+  fireKey("keydown", "MetaLeft", { metaKey: true });
+  fireKey("keydown", "KeyD", { metaKey: true });
+
+  expect(onAction).toHaveBeenCalledOnce();
+  expect(onAction).toHaveBeenCalledWith("toggle-view");
+});
+
+test("right Alt+D does not toggle (AltGr on many layouts); normal key handling applies and nothing is forwarded", () => {
+  const onAction = vi.fn();
+  const { sent } = setup({ onAction });
+  fireKey("keydown", "AltRight", { altKey: true });
+  const preventDefault = fireKey("keydown", "KeyD", { altKey: true });
+
+  expect(onAction).not.toHaveBeenCalled();
+  // Falls through to normal handling: keyIntents already treats any
+  // alt-held combo as producing nothing, so this stays unclaimed too.
+  expect(preventDefault).not.toHaveBeenCalled();
+  expect(sent).toEqual([]);
+});
+
+test("MOD+D with no onAction supplied is a silent no-op default, still not forwarded", () => {
+  const { sent } = setup();
+  fireKey("keydown", "AltLeft", { altKey: true });
+  const preventDefault = fireKey("keydown", "KeyD", { altKey: true });
+
+  expect(preventDefault).toHaveBeenCalledOnce();
+  expect(sent).toEqual([]);
+});
+
+test("releasing left Alt (keyup) before D means D alone no longer toggles", () => {
+  const onAction = vi.fn();
+  setup({ onAction });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fireKey("keyup", "AltLeft", { altKey: false });
+  fireKey("keydown", "KeyD", { altKey: false });
+
+  expect(onAction).not.toHaveBeenCalled();
+});
+
+test("window blur clears held modifiers, so D alone no longer toggles afterwards", () => {
+  const onAction = vi.fn();
+  setup({ onAction });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fakeWindow.fire("blur", {});
+  // The (fake) real browser would also stop reporting altKey true once Alt
+  // is no longer physically held; simulate that alongside the tracker clear.
+  fireKey("keydown", "KeyD", { altKey: false });
+
+  expect(onAction).not.toHaveBeenCalled();
 });
 
 test("with no lit screen a left press drags the window", () => {

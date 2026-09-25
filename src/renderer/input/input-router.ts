@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
+import { ModifierTracker } from "../../shared/modifiers";
 import { insideScreenMask, screenUvToStream } from "../../shared/screen-uv";
+import { hingeShortcut, type HingeAction } from "../../shared/shortcuts";
 import { streamToDevice, TouchTracker, type StreamPoint } from "../../shared/touch";
 import type { ControlIntent } from "../../shared/wire";
 import type { PhoneScene } from "../scene/phone-scene";
@@ -9,21 +11,34 @@ function clamp(n: number, min: number, max: number): number {
   return Math.min(Math.max(n, min), max);
 }
 
+export interface InputRouterOptions {
+  onAction?: (action: HingeAction) => void;
+}
+
 export class InputRouter {
   readonly #canvas: HTMLCanvasElement;
   readonly #scene: PhoneScene;
   readonly #videoSize: () => { w: number; h: number } | null;
   readonly #send: (intent: ControlIntent) => void;
+  readonly #onAction: (action: HingeAction) => void;
   readonly #touch: TouchTracker;
   readonly #keys = new KeyTracker();
+  readonly #modifiers = new ModifierTracker();
   readonly #raycaster = new THREE.Raycaster();
   #dragging = false;
 
-  constructor(canvas: HTMLCanvasElement, scene: PhoneScene, videoSize: () => { w: number; h: number } | null, send: (intent: ControlIntent) => void) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    scene: PhoneScene,
+    videoSize: () => { w: number; h: number } | null,
+    send: (intent: ControlIntent) => void,
+    opts: InputRouterOptions = {},
+  ) {
     this.#canvas = canvas;
     this.#scene = scene;
     this.#videoSize = videoSize;
     this.#send = send;
+    this.#onAction = opts.onAction ?? (() => {});
     this.#touch = new TouchTracker(videoSize);
 
     canvas.addEventListener("pointerdown", (e) => this.#onPointerDown(e));
@@ -38,6 +53,7 @@ export class InputRouter {
     window.addEventListener("keyup", (e) => this.#onKey(e));
     window.addEventListener("blur", () => {
       this.#cancelInteraction();
+      this.#modifiers.clear();
       for (const intent of this.#keys.flush()) this.#send(intent);
     });
   }
@@ -109,6 +125,13 @@ export class InputRouter {
       metaKey: e.metaKey,
       shiftKey: e.shiftKey,
     };
+    this.#modifiers.handle(like);
+    const action = hingeShortcut(like, this.#modifiers);
+    if (action) {
+      e.preventDefault();
+      this.#onAction(action);
+      return;
+    }
     const intents = this.#keys.handle(like);
     // Only claim the key when it actually produced something to send to the
     // phone; an unclaimed key (Alt+F4, Alt+Space, ...) must still reach the

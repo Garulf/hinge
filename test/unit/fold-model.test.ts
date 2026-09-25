@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import * as THREE from "three";
 import { beforeAll, expect, test } from "vitest";
 import { FoldModel } from "../../src/renderer/scene/fold-model";
-import { ScreenMaterial } from "../../src/renderer/scene/screen-material";
+import { CREASE_STRENGTH, ScreenMaterial } from "../../src/renderer/scene/screen-material";
 import { FOLD7_BODY } from "../../src/shared/layout";
 import { streamSampleMatrix } from "../../src/shared/screen-uv";
 
@@ -135,4 +135,26 @@ test("ScreenMaterial's glass is off by default and samples the environment's cub
   material.setEnvironment(null);
   expect(material.defines.ENVMAP_TYPE_CUBE_UV).toBeUndefined();
   expect(material.uniforms.envMap.value).toBeNull();
+});
+
+test("the inner screen's crease band is the model's 6 mm bend band around the hinge line, in u", () => {
+  const band = model.creaseBand();
+  const activeWidthMm = 135.8;
+  expect(band.centreU).toBeGreaterThan(0.45);
+  expect(band.centreU).toBeLessThan(0.55);
+  expect(band.halfWidthU).toBeCloseTo(3 / activeWidthMm, 2);
+});
+
+test("ScreenMaterial's crease follows the view blend on a screen with a band, and is off on one without", () => {
+  const cover = new ScreenMaterial(model.cover.extras);
+  cover.setCrease(1);
+  expect(cover.uniforms.crease.value).toBe(0);
+
+  const inner = new ScreenMaterial(model.inner.extras);
+  inner.setCreaseBand(model.creaseBand());
+  expect(inner.uniforms.creaseCentreU.value).toBe(model.creaseBand().centreU);
+  inner.setCrease(0);
+  expect(inner.uniforms.crease.value).toBe(0);
+  inner.setCrease(0.5);
+  expect(inner.uniforms.crease.value).toBeCloseTo(0.5 * CREASE_STRENGTH, 12);
 });

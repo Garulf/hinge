@@ -22,6 +22,22 @@ void main() {
 }
 `;
 
+/**
+ * Scales the environment the screens reflect (not the body's), so a black
+ * pixel at the showcase rest angle stays near black while grazing views
+ * still catch the room.
+ */
+const SCREEN_REFLECTION = 0.24;
+
+/** Overall strength of the inner screen's crease in the showcase; its parts are tuned relative to it. */
+export const CREASE_STRENGTH = 1;
+/** How far the valley tilts the normal at the band's steepest point. */
+const CREASE_TILT = 0.5;
+/** Video shift across the band per unit of along-u view direction, in band half-widths. */
+const CREASE_WARP = 0.6;
+/** Extra reflection along the band's middle, on top of the glass. */
+const CREASE_SHEEN = 5;
+
 const fragmentShader = /* glsl */ `
 #include <common>
 #include <cube_uv_reflection_fragment>
@@ -33,13 +49,20 @@ uniform vec2 pixelSize;
 uniform float cornerRadiusPx;
 uniform vec3 punchHolePx;
 uniform float glass;
+uniform float crease;
+uniform float creaseCentreU;
+uniform float creaseHalfWidthU;
 uniform sampler2D envMap;
 varying vec2 vUv;
 varying vec3 vViewNormal;
 varying vec3 vViewPosition;
 
-const float GLASS_F0 = 0.12;
+const float GLASS_F0 = 0.04;
 const float GLASS_F90 = 0.5;
+const float SCREEN_REFLECTION = ${SCREEN_REFLECTION.toFixed(4)};
+const float CREASE_TILT = ${CREASE_TILT.toFixed(4)};
+const float CREASE_WARP = ${CREASE_WARP.toFixed(4)};
+const float CREASE_SHEEN = ${CREASE_SHEEN.toFixed(4)};
 
 vec3 environmentRadiance(vec3 worldDirection) {
 #ifdef ENVMAP_TYPE_CUBE_UV
@@ -54,7 +77,18 @@ vec3 glassReflection(vec3 viewNormal, vec3 viewDirection) {
   float cosTheta = clamp(dot(viewNormal, viewDirection), 0.0, 1.0);
   float fresnel = GLASS_F0 + (GLASS_F90 - GLASS_F0) * pow(1.0 - cosTheta, 5.0);
   vec3 reflected = inverseTransformDirection(reflect(-viewDirection, viewNormal), viewMatrix);
-  return fresnel * environmentRadiance(reflected);
+  return fresnel * SCREEN_REFLECTION * environmentRadiance(reflected);
+}
+
+vec3 screenTangent(vec3 normal) {
+  vec3 position = -vViewPosition;
+  vec3 dpx = dFdx(position);
+  vec3 dpy = dFdy(position);
+  vec2 dux = dFdx(vUv);
+  vec2 duy = dFdy(vUv);
+  vec3 tangent = (dpx * duy.y - dpy * dux.y) * sign(dux.x * duy.y - duy.x * dux.y);
+  tangent -= normal * dot(normal, tangent);
+  return normalize(tangent);
 }
 
 float roundedRectDistance(vec2 p, vec2 halfSize, float radius) {
@@ -70,25 +104,39 @@ float coverage(float distance) {
 void main() {
   vec2 px = vUv * pixelSize;
   float inside = coverage(roundedRectDistance(px - 0.5 * pixelSize, 0.5 * pixelSize, cornerRadiusPx));
+  vec3 viewDirection = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition);
+  vec3 normal = normalize(vViewNormal);
+  vec2 sampleUv = vUv;
+  float band = 0.0;
+  if (crease > 0.0) {
+    vec3 tangent = screenTangent(normal);
+    float d = clamp((vUv.x - creaseCentreU) / creaseHalfWidthU, -1.0, 1.0);
+    float across = 1.0 - d * d;
+    band = across * across;
+    normal = normalize(normal - crease * CREASE_TILT * 4.0 * d * across * tangent);
+    sampleUv.x += crease * CREASE_WARP * creaseHalfWidthU * band * dot(viewDirection, tangent);
+  }
   vec3 color = vec3(0.0);
   if (hasMap) {
-    vec2 st = (sampleMatrix * vec3(vUv, 1.0)).xy;
+    vec2 st = (sampleMatrix * vec3(sampleUv, 1.0)).xy;
     color = texture2D(map, st).rgb;
   }
   color *= brightness;
   float hole = coverage(length(px - punchHolePx.xy) - punchHolePx.z);
   color = mix(color, vec3(0.0), hole);
-  if (glass > 0.0) {
-    vec3 viewDirection = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition);
-    vec3 linear = sRGBTransferEOTF(vec4(color, 1.0)).rgb + glass * glassReflection(normalize(vViewNormal), viewDirection);
+  float reflection = glass + crease * CREASE_SHEEN * band;
+  if (reflection > 0.0) {
+    vec3 linear = sRGBTransferEOTF(vec4(color, 1.0)).rgb + reflection * glassReflection(normal, viewDirection);
     color = sRGBTransferOETF(vec4(linear, 1.0)).rgb;
   }
   gl_FragColor = vec4(color, inside);
 }
 `;
 
+const CUBE_UV_DEFINE_KEYS = ["ENVMAP_TYPE_CUBE_UV", "CUBEUV_TEXEL_WIDTH", "CUBEUV_TEXEL_HEIGHT", "CUBEUV_MAX_MIP"] as const;
+
 /** three's layout constants for a PMREM (cube UV) texture of this height, as it defines them for its own materials. */
-function cubeUvDefines(imageHeight: number): Record<string, string> {
+function cubeUvDefines(imageHeight: number): Record<(typeof CUBE_UV_DEFINE_KEYS)[number], string> {
   const maxMip = Math.log2(imageHeight) - 2;
   return {
     ENVMAP_TYPE_CUBE_UV: "",
@@ -125,6 +173,9 @@ export class ScreenMaterial extends THREE.ShaderMaterial {
         cornerRadiusPx: { value: (ru * w + rv * h) / 2 },
         punchHolePx: { value: new THREE.Vector3(holeU * w, holeV * h, holeRadiusU * w) },
         glass: { value: 0 },
+        crease: { value: 0 },
+        creaseCentreU: { value: 0.5 },
+        creaseHalfWidthU: { value: 0 },
         envMap: { value: null },
       },
     });
@@ -135,10 +186,21 @@ export class ScreenMaterial extends THREE.ShaderMaterial {
     this.uniforms.glass.value = strength;
   }
 
+  /** The band a crease runs along, for the inner screen; without one the screen has no crease. */
+  setCreaseBand(band: { centreU: number; halfWidthU: number }): void {
+    this.uniforms.creaseCentreU.value = band.centreU;
+    this.uniforms.creaseHalfWidthU.value = band.halfWidthU;
+  }
+
+  /** 0 in the work view, 1 in the showcase; always 0 without a crease band. */
+  setCrease(t: number): void {
+    this.uniforms.crease.value = this.uniforms.creaseHalfWidthU.value > 0 ? CREASE_STRENGTH * t : 0;
+  }
+
   /** A PMREM environment to reflect, or null for a plain studio gradient. */
   setEnvironment(texture: THREE.Texture | null): void {
     this.uniforms.envMap.value = texture;
-    for (const key of Object.keys(cubeUvDefines(4))) delete this.defines[key];
+    for (const key of CUBE_UV_DEFINE_KEYS) delete this.defines[key];
     const image = texture?.image as { height?: number } | undefined;
     if (texture && texture.mapping === THREE.CubeUVReflectionMapping && image?.height) Object.assign(this.defines, cubeUvDefines(image.height));
     this.needsUpdate = true;

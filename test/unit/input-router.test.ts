@@ -37,11 +37,13 @@ function fakeCanvas() {
 // A real orthographic camera and a real plane mesh, exercised through the
 // genuine three.js Raycaster: raycasting is pure geometry math and needs no
 // WebGL context, so this is testable without a real PhoneScene/canvas.
-function fakeScene() {
+// The plane's UV runs u left to right and v bottom to top across the
+// canvas, standing in for the lit screen mesh's UV as the scene shows it.
+function fakeScene(rotation: 0 | 1 | 2 | 3 = 0) {
   const camera = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 1000);
   camera.position.z = 100;
   const screenMesh = new THREE.Mesh(new THREE.PlaneGeometry(100, 100));
-  return { camera: () => camera, litScreenMesh: () => screenMesh };
+  return { camera: () => camera, litScreenMesh: (): THREE.Mesh | null => screenMesh, rotation: () => rotation };
 }
 
 let fakeWindow: ReturnType<typeof fakeTarget> & { hinge: { beginDrag: ReturnType<typeof vi.fn>; endDrag: ReturnType<typeof vi.fn> } };
@@ -55,11 +57,12 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
 });
 
-function setup() {
+function setup(opts?: { rotation?: 0 | 1 | 2 | 3; video?: { w: number; h: number } }) {
   const canvas = fakeCanvas();
-  const scene = fakeScene();
+  const scene = fakeScene(opts?.rotation);
   const sent: ControlIntent[] = [];
-  const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => ({ w: 100, h: 100 }), (intent) => sent.push(intent));
+  const video = opts?.video ?? { w: 100, h: 100 };
+  const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => video, (intent) => sent.push(intent));
   return { canvas, scene, sent, router };
 }
 
@@ -172,4 +175,37 @@ test("a bezel drag started, then blurred, does not leave #dragging stuck for the
 
   const actions = sent.map((i) => i.type === "touch" && i.action);
   expect(actions).toEqual(["down", "up"]);
+});
+
+// clientX 20, clientY 30 on the 100 x 100 canvas hits the screen at u 0.2, v 0.7.
+const POINT = { clientX: 20, clientY: 30 };
+
+function touchDown(rotation: 0 | 1 | 2 | 3) {
+  const { canvas, sent } = setup({ rotation, video: { w: 200, h: 100 } });
+  canvas.fire("pointerdown", { pointerId: 9, button: 0, buttons: 1, ...POINT });
+  return sent[0];
+}
+
+test("rotation 0: the hit maps straight onto the stream, y measured down", () => {
+  expect(touchDown(0)).toMatchObject({ type: "touch", action: "down", x: 40, y: 30, videoWidth: 200, videoHeight: 100 });
+});
+
+test("rotation 1: the model is turned counter-clockwise, so stream x runs down the mesh's v and y against its u", () => {
+  expect(touchDown(1)).toMatchObject({ type: "touch", action: "down", x: 60, y: 80, videoWidth: 200, videoHeight: 100 });
+});
+
+test("scrolling maps through the same rotation", () => {
+  const { canvas, sent } = setup({ rotation: 1, video: { w: 200, h: 100 } });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, ...POINT });
+  expect(sent[0]).toMatchObject({ type: "scroll", x: 60, y: 80 });
+});
+
+test("with no lit screen a left press drags the window", () => {
+  const canvas = fakeCanvas();
+  const scene = { ...fakeScene(), litScreenMesh: () => null };
+  const sent: ControlIntent[] = [];
+  new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => ({ w: 100, h: 100 }), (intent) => sent.push(intent));
+  canvas.fire("pointerdown", { pointerId: 10, button: 0, buttons: 1, ...CENTER });
+  expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledOnce();
+  expect(sent).toEqual([]);
 });

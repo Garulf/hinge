@@ -4,14 +4,25 @@ function clamp(n: number, min: number, max: number): number {
   return Math.min(Math.max(n, min), max);
 }
 
-export function uvToDevice(u: number, v: number, videoWidth: number, videoHeight: number): { x: number; y: number } {
+/** A point on the stream image, normalised: x right and y down, 0..1. */
+export interface StreamPoint {
+  x: number;
+  y: number;
+}
+
+export function streamToDevice(x: number, y: number, videoWidth: number, videoHeight: number): { x: number; y: number } {
   return {
-    x: clamp(Math.round(u * videoWidth), 0, videoWidth - 1),
-    y: clamp(Math.round((1 - v) * videoHeight), 0, videoHeight - 1),
+    x: clamp(Math.round(x * videoWidth), 0, videoWidth - 1),
+    y: clamp(Math.round(y * videoHeight), 0, videoHeight - 1),
   };
 }
 
-export type PointerEventLike = { kind: "down" | "move" | "up" | "leave" | "blur"; button: number; buttons: number; hit: { u: number; v: number } | null };
+/** A texture UV with v up, as on an unrotated screen. */
+export function uvToDevice(u: number, v: number, videoWidth: number, videoHeight: number): { x: number; y: number } {
+  return streamToDevice(u, 1 - v, videoWidth, videoHeight);
+}
+
+export type PointerEventLike = { kind: "down" | "move" | "up" | "leave" | "blur"; button: number; buttons: number; hit: StreamPoint | null };
 
 const HOME_KEYCODE = 3;
 
@@ -74,7 +85,7 @@ export class TouchTracker {
   #start(e: PointerEventLike): ControlIntent[] {
     const size = this.#size();
     if (!size || !e.hit) return [];
-    const point = uvToDevice(e.hit.u, e.hit.v, size.w, size.h);
+    const point = streamToDevice(e.hit.x, e.hit.y, size.w, size.h);
     this.#touch = point;
     return [this.#intent("down", size, point)];
   }
@@ -83,7 +94,7 @@ export class TouchTracker {
     if (!this.#touch || !e.hit) return [];
     const size = this.#size();
     if (!size) return [];
-    this.#touch = uvToDevice(e.hit.u, e.hit.v, size.w, size.h);
+    this.#touch = streamToDevice(e.hit.x, e.hit.y, size.w, size.h);
     return [this.#intent("move", size, this.#touch)];
   }
 

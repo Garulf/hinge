@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
-import { TouchTracker, uvToDevice } from "../../shared/touch";
+import { screenUvToStream } from "../../shared/screen-uv";
+import { streamToDevice, TouchTracker, type StreamPoint } from "../../shared/touch";
 import type { ControlIntent } from "../../shared/wire";
 import type { PhoneScene } from "../scene/phone-scene";
 
@@ -84,7 +85,7 @@ export class InputRouter {
     const hit = this.#hitOf(e);
     const size = this.#videoSize();
     if (!hit || !size) return;
-    const point = uvToDevice(hit.u, hit.v, size.w, size.h);
+    const point = streamToDevice(hit.x, hit.y, size.w, size.h);
     this.#send({
       type: "scroll",
       x: point.x,
@@ -116,18 +117,23 @@ export class InputRouter {
     for (const intent of intents) this.#send(intent);
   }
 
-  #dispatch(e: { kind: "down" | "move" | "up" | "leave" | "blur"; button: number; buttons: number; hit: { u: number; v: number } | null }): void {
+  #dispatch(e: { kind: "down" | "move" | "up" | "leave" | "blur"; button: number; buttons: number; hit: StreamPoint | null }): void {
     for (const intent of this.#touch.handle(e)) this.#send(intent);
   }
 
-  #hitOf(e: PointerEvent | WheelEvent): { u: number; v: number } | null {
+  /**
+   * Only the lit screen takes touches: a press on the dark screen, the body
+   * or around the phone is a bezel press. three raycasts the skinned inner
+   * screen in its current (bent) pose.
+   */
+  #hitOf(e: PointerEvent | WheelEvent): StreamPoint | null {
+    const screen = this.#scene.litScreenMesh();
+    if (!screen) return null;
     const rect = this.#canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
     this.#raycaster.setFromCamera(ndc, this.#scene.camera());
-    const screen = this.#scene.litScreenMesh();
-    if (!screen) return null;
     const [hit] = this.#raycaster.intersectObject(screen);
     if (!hit?.uv) return null;
-    return { u: hit.uv.x, v: hit.uv.y };
+    return screenUvToStream(hit.uv.x, hit.uv.y, this.#scene.rotation());
   }
 }

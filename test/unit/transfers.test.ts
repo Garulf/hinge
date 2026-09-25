@@ -36,6 +36,7 @@ interface FakeDeps {
   installs: Uint8Array[];
   pushes: { path: string; data: Uint8Array }[];
   scans: string[];
+  removes: string[];
 }
 
 function fakeDeps(): FakeDeps {
@@ -43,6 +44,7 @@ function fakeDeps(): FakeDeps {
   const installs: Uint8Array[] = [];
   const pushes: { path: string; data: Uint8Array }[] = [];
   const scans: string[] = [];
+  const removes: string[] = [];
   const deps: TransferDeps = {
     openFile: async (path) => {
       const f = files[path];
@@ -58,8 +60,11 @@ function fakeDeps(): FakeDeps {
     scanFile: async (path) => {
       scans.push(path);
     },
+    removeFile: async (path) => {
+      removes.push(path);
+    },
   };
-  return { deps, files, installs, pushes, scans };
+  return { deps, files, installs, pushes, scans, removes };
 }
 
 function flush(): Promise<void> {
@@ -140,6 +145,7 @@ test("multiple files run one at a time, in order, not concurrently", async () =>
       finished.push(path);
     },
     scanFile: async () => {},
+    removeFile: async () => {},
   };
   const queue = createTransferQueue(deps);
   queue.enqueue(["/tmp/a.txt", "/tmp/b.txt"]);
@@ -171,6 +177,7 @@ test("cancelAll mid-transfer marks the running item cancelled, not done, and dro
       await readAll(stream); // blocks until the stream ends or errors
     },
     scanFile: async () => {},
+    removeFile: async () => {},
   };
   const queue = createTransferQueue(deps);
   const progress: TransferProgress[] = [];
@@ -188,6 +195,68 @@ test("cancelAll mid-transfer marks the running item cancelled, not done, and dro
   expect(byName("slow.bin")).toContain("cancelled");
   expect(byName("slow.bin")).not.toContain("done");
   expect(byName("never-started.txt")).toEqual(["queued", "cancelled"]);
+});
+
+test("cancelAll() itself (not the source ending) stops a real in-flight write: the stream Tango is reading errors out, and a partially-written push is best-effort removed", async () => {
+  const neverEndingStream = new ReadableStream<Uint8Array>({
+    start: () => {
+      // never enqueues, never closes: the only way pushFile's read ever settles is via our own cancellation
+    },
+  });
+  const removes: string[] = [];
+  const deps: TransferDeps = {
+    openFile: async () => ({ size: 1000, stream: neverEndingStream }),
+    installApk: async () => {},
+    pushFile: async (_path, stream) => {
+      await readAll(stream);
+    },
+    scanFile: async () => {},
+    removeFile: async (path) => {
+      removes.push(path);
+    },
+  };
+  const queue = createTransferQueue(deps);
+  const progress: TransferProgress[] = [];
+  queue.onProgress((p) => progress.push(p));
+
+  queue.enqueue(["/tmp/huge.bin"]);
+  await flush();
+  expect(progress.map((p) => p.state)).toEqual(["queued", "running"]);
+
+  queue.cancelAll();
+  await flush();
+  await flush();
+
+  expect(progress.map((p) => p.state)).toEqual(["queued", "running", "cancelled"]);
+  expect(removes).toEqual(["/sdcard/Download/huge.bin"]);
+});
+
+test("cancelling an install (not a push) does not attempt to remove a device file, since installApk never wrote one", async () => {
+  const neverEndingStream = new ReadableStream<Uint8Array>({ start: () => {} });
+  const removes: string[] = [];
+  const deps: TransferDeps = {
+    openFile: async () => ({ size: 1000, stream: neverEndingStream }),
+    installApk: async (stream) => {
+      await readAll(stream);
+    },
+    pushFile: async () => {},
+    scanFile: async () => {},
+    removeFile: async (path) => {
+      removes.push(path);
+    },
+  };
+  const queue = createTransferQueue(deps);
+  const progress: TransferProgress[] = [];
+  queue.onProgress((p) => progress.push(p));
+
+  queue.enqueue(["/tmp/app.apk"]);
+  await flush();
+  queue.cancelAll();
+  await flush();
+  await flush();
+
+  expect(progress.map((p) => p.state)).toEqual(["queued", "running", "cancelled"]);
+  expect(removes).toEqual([]);
 });
 
 test("an enqueue() after cancelAll() is ignored: a switched-away queue never starts new work", async () => {

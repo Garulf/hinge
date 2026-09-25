@@ -480,3 +480,96 @@ test("stop() cancels an in-flight transfer instead of letting it finish and be a
   expect(transfers.map((p) => p.state)).toEqual(["queued", "running", "running", "cancelled"]);
   expect(transfers.some((p) => p.state === "done")).toBe(false);
 });
+
+test("with no audioStart consumer on the sink, the audio stream is still opened and cancelled rather than left unread", async () => {
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  let cancelled = false;
+  const audioStream = {
+    getReader: () => {
+      throw new Error("must not be read when there is no consumer");
+    },
+    cancel: async () => {
+      cancelled = true;
+    },
+  };
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () =>
+      oneShotClient(() => videoStream, {
+        audioStream: Promise.resolve({ type: "success", codec: { webCodecId: "opus" }, stream: audioStream }),
+      }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps));
+  // A sink with no audioStart at all, unlike fakeSink(): exactly the shape
+  // a minimal consumer (or a stale tee) might have.
+  const sink: MediaSink = { videoStart: () => {}, videoPacket: () => {}, videoEnd: () => {}, status: () => {} };
+  await session.start(sink);
+  await flush();
+
+  expect(cancelled).toBe(true);
+
+  await session.stop();
+});
+
+test("a name with spaces and non-ASCII characters reaches the real adb.sync.write bridge unchanged, not just the abstracted TransferDeps", async () => {
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(() => videoStream) as never,
+  };
+  const writes: { path: string; bytes: Uint8Array }[] = [];
+  const fakeAdb = {
+    subprocess: { shellProtocol: undefined },
+    sync: {
+      write: async ({ path, readable }: { path: string; readable: ReadableStream<Uint8Array> }) => {
+        const reader = readable.getReader();
+        const chunks: Uint8Array[] = [];
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+        }
+        const total = chunks.reduce((n, c) => n + c.byteLength, 0);
+        const bytes = new Uint8Array(total);
+        let offset = 0;
+        for (const c of chunks) {
+          bytes.set(c, offset);
+          offset += c.byteLength;
+        }
+        writes.push({ path, bytes });
+      },
+    },
+  };
+  const name = "my résumé (final) 简历.pdf";
+  const content = new TextEncoder().encode("pdf-bytes");
+  const session = new ScrcpySession({
+    adb: fakeAdb as never,
+    serial: "S1",
+    model: "Pixel",
+    serverPath: "/vendor/scrcpy-server-v4.1",
+    settings: DEFAULT_STREAM_SETTINGS,
+    deps,
+    transferDeps: {
+      openFile: async () => ({ size: content.byteLength, stream: new ReadableStream({ start: (c) => { c.enqueue(content); c.close(); } }) }),
+      scanFile: async () => {},
+    },
+  });
+  const { sink } = fakeSink();
+  await session.start(sink);
+
+  session.transfer([`/home/user/${name}`]);
+  await flush();
+  await flush();
+
+  expect(writes).toHaveLength(1);
+  expect(writes[0].path).toBe(`/sdcard/Download/${name}`);
+  expect(new TextDecoder().decode(writes[0].bytes)).toBe("pdf-bytes");
+
+  await session.stop();
+});

@@ -121,6 +121,11 @@ export class ScrcpySession implements MediaSource {
         if (!controller) throw new Error("no control connection to scan the pushed file");
         await controller.scanFile(path);
       },
+      removeFile: async (path) => {
+        const shell = opts.adb.subprocess.shellProtocol;
+        if (!shell) return;
+        await shell.spawn(["rm", "-f", path]).wait();
+      },
     };
     this.#transfers = createTransferQueue({ ...defaultTransferDeps, ...opts.transferDeps }, opts.log);
     this.#transfers.onProgress((progress) => this.#sink?.transferProgress?.(progress));
@@ -192,7 +197,10 @@ export class ScrcpySession implements MediaSource {
    * there is no separate device message to tell them apart.
    */
   async #startAudio(client: Client, sink: MediaSink): Promise<void> {
-    if (!sink.audioStart) return;
+    // client.audioStream must always be awaited, even with nothing to
+    // forward audio to: scrcpy-server is already streaming it once
+    // audio:true was passed, and never reading the socket would leave it
+    // sitting unread on the adb server relay for the life of the session.
     let metadata: Awaited<Client["audioStream"]>;
     try {
       metadata = await client.audioStream;
@@ -205,6 +213,11 @@ export class ScrcpySession implements MediaSource {
     if (this.#stopped) return;
     if (!metadata || metadata.type !== "success") {
       sink.audioEnd?.("unsupported");
+      return;
+    }
+
+    if (!sink.audioStart) {
+      await metadata.stream.cancel().catch(() => {});
       return;
     }
 

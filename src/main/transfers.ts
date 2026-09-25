@@ -19,14 +19,16 @@ export async function defaultOpenFile(localPath: string): Promise<LocalFile> {
 /**
  * The real Tango/Node calls, isolated so a fake adb and fake filesystem can
  * drive the queue, ordering and cancellation logic in tests without a
- * device. installApk always replaces an existing install (the M5 plan's
- * fixed policy, not a per-transfer option).
+ * device. installApk always replaces an existing install (a fixed policy,
+ * not a per-transfer option).
  */
 export interface TransferDeps {
   openFile(localPath: string): Promise<LocalFile>;
   installApk(stream: ReadableStream<Uint8Array>): Promise<void>;
   pushFile(devicePath: string, stream: ReadableStream<Uint8Array>): Promise<void>;
   scanFile(devicePath: string): Promise<void>;
+  /** Best-effort cleanup of a partially-written push left behind by a cancellation; failures are swallowed by the caller. */
+  removeFile(devicePath: string): Promise<void>;
 }
 
 export interface TransferQueue {
@@ -38,6 +40,8 @@ export interface TransferQueue {
 }
 
 const DOWNLOAD_DIR = "/sdcard/Download";
+/** At most 10 "running" progress messages per second per transfer; done/error/cancelled are never throttled. */
+const PROGRESS_THROTTLE_MS = 100;
 
 function baseName(localPath: string): string {
   const parts = localPath.split(/[\\/]/);
@@ -75,6 +79,7 @@ export function createTransferQueue(deps: TransferDeps, log?: (line: string) => 
     running = true;
     const abort = new AbortController();
     currentAbort = abort;
+    const devicePath = item.kind === "push" ? `${DOWNLOAD_DIR}/${item.name}` : null;
 
     let file: LocalFile;
     try {
@@ -96,33 +101,55 @@ export function createTransferQueue(deps: TransferDeps, log?: (line: string) => 
 
     emit(item, "running", 0, file.size);
     let bytesWritten = 0;
+    let lastEmitAt = 0;
+    let transformController: TransformStreamDefaultController<Uint8Array> | undefined;
     const counted = file.stream.pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({
+        start(controller) {
+          transformController = controller;
+        },
         transform(chunk, controller) {
           bytesWritten += chunk.byteLength;
-          emit(item, "running", bytesWritten, file.size);
+          const now = Date.now();
+          if (now - lastEmitAt >= PROGRESS_THROTTLE_MS) {
+            lastEmitAt = now;
+            emit(item, "running", bytesWritten, file.size);
+          }
           controller.enqueue(chunk);
         },
       }),
     );
+    // Tango's write/install calls read `counted` internally; erroring the
+    // transform's controller on abort is what makes the in-flight
+    // adb.sync.write/pushAndInstallStream call actually stop and reject,
+    // instead of running to completion after cancelAll() merely relabels it.
+    const onAbort = () => {
+      try {
+        transformController?.error(new Error("transfer cancelled"));
+      } catch {
+        // already closed or errored
+      }
+    };
+    abort.signal.addEventListener("abort", onAbort, { once: true });
 
     try {
       if (item.kind === "install") {
         await deps.installApk(counted);
       } else {
-        const devicePath = `${DOWNLOAD_DIR}/${item.name}`;
-        await deps.pushFile(devicePath, counted);
-        await deps.scanFile(devicePath);
+        await deps.pushFile(devicePath!, counted);
+        await deps.scanFile(devicePath!);
       }
       emit(item, cancelled || abort.signal.aborted ? "cancelled" : "done", bytesWritten, file.size);
     } catch (e) {
       if (cancelled || abort.signal.aborted) {
+        if (devicePath) await deps.removeFile(devicePath).catch(() => {});
         emit(item, "cancelled", bytesWritten, file.size);
       } else {
         log?.(`transfer failed: ${item.name}: ${String(e)}`);
         emit(item, "error", bytesWritten, file.size, String(e));
       }
     } finally {
+      abort.signal.removeEventListener("abort", onAbort);
       running = false;
       currentAbort = null;
       void runNext();

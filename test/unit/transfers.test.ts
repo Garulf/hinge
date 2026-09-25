@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { createTransferQueue, type LocalFile, type TransferDeps, type TransferProgress } from "../../src/main/transfers";
 
 function textStream(text: string): ReadableStream<Uint8Array> {
@@ -284,4 +284,36 @@ test("a file that fails to open reports an error and does not block the rest of 
   expect(progress.filter((p) => p.name === "missing.txt").map((p) => p.state)).toEqual(["queued", "error"]);
   expect(pushes).toHaveLength(1);
   expect(pushes[0].path).toBe("/sdcard/Download/ok.txt");
+});
+
+test("a hung removeFile() never delays reporting cancelled past 3s", async () => {
+  // Scoped to this test only (not beforeEach/afterEach): other tests in
+  // this file rely on real setImmediate via flush().
+  vi.useFakeTimers();
+  try {
+    const neverEndingStream = new ReadableStream<Uint8Array>({ start: () => {} });
+    const deps: TransferDeps = {
+      openFile: async () => ({ size: 1000, stream: neverEndingStream }),
+      installApk: async () => {},
+      pushFile: async (_path, stream) => {
+        await readAll(stream);
+      },
+      scanFile: async () => {},
+      removeFile: () => new Promise(() => {}), // never resolves or rejects
+    };
+    const queue = createTransferQueue(deps);
+    const progress: TransferProgress[] = [];
+    queue.onProgress((p) => progress.push(p));
+
+    queue.enqueue(["/tmp/huge.bin"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(progress.map((p) => p.state)).toEqual(["queued", "running"]);
+
+    queue.cancelAll();
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(progress.map((p) => p.state)).toEqual(["queued", "running", "cancelled"]);
+  } finally {
+    vi.useRealTimers();
+  }
 });

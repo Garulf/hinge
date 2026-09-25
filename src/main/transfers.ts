@@ -42,6 +42,12 @@ export interface TransferQueue {
 const DOWNLOAD_DIR = "/sdcard/Download";
 /** At most 10 "running" progress messages per second per transfer; done/error/cancelled are never throttled. */
 const PROGRESS_THROTTLE_MS = 100;
+/** removeFile is best-effort cleanup: a hung shell call must never delay reporting "cancelled". */
+const REMOVE_FILE_TIMEOUT_MS = 3000;
+
+function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
+  return Promise.race([promise, new Promise<void>((resolve) => setTimeout(resolve, ms))]);
+}
 
 function baseName(localPath: string): string {
   const parts = localPath.split(/[\\/]/);
@@ -142,7 +148,7 @@ export function createTransferQueue(deps: TransferDeps, log?: (line: string) => 
       emit(item, cancelled || abort.signal.aborted ? "cancelled" : "done", bytesWritten, file.size);
     } catch (e) {
       if (cancelled || abort.signal.aborted) {
-        if (devicePath) await deps.removeFile(devicePath).catch(() => {});
+        if (devicePath) await withTimeout(deps.removeFile(devicePath).catch(() => {}), REMOVE_FILE_TIMEOUT_MS);
         emit(item, "cancelled", bytesWritten, file.size);
       } else {
         log?.(`transfer failed: ${item.name}: ${String(e)}`);

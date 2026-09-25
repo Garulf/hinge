@@ -135,11 +135,19 @@ test("I4 + I5: window blur ends an active drag, cancels an active touch, and flu
   expect(keyUps).toEqual([{ type: "key", action: "up", keyCode: 31, repeat: 0, metaState: 0 }]);
 });
 
-test("every key event is preventDefault()ed, even one the keymap does not forward (Ctrl+Minus zoom)", () => {
+test("I2: a key that produces no intent (Ctrl+Minus zoom) is left alone, not preventDefault()ed", () => {
   setup();
   const preventDefault = vi.fn();
   fakeWindow.fire("keydown", { type: "keydown", code: "Minus", key: "-", repeat: false, ctrlKey: true, altKey: false, metaKey: false, shiftKey: false, preventDefault });
-  expect(preventDefault).toHaveBeenCalledOnce();
+  expect(preventDefault).not.toHaveBeenCalled();
+});
+
+test("I2: Alt+F4 produces no intent and is left alone so it reaches the OS on Windows", () => {
+  const { sent } = setup();
+  const preventDefault = vi.fn();
+  fakeWindow.fire("keydown", { type: "keydown", code: "F4", key: "F4", repeat: false, ctrlKey: false, altKey: true, metaKey: false, shiftKey: false, preventDefault });
+  expect(preventDefault).not.toHaveBeenCalled();
+  expect(sent).toEqual([]);
 });
 
 test("Ctrl+R is preventDefault()ed so it cannot trigger an Electron reload", () => {

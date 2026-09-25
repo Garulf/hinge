@@ -98,10 +98,6 @@ export class InputRouter {
   }
 
   #onKey(e: KeyboardEvent): void {
-    // Every key event this window receives is meant for the phone, not Electron
-    // chrome; without this, Ctrl+R/W/-/=/Shift+I still trigger reload, close,
-    // zoom and devtools even with the default app menu removed.
-    e.preventDefault();
     const like: KeyEventLike = {
       type: e.type as "keydown" | "keyup",
       code: e.code,
@@ -112,7 +108,12 @@ export class InputRouter {
       metaKey: e.metaKey,
       shiftKey: e.shiftKey,
     };
-    for (const intent of this.#keys.handle(like)) this.#send(intent);
+    const intents = this.#keys.handle(like);
+    // Only claim the key when it actually produced something to send to the
+    // phone; an unclaimed key (Alt+F4, Alt+Space, ...) must still reach the
+    // OS, which preventDefault() unconditionally blocked before.
+    if (intents.length > 0) e.preventDefault();
+    for (const intent of intents) this.#send(intent);
   }
 
   #dispatch(e: { kind: "down" | "move" | "up" | "leave" | "blur"; button: number; buttons: number; hit: { u: number; v: number } | null }): void {

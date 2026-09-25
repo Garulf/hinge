@@ -14,7 +14,15 @@ const STATES: Record<string, (s: Stats) => boolean> = {
 };
 
 test("replays the synthetic fold recording and follows the size change", async () => {
-  const args = ["--replay", resolve("test/fixtures/synthetic-fold.hrec"), "--use-gl=angle", "--use-angle=swiftshader", "--no-sandbox"];
+  // HINGE_E2E_REAL_GPU skips the SwiftShader flags so the app renders on the
+  // host's actual GPU instead of software GL; scripts/e2e-remote.sh sets it.
+  const softwareGl = process.env.HINGE_E2E_REAL_GPU !== "1";
+  const args = [
+    "--replay",
+    resolve("test/fixtures/synthetic-fold.hrec"),
+    ...(softwareGl ? ["--use-gl=angle", "--use-angle=swiftshader"] : []),
+    "--no-sandbox",
+  ];
   // Defaults to running the unpacked main entry through the electron npm binary;
   // set HINGE_E2E_EXECUTABLE to a packaged build's executable to run against it instead.
   const executablePath = process.env.HINGE_E2E_EXECUTABLE;

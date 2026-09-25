@@ -259,13 +259,106 @@ test("reconnects device tracking after the observer errors, with a backoff", asy
   watcher.fail(new Error("observer died"));
   await flush();
 
-  expect(statuses).toContainEqual({ state: "no-device" });
+  expect(statuses).toContainEqual({
+    state: "error",
+    message: "Lost connection to the adb server, reconnecting...",
+  });
   expect(delays).toEqual([1000]);
   expect(watcher.ensureServerCalls).toBe(1);
   expect(watcher.watchCalls).toBe(2);
 
   watcher.emit([device("USB1")]);
   await flush();
+});
+
+test("backs off up to 8s across repeated reconnect failures, then recovers", async () => {
+  const watcher = fakeWatcher();
+  const delays: number[] = [];
+  let ensureServerCalls = 0;
+  watcher.host.ensureServer = async () => {
+    ensureServerCalls++;
+    if (ensureServerCalls <= 4) throw new Error(`server not up yet (${ensureServerCalls})`);
+    return "existing";
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+  expect(watcher.watchCalls).toBe(1);
+
+  watcher.fail(new Error("observer died"));
+  await flush();
+
+  expect(delays).toEqual([1000, 2000, 4000, 8000, 8000]);
+  expect(ensureServerCalls).toBe(5);
+  expect(watcher.watchCalls).toBe(2);
+});
+
+test("stop cancels a pending reconnect backoff delay and starts no further attempts", async () => {
+  const watcher = fakeWatcher();
+  let signalSeen: AbortSignal | undefined;
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    delay: (_ms, signal) =>
+      new Promise((resolve) => {
+        signalSeen = signal;
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      }),
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.fail(new Error("observer died"));
+  await flush();
+  expect(watcher.ensureServerCalls).toBe(0);
+
+  await source.stop();
+  await flush();
+
+  expect(signalSeen?.aborted).toBe(true);
+  expect(watcher.ensureServerCalls).toBe(0);
+  expect(watcher.watchCalls).toBe(1);
+});
+
+test("stop during an in-flight ensureServer/watch reconnect leaves no active watch", async () => {
+  const watcher = fakeWatcher();
+  let resolveEnsure!: () => void;
+  const ensureGate = new Promise<void>((resolve) => {
+    resolveEnsure = resolve;
+  });
+  watcher.host.ensureServer = async () => {
+    watcher.ensureServerCalls++;
+    await ensureGate;
+    return "existing";
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    delay: async () => {},
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+  expect(watcher.watchCalls).toBe(1);
+
+  watcher.fail(new Error("observer died"));
+  await flush();
+  expect(watcher.ensureServerCalls).toBe(1);
+
+  await source.stop();
+  resolveEnsure();
+  await flush();
+
+  expect(watcher.watchCalls).toBe(1);
 });
 
 test("does not start two sessions when the device list flips before the first open resolves", async () => {

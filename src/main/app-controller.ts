@@ -51,6 +51,7 @@ export class DeviceSource implements MediaSource {
   #session: MediaSource | null = null;
   #sessionSerial: string | null = null;
   #reconnecting = false;
+  #reconnectAbort: AbortController | null = null;
   #lastDevices: DeviceSummary[] = [];
   #preferredSerial: string | null;
   #stopped = false;
@@ -61,7 +62,7 @@ export class DeviceSource implements MediaSource {
       createSession: SessionFactory;
       preferredSerial?: string | null;
       log?: (line: string) => void;
-      delay?: (ms: number) => Promise<void>;
+      delay?: (ms: number, signal: AbortSignal) => Promise<void>;
     },
   ) {
     this.#preferredSerial = opts.preferredSerial ?? null;
@@ -78,6 +79,8 @@ export class DeviceSource implements MediaSource {
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#reconnectAbort?.abort();
+    this.#reconnectAbort = null;
     const session = this.#session;
     this.#session = null;
     this.#sessionSerial = null;
@@ -88,12 +91,17 @@ export class DeviceSource implements MediaSource {
 
   async #watch(): Promise<void> {
     try {
-      this.#dispose = await this.opts.host.watch(
+      const dispose = await this.opts.host.watch(
         (devices) => this.#onDevices(devices),
         () => this.#onWatchError(),
       );
+      if (this.#stopped) {
+        await dispose().catch(() => {});
+        return;
+      }
+      this.#dispose = dispose;
     } catch (e) {
-      this.#sink?.status({ state: "error", message: String(e) });
+      if (!this.#stopped) this.#sink?.status({ state: "error", message: String(e) });
     }
   }
 
@@ -104,22 +112,24 @@ export class DeviceSource implements MediaSource {
     this.#dispose = null;
     void dispose?.().catch(() => {});
     this.opts.log?.("adb device tracking failed, reconnecting");
-    // No wire status fits "reconnecting to the adb server"; "no-device" is the
-    // closest existing state and is what the renderer already shows while idle.
-    this.#sink?.status({ state: "no-device" });
-    void this.#reconnect();
+    this.#sink?.status({ state: "error", message: "Lost connection to the adb server, reconnecting..." });
+    this.#reconnectAbort = new AbortController();
+    void this.#reconnect(this.#reconnectAbort.signal);
   }
 
-  async #reconnect(): Promise<void> {
+  async #reconnect(signal: AbortSignal): Promise<void> {
     let attempt = 0;
     const delay = this.opts.delay ?? defaultDelay;
     while (!this.#stopped) {
-      await delay(RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)]);
+      await delay(RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)], signal);
       if (this.#stopped) return;
       try {
         await this.opts.host.ensureServer();
+        if (this.#stopped) return;
         await this.#watch();
+        if (this.#stopped) return;
         this.#reconnecting = false;
+        this.#reconnectAbort = null;
         return;
       } catch (e) {
         this.opts.log?.(`reconnect attempt failed: ${String(e)}`);
@@ -184,6 +194,20 @@ export class DeviceSource implements MediaSource {
   }
 }
 
-function defaultDelay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 }

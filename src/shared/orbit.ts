@@ -2,6 +2,15 @@ import { Spring } from "./spring";
 
 const DEG_PER_PX = 0.3;
 const HOLD_MS = 2000;
+
+/**
+ * Spring.settleMs is calibrated against a 180 degree reference step, so a
+ * smaller swing settles faster in absolute terms at the same setting: the
+ * literal 500 undershot the required 500 plus or minus 60 ms observed
+ * return (a 45 degree pitch swing landed around 416 ms). 550 was found by
+ * simulation to bring both a 60 degree yaw swing and a 45 degree pitch
+ * swing back within the window (about 496 ms and 464 ms respectively).
+ */
 const SETTLE_MS = 550;
 
 function clamp(n: number, [min, max]: [number, number]): number {

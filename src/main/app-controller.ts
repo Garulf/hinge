@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import type { Adb } from "@yume-chan/adb";
+import type { PostureReading } from "../shared/posture";
 import type { ControlIntent, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
 import type { MediaSink, MediaSource } from "./media-source";
@@ -20,7 +21,8 @@ function withLogHint(status: SessionStatus, hint: string): SessionStatus {
  * reloaded, e.g. after Ctrl+R or a crash) must not restart the source, since
  * it is still running from the main process's point of view; instead replay
  * the last video-start and the latest configuration packet so the new
- * renderer context can pick the stream back up without a fresh server start.
+ * renderer context can pick the stream back up without a fresh server start,
+ * followed by the last posture reading so the fold pose comes back too.
  */
 export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath?: string }): MediaSink {
   const logHint = opts?.logPath ? `(log: ${basename(opts.logPath)})` : "";
@@ -31,6 +33,7 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
 
   let lastVideoStart: VideoStreamInfo | null = null;
   let lastConfigPacket: { type: "configuration"; data: Uint8Array } | null = null;
+  let lastPosture: PostureReading | null = null;
 
   const sink: MediaSink = {
     videoStart: (info) => {
@@ -44,7 +47,10 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
     },
     videoEnd: () => post({ kind: "video-end" }),
     status: (status) => post({ kind: "status", status: withLogHint(status, logHint) }),
-    posture: (reading) => post({ kind: "posture", reading }),
+    posture: (reading) => {
+      lastPosture = reading;
+      post({ kind: "posture", reading });
+    },
   };
 
   let started = false;
@@ -53,6 +59,7 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
       if (started) {
         if (lastVideoStart) post({ kind: "video-start", info: lastVideoStart });
         if (lastConfigPacket) post({ kind: "video-packet", packet: { type: "configuration", data: lastConfigPacket.data.slice() } });
+        if (lastPosture) post({ kind: "posture", reading: lastPosture });
         return;
       }
       started = true;

@@ -20,12 +20,29 @@ const DEFAULT_SETTLE_MS = 450;
 const FADE_OUT_MS = 200;
 const FADE_IN_MS = 150;
 const INNER_VISIBLE_ANGLE = 25;
+const FRESH_CLASS_MS = 1000;
+const POSTURE_LEAD_MS = 1500;
 
 function stepBrightness(value: number, target: number, dtMs: number): number {
   if (value === target) return value;
   const durationMs = target > value ? FADE_IN_MS : FADE_OUT_MS;
   const delta = dtMs / durationMs;
   return target > value ? Math.min(target, value + delta) : Math.max(target, value - delta);
+}
+
+/**
+ * Whether the window has to fit the open body: the hinge is moving or open,
+ * or the inner screen is lit and the model is on its way to it. A model that
+ * a closing posture has settled at 0 fits the closed window even while the
+ * inner class is still the last one announced (the cover stays dark).
+ */
+export function bodyIsOpen(out: Pick<DirectorOutput, "angle" | "lit" | "settled">): boolean {
+  if (out.angle > 1) return true;
+  return out.lit === "inner" && !(out.settled && out.angle === 0);
+}
+
+function classTarget(cls: ScreenClass): number {
+  return cls.screen === "inner" ? 180 : 0;
 }
 
 export class FoldDirector {
@@ -46,6 +63,9 @@ export class FoldDirector {
    * only move this earlier toward where the class is expected to land next.
    */
   #workTarget = 0;
+  #nowMs = 0;
+  #classAtMs = 0;
+  #leadAtMs: number | null = null;
 
   constructor(opts?: { view?: ViewMode; settleMs?: number }) {
     this.#view = opts?.view ?? "work";
@@ -62,16 +82,27 @@ export class FoldDirector {
       // included), so only a genuine posture change may nudge the target;
       // otherwise a rotation-only reading would re-lead a target the stream
       // already had the final word on.
-      if (changed) {
-        if ((reading.posture === "half" || reading.posture === "open") && this.#workTarget === 0) {
-          this.#workTarget = 180;
-        } else if ((reading.posture === "closed" || reading.posture === "tent") && this.#workTarget === 180) {
-          this.#workTarget = 0;
-        }
-      }
+      if (changed) this.#nudge(reading.posture);
     }
     if (reading.rotation !== null) this.#lastRotation = reading.rotation;
     if (reading.rotation === 1 || reading.rotation === 3) this.#lastLandscape = reading.rotation;
+  }
+
+  /**
+   * A posture sample can lag the stream by a sampling interval or more, so
+   * one that contradicts a class announced moments ago is stale; and a lead
+   * the stream never follows (no class change) runs out, handing the target
+   * back to the last announced class.
+   */
+  #nudge(posture: Posture): void {
+    let target: number | null = null;
+    if ((posture === "half" || posture === "open") && this.#workTarget === 0) target = 180;
+    else if ((posture === "closed" || posture === "tent") && this.#workTarget === 180) target = 0;
+    if (target === null) return;
+    const cls = this.#announcedClass;
+    if (cls && this.#nowMs - this.#classAtMs < FRESH_CLASS_MS && target !== classTarget(cls)) return;
+    this.#workTarget = target;
+    this.#leadAtMs = cls ? this.#nowMs : null;
   }
 
   streamClass(cls: ScreenClass): void {
@@ -79,7 +110,9 @@ export class FoldDirector {
     const screenChanged = !this.#announcedClass || this.#announcedClass.screen !== cls.screen;
     this.#announcedClass = cls;
     this.#lit = cls.screen;
-    this.#workTarget = cls.screen === "inner" ? 180 : 0;
+    this.#workTarget = classTarget(cls);
+    this.#classAtMs = this.#nowMs;
+    this.#leadAtMs = null;
     if (screenChanged) {
       if (previousLit) this.#brightnessTarget[previousLit] = 0;
       this.#brightness[cls.screen] = 0;
@@ -101,6 +134,8 @@ export class FoldDirector {
   }
 
   tick(dtMs: number): DirectorOutput {
+    this.#nowMs += dtMs;
+    this.#expireLead();
     this.#workAngle.target = this.#workTarget;
     this.#trueAngle.target = this.#trueAngleTarget();
     this.#workAngle.step(dtMs);
@@ -125,6 +160,13 @@ export class FoldDirector {
       rotation: this.#rotation(),
       settled: this.#workAngle.settled() && this.#trueAngle.settled() && !fading,
     };
+  }
+
+  #expireLead(): void {
+    const cls = this.#announcedClass;
+    if (this.#leadAtMs === null || !cls || this.#nowMs - this.#leadAtMs < POSTURE_LEAD_MS) return;
+    this.#leadAtMs = null;
+    this.#workTarget = classTarget(cls);
   }
 
   #trueAngleTarget(): number {

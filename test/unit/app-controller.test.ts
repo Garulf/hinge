@@ -1036,3 +1036,24 @@ test("stop while host.watch() itself is in flight disposes the subscription it j
 
   expect(disposeCalls).toBe(1);
 });
+
+test("a second ready (renderer reload) also replays the last posture reading after the video", async () => {
+  const posted: MainToRenderer[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: (m) => posted.push(m), onMessage: (fn) => { handler = fn; } };
+  let sink!: MediaSink;
+  bindSource({ start: async (s) => { sink = s; }, control: () => {}, stop: async () => {} }, port);
+
+  handler({ kind: "ready" });
+  await flush();
+  sink.videoStart({ codecId: 1, width: 2, height: 3, deviceName: null });
+  sink.posture?.({ stateId: 2, posture: "half", rotation: 0 });
+  sink.posture?.({ stateId: 3, posture: "open", rotation: 1 });
+
+  posted.length = 0;
+  handler({ kind: "ready" });
+  await flush();
+
+  expect(posted.map((m) => m.kind)).toEqual(["video-start", "posture"]);
+  expect(posted[1]).toEqual({ kind: "posture", reading: { stateId: 3, posture: "open", rotation: 1 } });
+});

@@ -96,7 +96,18 @@ export class VideoPipe {
     this.#openStream();
   }
 
+  /**
+   * A scrcpy 4.x session packet names the size of the frames that follow;
+   * Tango's decoder drops it, so its size is taken here, ahead of (or, with
+   * a display left dark, instead of) the decoder's own size change.
+   */
   push(packet: WireMediaPacket): void {
+    if (packet.type === "session") {
+      if (packet.width !== this.#lastSize.width || packet.height !== this.#lastSize.height) {
+        this.#sizeChanged({ width: packet.width, height: packet.height });
+      }
+      return;
+    }
     if (this.#awaitingConfiguration) {
       // A fresh decoder rejects anything before its configuration, so the
       // packets still in flight from before a reset-video are dropped.

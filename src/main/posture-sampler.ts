@@ -7,7 +7,7 @@ export const SAMPLER_SCRIPT = [
   '  i=$((i+1)); echo "@@hinge-tick $i"',
   "  cmd device_state print-state 2>&1",
   "  dumpsys window displays 2>/dev/null | grep -m1 -E '^ *mRotation='",
-  "  wm size 2>&1 | tail -n 1",
+  '  echo "@@hinge-end $i"',
   "  sleep 0.25",
   "done",
 ].join("\n");
@@ -18,17 +18,27 @@ export interface PostureSample {
 }
 
 const TICK_RE = /^@@hinge-tick (\d+)$/;
+const END_RE = /^@@hinge-end (\d+)$/;
 
+/** Collects the lines between a tick marker and the end marker with the same number, handing the sample over as soon as it ends. */
 export class SampleAssembler {
   #tick: number | null = null;
   #lines: string[] = [];
 
   push(line: string): PostureSample | null {
     const trimmed = line.trim();
-    const match = TICK_RE.exec(trimmed);
-    if (match) {
-      const sample = this.#tick === null ? null : { tick: this.#tick, lines: this.#lines };
-      this.#tick = Number(match[1]);
+    const tick = TICK_RE.exec(trimmed);
+    if (tick) {
+      this.#tick = Number(tick[1]);
+      this.#lines = [];
+      return null;
+    }
+    if (this.#tick === null) return null;
+    const end = END_RE.exec(trimmed);
+    if (end) {
+      if (Number(end[1]) !== this.#tick) return null;
+      const sample = { tick: this.#tick, lines: this.#lines };
+      this.#tick = null;
       this.#lines = [];
       return sample;
     }
@@ -57,13 +67,12 @@ export interface SamplerHandle {
 
 export async function startSampler(
   adb: Adb,
-  onSample: (sample: PostureSample, raw: string[]) => void,
+  onSample: (sample: PostureSample) => void,
 ): Promise<SamplerHandle> {
   const shell = adb.subprocess.shellProtocol;
   const spawned = shell ? await shell.spawn(SAMPLER_SCRIPT) : await adb.subprocess.noneProtocol.spawn(SAMPLER_SCRIPT);
 
   const assembler = new SampleAssembler();
-  let raw: string[] = [];
 
   const reader = stdoutOf(spawned).pipeThrough(new TextDecoderStream()).pipeThrough(new SplitStringStream("\n")).getReader();
 
@@ -77,12 +86,8 @@ export async function startSampler(
       for (;;) {
         const { done, value } = await reader.read();
         if (done) return;
-        raw.push(value);
         const sample = assembler.push(value);
-        if (sample) {
-          onSample(sample, raw.slice(0, -1));
-          raw = [value];
-        }
+        if (sample) onSample(sample);
       }
     } catch {
       // the process is killed on stop(); reading a torn-down stream then rejects, nothing to act on

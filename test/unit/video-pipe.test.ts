@@ -234,3 +234,50 @@ test("after a decode failure the pipe drops packets until a configuration arrive
   expect(written[1].map((p) => p.type)).toEqual(["configuration", "data"]);
   expect(onError).toHaveBeenCalledOnce();
 });
+
+test("a session packet reports its size before any frame and never reaches the decoder", async () => {
+  const written: ScrcpyVideoStreamPacket[] = [];
+  const factory: DecoderFactory = () => ({
+    writable: new WritableStream<ScrcpyVideoStreamPacket>({ write: (packet) => void written.push(packet) }),
+    sizeChanged: () => () => {},
+    framesDecoded: 0,
+  });
+  const onSize = vi.fn();
+  const pipe = new VideoPipe(fakeSceneTarget() as never, onSize, { createDecoder: factory });
+
+  pipe.start({ ...info, width: 1968, height: 2184 });
+  pipe.push({ type: "session", width: 1080, height: 2520, isClientResize: false });
+  await flush();
+
+  expect(onSize.mock.calls).toEqual([[1968, 2184], [1080, 2520]]);
+  expect(written).toEqual([]);
+  expect(pipe.stats()).toMatchObject({ width: 1080, height: 2520 });
+});
+
+test("a session packet repeating the current size is not a new size", () => {
+  const onSize = vi.fn();
+  const pipe = new VideoPipe(fakeSceneTarget() as never, onSize, { createDecoder: trackingDecoderFactory([]) });
+  pipe.start(info);
+  pipe.push({ type: "session", width: info.width, height: info.height, isClientResize: false });
+  expect(onSize).toHaveBeenCalledOnce();
+});
+
+test("a session packet still reports its size while the pipe waits for a configuration after a decode failure", async () => {
+  const factory: DecoderFactory = () => ({
+    writable: new WritableStream<ScrcpyVideoStreamPacket>({
+      write: () => {
+        throw new Error("decoder died");
+      },
+    }),
+    sizeChanged: () => () => {},
+    framesDecoded: 0,
+  });
+  const onSize = vi.fn();
+  const pipe = new VideoPipe(fakeSceneTarget() as never, onSize, { createDecoder: factory, onError: () => {} });
+  pipe.start(info);
+  pipe.push(dataPacket());
+  await flush();
+
+  pipe.push({ type: "session", width: 1080, height: 2520, isClientResize: false });
+  expect(onSize.mock.calls.at(-1)).toEqual([1080, 2520]);
+});

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { FoldDirector } from "../../src/shared/fold-director";
+import { bodyIsOpen, FoldDirector } from "../../src/shared/fold-director";
 import { Spring } from "../../src/shared/spring";
 import type { PostureReading } from "../../src/shared/posture";
 import type { ScreenClass } from "../../src/shared/fold7";
@@ -22,7 +22,7 @@ test("opening from closed: the tent, half, open posture sequence leads the targe
   const director = new FoldDirector();
   director.streamClass(COVER);
   director.firstFrame();
-  ticks(director, 20); // let cover brightness settle to 1
+  ticks(director, 70); // the cover has been showing for over a second
 
   director.posture(reading({ posture: "tent" })); // device state 1: no lead yet
   let out = ticks(director, 5);
@@ -118,6 +118,7 @@ test("a rotation-only reading (same posture) does not re-lead a target the strea
   const director = new FoldDirector();
   director.streamClass(COVER);
   director.firstFrame();
+  ticks(director, 70);
   director.posture(reading({ posture: "open" })); // leads to 180 before the stream catches up
   director.streamClass(COVER); // stream reclaims: target back to 0
 
@@ -131,6 +132,7 @@ test("mirror: a rotation-only reading does not re-lead a target the stream alrea
   const director = new FoldDirector();
   director.streamClass(INNER);
   director.firstFrame();
+  ticks(director, 70);
   director.posture(reading({ posture: "closed" })); // leads to 0 before the stream catches up
   director.streamClass(INNER); // stream reclaims: target back to 180
 
@@ -152,7 +154,7 @@ test("after streamEnded, the target follows the most recently announced class an
   const director = new FoldDirector();
   director.streamClass(INNER);
   director.firstFrame();
-  const beforeEnd = ticks(director, 60);
+  const beforeEnd = ticks(director, 70);
   expect(beforeEnd.angle).toBeGreaterThanOrEqual(179);
 
   director.streamEnded();
@@ -305,4 +307,92 @@ test("a settled pose reports the exact target angle and brightness", () => {
   expect(out.trueAngle).toBe(180);
   expect(out.innerBrightness).toBe(1);
   expect(out.coverBrightness).toBe(0);
+});
+
+test("a posture nudge that contradicts a stream class announced within the last second is ignored", () => {
+  const director = new FoldDirector();
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticks(director, 70);
+
+  director.streamClass(COVER); // the stream closed the model
+  ticks(director, 50); // 800 ms later a stale sample still says open
+  director.posture(reading({ posture: "open" }));
+  const out = ticks(director, 60);
+  expect(out.lit).toBe("cover");
+  expect(out.angle).toBe(0);
+});
+
+test("a posture nudge that agrees with a fresh stream class, or arrives after the second, still leads", () => {
+  const director = new FoldDirector();
+  director.streamClass(COVER);
+  director.firstFrame();
+  ticks(director, 63); // just over 1000 ms
+  director.posture(reading({ posture: "open" }));
+  const out = ticks(director, 30);
+  expect(out.angle).toBeGreaterThan(90);
+});
+
+test("a posture lead expires after 1500 ms without a class change and the target returns to the lit class", () => {
+  const director = new FoldDirector();
+  director.streamClass(COVER);
+  director.firstFrame();
+  ticks(director, 70);
+
+  director.posture(reading({ posture: "open" }));
+  const leading = ticks(director, 90); // 1440 ms: still leading
+  expect(leading.angle).toBe(180);
+
+  const expired = ticks(director, 70); // past 1500 ms, then settled back
+  expect(expired.lit).toBe("cover");
+  expect(expired.angle).toBe(0);
+});
+
+test("a class change inside the lead window ends the lead: the stream's word stands after 1500 ms", () => {
+  const director = new FoldDirector();
+  director.streamClass(COVER);
+  director.firstFrame();
+  ticks(director, 70);
+
+  director.posture(reading({ posture: "open" }));
+  ticks(director, 20);
+  director.streamClass(INNER);
+  director.firstFrame();
+  const out = ticks(director, 150);
+  expect(out.lit).toBe("inner");
+  expect(out.angle).toBe(180);
+});
+
+test("before any stream class, a posture target does not expire", () => {
+  const director = new FoldDirector();
+  director.posture(reading({ posture: "open" }));
+  const out = ticks(director, 200);
+  expect(out.angle).toBe(180);
+});
+
+test("bodyIsOpen: the window sizes open while the hinge moves or the inner screen is about to open", () => {
+  const director = new FoldDirector();
+  director.streamClass(COVER);
+  director.firstFrame();
+  expect(bodyIsOpen(ticks(director, 70))).toBe(false);
+
+  director.streamClass(INNER);
+  expect(bodyIsOpen(director.tick(0))).toBe(true);
+  director.firstFrame();
+  expect(bodyIsOpen(ticks(director, 60))).toBe(true);
+});
+
+test("bodyIsOpen: closing with the inner class still lit (the cover stays off) sizes closed once the model settles at 0", () => {
+  const director = new FoldDirector();
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticks(director, 70);
+
+  director.posture(reading({ posture: "closed" }));
+  const moving = ticks(director, 5);
+  expect(bodyIsOpen(moving)).toBe(true);
+  const closed = ticks(director, 50); // 880 ms into the lead
+  expect(closed.lit).toBe("inner");
+  expect(closed.angle).toBe(0);
+  expect(bodyIsOpen(closed)).toBe(false);
 });

@@ -3,12 +3,50 @@ import { ReadableStream } from "@yume-chan/stream-extra";
 import { expect, test } from "vitest";
 import { SampleAssembler, SAMPLER_SCRIPT, startSampler } from "../../src/main/posture-sampler";
 
-test("groups lines between tick markers into samples", () => {
+test("a sample is flushed on its own end marker, not held until the next tick", () => {
   const a = new SampleAssembler();
   expect(a.push("@@hinge-tick 1")).toBeNull();
   expect(a.push("Committed state: DeviceState{identifier=0, name='CLOSED'}")).toBeNull();
   expect(a.push("    mRotation=0 mDeferredRotationPauseCount=0")).toBeNull();
-  expect(a.push("@@hinge-tick 2")).toEqual({ tick: 1, lines: ["Committed state: DeviceState{identifier=0, name='CLOSED'}", "mRotation=0 mDeferredRotationPauseCount=0"] });
+  expect(a.push("@@hinge-end 1")).toEqual({ tick: 1, lines: ["Committed state: DeviceState{identifier=0, name='CLOSED'}", "mRotation=0 mDeferredRotationPauseCount=0"] });
+});
+
+test("lines outside a tick and its end marker, and an end marker for another tick, are ignored", () => {
+  const a = new SampleAssembler();
+  expect(a.push("stray")).toBeNull();
+  expect(a.push("@@hinge-end 7")).toBeNull();
+  expect(a.push("@@hinge-tick 8")).toBeNull();
+  expect(a.push("3")).toBeNull();
+  expect(a.push("@@hinge-end 7")).toBeNull();
+  expect(a.push("@@hinge-end 8")).toEqual({ tick: 8, lines: ["3"] });
+  expect(a.push("late")).toBeNull();
+  expect(a.push("@@hinge-tick 9")).toBeNull();
+  expect(a.push("@@hinge-end 9")).toEqual({ tick: 9, lines: [] });
+});
+
+test("the script closes every sample with an end marker after its last command", () => {
+  const lines = SAMPLER_SCRIPT.split("\n").map((l) => l.trim());
+  const end = lines.findIndex((l) => l.startsWith('echo "@@hinge-end'));
+  expect(end).toBeGreaterThan(lines.findIndex((l) => l.startsWith("dumpsys window displays")));
+  expect(lines[end + 1]).toMatch(/^sleep /);
+});
+
+test("the sampler no longer runs wm size, which no reading uses", () => {
+  expect(SAMPLER_SCRIPT).not.toMatch(/wm size/);
+});
+
+test("startSampler hands each sample over as soon as its end marker arrives", async () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start: (c) => {
+      controller = c;
+    },
+  });
+  const samples: string[][] = [];
+  await startSampler(fakeShellAdb(stream), (sample) => samples.push(sample.lines));
+  controller.enqueue(new TextEncoder().encode("@@hinge-tick 1\n3\nmRotation=1\n@@hinge-end 1\n"));
+  await new Promise((r) => setImmediate(r));
+  expect(samples).toEqual([["3", "mRotation=1"]]);
 });
 
 test("the script is one shell loop with a tick marker and a sleep", () => {

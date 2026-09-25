@@ -1,5 +1,5 @@
 import { DecodeRecovery } from "../shared/decode-recovery";
-import { FoldDirector, type DirectorOutput } from "../shared/fold-director";
+import { bodyIsOpen, FoldDirector, type DirectorOutput } from "../shared/fold-director";
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
 import { bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
@@ -65,11 +65,9 @@ function logPhase(out: DirectorOutput, rotation: Rotation): void {
   if (phases.length > MAX_PHASES) phases.shift();
 }
 
-/** The window covers the model's current pose: open once the inner screen is lit or the hinge has started to move. */
 function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
   if (pxPerMm === null) return;
-  const open = out.lit === "inner" || out.angle > 1;
-  const size = bodySizePx(FOLD7_BODY, open, rotation, pxPerMm);
+  const size = bodySizePx(FOLD7_BODY, bodyIsOpen(out), rotation, pxPerMm);
   windowSizer.update(deviceAlignedSize(size, window.devicePixelRatio), rotation, out.settled);
 }
 

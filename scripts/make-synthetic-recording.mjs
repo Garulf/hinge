@@ -18,10 +18,13 @@ const DEVICE_NAME = "synthetic-fold7";
 // stall for seconds more while it builds pipelines, so the first segment
 // runs well past both, and every segment is long enough to settle in each
 // pose at a few frames per second.
+//
+// testsrc2's six bars put a colour boundary exactly on the inner screen's
+// crease, where it reads as a seam; smptebars' seven put a bar's middle there.
 const SEGMENTS = [
-  { w: 544, h: 1264, secs: 10, label: "COVER" },
-  { w: 984, h: 1092, secs: 5, label: "INNER" },
-  { w: 1092, h: 984, secs: 4, label: "INNER LAND" },
+  { w: 544, h: 1264, secs: 14, label: "COVER", source: "testsrc2" },
+  { w: 984, h: 1092, secs: 10, label: "INNER", source: "smptebars" },
+  { w: 1092, h: 984, secs: 10, label: "INNER LAND", source: "smptebars" },
 ];
 
 const STATES_LINE = "@states 0=CLOSED,1=TENT,2=HALF_OPENED,3=OPENED,4=CONCURRENT_INNER_DEFAULT,5=CONCURRENT_OUTER_DEFAULT";
@@ -52,7 +55,7 @@ function drawtextIsAvailable() {
 }
 
 function renderSegment(seg, useDrawtext) {
-  const args = ["-v", "error", "-f", "lavfi", "-i", `testsrc2=size=${seg.w}x${seg.h}:rate=30`, "-t", String(seg.secs)];
+  const args = ["-v", "error", "-f", "lavfi", "-i", `${seg.source}=size=${seg.w}x${seg.h}:rate=30`, "-t", String(seg.secs)];
   if (useDrawtext) {
     args.push("-vf", `drawtext=text='${seg.label}':fontsize=48:x=20:y=20:fontcolor=white:box=1:boxcolor=black`);
   }

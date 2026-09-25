@@ -45,6 +45,26 @@ let cls: ScreenClass | null = null;
 let videoSize: { w: number; h: number } | null = null;
 let client: PortClient | null = null;
 
+interface PosePhase {
+  atMs: number;
+  lit: DirectorOutput["lit"];
+  moving: boolean;
+  settled: boolean;
+  rotation: Rotation;
+}
+
+const MAX_PHASES = 500;
+const phases: PosePhase[] = [];
+
+/** Keeps each change of lit screen, hinge motion, settling or rotation, for the e2e test to read back. */
+function logPhase(out: DirectorOutput, rotation: Rotation): void {
+  const last = phases.at(-1);
+  const moving = out.angle > 0 && out.angle < 180;
+  if (last && last.lit === out.lit && last.moving === moving && last.settled === out.settled && last.rotation === rotation) return;
+  phases.push({ atMs: performance.now(), lit: out.lit, moving, settled: out.settled, rotation });
+  if (phases.length > MAX_PHASES) phases.shift();
+}
+
 /** The window covers the model's current pose: open once the inner screen is lit or the hinge has started to move. */
 function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
   if (pxPerMm === null) return;
@@ -56,7 +76,12 @@ function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
 // hold off for longer than the check is meant to wait.
 setInterval(() => windowSizer.verify({ w: innerWidth, h: innerHeight }, performance.now()), 100);
 
-const scene = new PhoneScene(document.body, director, { loadModel, onTick: sizeWindow });
+function onTick(out: DirectorOutput, rotation: Rotation): void {
+  logPhase(out, rotation);
+  sizeWindow(out, rotation);
+}
+
+const scene = new PhoneScene(document.body, director, { loadModel, onTick });
 
 void window.hinge.workAreaHeight().then((height) => {
   pxPerMm = defaultPxPerMm(FOLD7_BODY, height);
@@ -118,6 +143,8 @@ void receivePort().then((port) => {
       rotation: scene.rotation(),
       badge: out?.badge ?? null,
       settled: out?.settled ?? false,
+      brightness: { cover: out?.coverBrightness ?? 0, inner: out?.innerBrightness ?? 0 },
     };
   },
+  phases: () => [...phases],
 };

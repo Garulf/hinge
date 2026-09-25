@@ -2,6 +2,7 @@ import type { Adb } from "@yume-chan/adb";
 import type { ControlIntent, MainToRenderer, RendererToMain } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
 import type { MediaSink, MediaSource } from "./media-source";
+import type { PostureSample } from "./posture-sampler";
 import { deviceStatus, pickDevice, type DeviceSummary } from "./transport";
 
 export interface PortLike {
@@ -45,11 +46,22 @@ export interface DeviceWatcher {
 
 export type SessionFactory = (device: DeviceSummary, adb: Adb) => MediaSource;
 
+/**
+ * Starts a background posture sampler bound to one session's adb connection.
+ * Returns a disposer that stops it. Mirrors posture-sampler.ts's startSampler,
+ * kept as a separate type here so DeviceSource stays testable without a real adb.
+ */
+export type PostureStarter = (
+  adb: Adb,
+  onSample: (sample: PostureSample) => void,
+) => Promise<() => Promise<void>>;
+
 export class DeviceSource implements MediaSource {
   #sink: MediaSink | null = null;
   #dispose: (() => Promise<void>) | null = null;
   #session: MediaSource | null = null;
   #sessionSerial: string | null = null;
+  #stopPosture: (() => Promise<void>) | null = null;
   #reconnecting = false;
   #reconnectAbort: AbortController | null = null;
   #lastDevices: DeviceSummary[] = [];
@@ -63,13 +75,17 @@ export class DeviceSource implements MediaSource {
       preferredSerial?: string | null;
       log?: (line: string) => void;
       delay?: (ms: number, signal: AbortSignal) => Promise<void>;
+      /** Wraps the sink once at start(), e.g. to tee video and posture events into a recording. */
+      recordSink?: (sink: MediaSink) => MediaSink;
+      /** Started for each connected session, only when the (possibly wrapped) sink defines postureLine. */
+      posture?: PostureStarter;
     },
   ) {
     this.#preferredSerial = opts.preferredSerial ?? null;
   }
 
   async start(sink: MediaSink): Promise<void> {
-    this.#sink = sink;
+    this.#sink = this.opts.recordSink ? this.opts.recordSink(sink) : sink;
     const watched = await this.#watch();
     if (!watched) this.#beginReconnect();
   }
@@ -85,6 +101,7 @@ export class DeviceSource implements MediaSource {
     const session = this.#session;
     this.#session = null;
     this.#sessionSerial = null;
+    await this.#stopPostureSampler();
     await session?.stop();
     await this.#dispose?.().catch(() => {});
     this.#dispose = null;
@@ -172,7 +189,14 @@ export class DeviceSource implements MediaSource {
     const session = this.#session;
     this.#session = null;
     this.#sessionSerial = null;
+    void this.#stopPostureSampler();
     if (session) void session.stop();
+  }
+
+  async #stopPostureSampler(): Promise<void> {
+    const stop = this.#stopPosture;
+    this.#stopPosture = null;
+    await stop?.().catch(() => {});
   }
 
   #connect(device: DeviceSummary): void {
@@ -186,6 +210,13 @@ export class DeviceSource implements MediaSource {
     try {
       const adb = await this.opts.host.open(device.serial);
       if (this.#stopped || this.#sessionSerial !== device.serial) return;
+      if (sink.postureLine && this.opts.posture) {
+        this.#stopPosture = await this.opts.posture(adb, (sample) => sink.postureLine?.(sample.lines.join(" | ")));
+        if (this.#stopped || this.#sessionSerial !== device.serial) {
+          await this.#stopPostureSampler();
+          return;
+        }
+      }
       const session = this.opts.createSession(device, adb);
       this.#session = session;
       session.ended?.then(() => this.#onSessionEnded(device.serial));
@@ -195,6 +226,7 @@ export class DeviceSource implements MediaSource {
         this.#session = null;
         this.#sessionSerial = null;
       }
+      await this.#stopPostureSampler();
       sink.status({ state: "error", message: String(e) });
     }
   }
@@ -203,6 +235,7 @@ export class DeviceSource implements MediaSource {
     if (this.#stopped || this.#sessionSerial !== serial) return;
     this.#session = null;
     this.#sessionSerial = null;
+    void this.#stopPostureSampler();
     this.#onDevices(this.#lastDevices);
   }
 }

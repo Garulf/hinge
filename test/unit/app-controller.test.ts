@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { bindSource, DeviceSource, type DeviceWatcher, type PortLike } from "../../src/main/app-controller";
+import { bindSource, DeviceSource, type DeviceWatcher, type PortLike, type PostureStarter } from "../../src/main/app-controller";
 import type { MediaSource, MediaSink } from "../../src/main/media-source";
 import type { ControlIntent, MainToRenderer, RendererToMain, SessionStatus } from "../../src/shared/wire";
 import type { DeviceSummary } from "../../src/main/transport";
@@ -446,6 +446,115 @@ test("continues backing off when watch() itself fails during reconnect, even tho
     state: "error",
     message: "Lost connection to the adb server, reconnecting...",
   });
+});
+
+test("wraps the sink once via recordSink so every session's session.start() sees the recording sink", async () => {
+  const watcher = fakeWatcher();
+  const sessionSinks: MediaSink[] = [];
+  const wrapCalls: MediaSink[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: (): MediaSource => ({
+      start: async (sink) => {
+        sessionSinks.push(sink);
+      },
+      control: () => {},
+      stop: async () => {},
+    }),
+    recordSink: (sink) => {
+      wrapCalls.push(sink);
+      return { ...sink, postureLine: () => {} };
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+  expect(wrapCalls).toEqual([sink]);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(sessionSinks).toHaveLength(1);
+  expect(sessionSinks[0]).not.toBe(sink);
+  expect(typeof sessionSinks[0].postureLine).toBe("function");
+});
+
+test("starts the posture sampler when a session connects and stops it when that session is torn down", async () => {
+  const watcher = fakeWatcher();
+  let starts = 0;
+  let stops = 0;
+  let seenAdb: unknown;
+  const state: { deliver: Parameters<PostureStarter>[1] | null } = { deliver: null };
+  const posture: PostureStarter = async (adb, onSample) => {
+    starts++;
+    seenAdb = adb;
+    state.deliver = onSample;
+    return async () => {
+      stops++;
+    };
+  };
+  const postureLines: string[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    recordSink: (sink) => ({ ...sink, postureLine: (line) => postureLines.push(line) }),
+    posture,
+  });
+  const openedAdb = { marker: "adb" };
+  watcher.host.open = async () => openedAdb as never;
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(starts).toBe(1);
+  expect(seenAdb).toBe(openedAdb);
+
+  state.deliver?.({ tick: 1, lines: ["OPENED", "SurfaceOrientation: 1"] });
+  expect(postureLines).toEqual(["OPENED | SurfaceOrientation: 1"]);
+
+  watcher.emit([]);
+  await flush();
+  expect(stops).toBe(1);
+});
+
+test("does not start the posture sampler when the sink has no postureLine (no recording)", async () => {
+  const watcher = fakeWatcher();
+  let starts = 0;
+  const posture: PostureStarter = async () => {
+    starts++;
+    return async () => {};
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    posture,
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(starts).toBe(0);
+});
+
+test("stop() stops a running posture sampler", async () => {
+  const watcher = fakeWatcher();
+  let stops = 0;
+  const posture: PostureStarter = async () => async () => {
+    stops++;
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    recordSink: (sink) => ({ ...sink, postureLine: () => {} }),
+    posture,
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  await source.stop();
+  expect(stops).toBe(1);
 });
 
 test("stop while host.watch() itself is in flight disposes the subscription it just installed", async () => {

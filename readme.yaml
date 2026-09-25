@@ -1,0 +1,17 @@
+# readwright configuration. All keys are optional; autodetected values are shown.
+# Keys: template, templates, output, strict, allow_exec, screenshots{dir,width,style}, badges,
+#       badges_style, badges_custom, donate, donate_handles, related, project{...}, vars.
+# Run `readwright badges` / `readwright blocks` to list badge presets and template blocks.
+project:
+  name: hinge
+  tagline: A desktop scrcpy client that mirrors a Galaxy Z Fold 7 onto a placeholder
+    phone model
+  license: MIT
+vars:
+  status: >-
+    Early development, M1 (flat mirror). The app connects to a phone over adb,
+    starts scrcpy-server 4.1, and shows the video feed on a placeholder phone
+    slab with touch and keyboard input routed back to the device. Folding
+    reactions, the 3D showcase view, and packaged releases are later
+    milestones.
+badges: []

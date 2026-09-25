@@ -9,10 +9,10 @@ project:
   license: MIT
 vars:
   status: >-
-    Early development, M5 (daily use) on top of the M4 showcase view. The app
-    connects to a phone over adb, starts scrcpy-server 4.1, and shows the
-    video on a 3D model of the Fold 7 that folds, unfolds and turns with the
-    real phone, in a flat work view or a 3D showcase view, with touch,
-    keyboard, scrcpy's shortcuts, clipboard sync, phone audio, file drop and
-    Wi-Fi pairing. Packaged releases are a later milestone.
+    First release candidate. The app connects to a phone over adb, starts
+    scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that
+    folds, unfolds and turns with the real phone, in a flat work view or a 3D
+    showcase view, with touch, keyboard, scrcpy's shortcuts, clipboard sync,
+    phone audio, file drop and Wi-Fi pairing. Builds are made locally for
+    Windows (installer and portable exe) and Linux (AppImage and deb).
 badges: []

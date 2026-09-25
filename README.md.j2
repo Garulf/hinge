@@ -1,9 +1,23 @@
 {% extends "base.md.j2" %}
 
 {% block install %}
+## Installing
+
+Release builds come in four files, all named after the version:
+
+- `hinge-<version>-win-x64-setup.exe` installs for the current user, with
+  Start menu and desktop shortcuts, and lets you pick the folder.
+- `hinge-<version>-win-x64-portable.exe` runs without installing.
+- `hinge-<version>-linux-x86_64.AppImage` runs as is once marked executable.
+- `hinge-<version>-linux-amd64.deb` installs with `sudo apt install ./<file>`.
+
+The builds are not code signed, so Windows SmartScreen asks before the
+first run. Each one bundles its own `adb`; an adb server that is already
+running is used as it is.
+
 ## Development setup
 
-No published releases yet. From a checkout of this repository:
+From a checkout of this repository:
 
 ```sh
 npm install
@@ -105,6 +119,7 @@ hinge.exe --probe --seconds 60
 
 The window is frameless. Move the pointer to the phone's top edge for its
 controls, quit with MOD+q, or close it with Alt+F4 or from the taskbar.
+Starting hinge again while it runs brings the open window to the front.
 
 ### Window controls
 
@@ -131,8 +146,9 @@ errors in its own status line.
 
 ### Shortcuts
 
-MOD is left Alt or left Super by default, and can be any mix of left or
-right Alt, Super and Ctrl in Settings. The table follows
+MOD is left Alt by default on Windows, which keeps most Win+letter
+combinations for itself, and left Alt or left Super on Linux. It can be any
+mix of left or right Alt, Super and Ctrl in Settings. The table follows
 [scrcpy's](https://github.com/Genymobile/scrcpy/blob/master/doc/shortcuts.md).
 
 | Action | Shortcut |
@@ -172,8 +188,9 @@ phone and paste on the PC.
 ### Phone audio
 
 Phones on Android 11 or newer play their audio through the PC. If the phone
-can't share audio, hinge says so once and carries on without it. Turn it
-off in Settings.
+can't share audio, hinge says so once and carries on without it; if the
+audio stops partway while the video goes on, a notice says that too. Turn
+it off in Settings.
 
 ### Files
 
@@ -197,7 +214,11 @@ Connect.
 A Wi-Fi phone that drops off (Wi-Fi toggled, phone asleep) is reconnected
 with a growing delay, up to 15 seconds between tries, until it comes back
 or you pick another device. The last phone used connects on its own at the
-next launch.
+next launch, over whichever connection it shows up on: hinge knows a phone
+by its serial number, so its USB, Wi-Fi and mDNS entries and a wireless
+port that changed since last time all count as the same phone.
+Disconnect drops the phone's Wi-Fi connection and keeps hinge from picking
+it up again until you choose it in Devices.
 
 ### Settings file
 
@@ -205,9 +226,12 @@ Settings are saved as `settings.json` in the app's data folder:
 `%APPDATA%\hinge\settings.json` on Windows and
 `~/.config/hinge/settings.json` on Linux. The Settings panel shows the full
 path. A file that can't be read is kept as `settings.json.bad` and defaults
-are used. Besides the panel's options it holds the colourway, the last
-device, and for each phone the window's position, the size you picked and
-the view (work or 3D) it was last in.
+are used, and a single setting with a wrong value falls back to its
+default on its own. Besides the panel's options it holds the colourway,
+the last phone, and for each phone (by serial number) the window's
+position, the size you picked and the view (work or 3D) it was last in.
+The last phone's position, size and view are applied at startup, before it
+connects.
 
 ## Development commands
 
@@ -219,6 +243,34 @@ npm test              # vitest
 npm run test:e2e       # playwright, replays a synthetic fold recording end to end
 npm run pack:win       # unpacked Windows build in dist/win-unpacked
 npm run pack:linux     # unpacked Linux build in dist/linux-unpacked
+npm run pack:release   # installer, portable exe, AppImage and deb in dist/
+```
+
+`pack:release` builds the Windows files on Linux too, through wine, which
+electron-builder needs to write the icon, product name and version into
+`hinge.exe` and to run the 32-bit NSIS installer stub:
+
+```sh
+sudo dpkg --add-architecture i386 && sudo apt-get update
+sudo apt-get install --no-install-recommends wine wine64 wine32:i386
+```
+
+### Tests and releases
+
+There is no CI. Unit tests and the typecheck run in the `pre-push` hook
+(`pre-commit install --hook-type pre-commit --hook-type pre-push`), and the
+GPU e2e suite runs on demand through `scripts/e2e-remote.sh` (below).
+
+Releases are cut locally with the release-please CLI, which reads the
+Conventional Commit history, then the artefacts from `npm run pack:release`
+are attached to the GitHub release:
+
+```sh
+npx release-please release-pr --repo-url=Garulf/hinge --token=$(gh auth token)
+# merge the release PR, then
+npx release-please github-release --repo-url=Garulf/hinge --token=$(gh auth token)
+npm run pack:release
+gh release upload v<version> dist/*-setup.exe dist/*-portable.exe dist/*.AppImage dist/*.deb
 ```
 
 ### Remote testing

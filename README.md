@@ -47,8 +47,8 @@ An error shown in the window or the probe result page names the log file.
 
 ### Folding
 
-The window shows the phone at its real size (the body fills 85 percent of
-the screen's height) and follows the phone as you fold it:
+The window shows the phone at a constant physical size (the body fills 85
+percent of the screen's height) and follows the phone as you fold it:
 
 - Closed or tented, you see the cover screen. Open it and the model unfolds
   to the inner screen; close it and it folds back. The hinge starts moving
@@ -60,8 +60,8 @@ the screen's height) and follows the phone as you fold it:
   to the final size afterwards.
 - Half open (Flex mode) with the inner screen on, the model stays flat and
   shows a small "Flex" badge on the top bezel.
-- Turn the phone to landscape and the model turns with it; touches still
-  land where you click on the video.
+- Turn the phone to landscape and the model turns with it around the
+  window's centre; touches still land where you click on the video.
 
 ### Windows
 

@@ -4,6 +4,7 @@ import type { MessagePortMain } from "electron";
 import type { PortLike } from "./app-controller";
 import { clampToWorkArea } from "../shared/clamp-bounds";
 import type { MainToRenderer, RendererToMain } from "../shared/wire";
+import { anchoredWindowBounds } from "./window-resize";
 
 export function createPhoneWindow(): { win: BrowserWindow; port: PortLike } {
   const win = new BrowserWindow({
@@ -85,6 +86,13 @@ function registerWindowIpc(win: BrowserWindow): void {
       area,
     );
     win.setBounds(clamped);
+  });
+
+  ipcMain.on("hinge:set-window-size", (event, width: number, height: number, rotation: 0 | 1 | 2 | 3) => {
+    if (event.sender !== win.webContents) return;
+    const current = win.getContentBounds();
+    const area = screen.getDisplayMatching(win.getBounds()).workArea;
+    win.setContentBounds(anchoredWindowBounds(current, { w: width, h: height }, rotation, area));
   });
 
   ipcMain.handle("hinge:work-area-height", (event) => {

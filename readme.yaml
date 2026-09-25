@@ -9,9 +9,9 @@ project:
   license: MIT
 vars:
   status: >-
-    Early development, M3 (fold reaction). The app connects to a phone over
-    adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the
-    Fold 7 that folds, unfolds and turns with the real phone, with touch and
-    keyboard input routed back to the device. The 3D showcase view, audio and
-    packaged releases are later milestones.
+    Early development, M5 (daily use). The app connects to a phone over adb,
+    starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7
+    that folds, unfolds and turns with the real phone, with touch, keyboard,
+    scrcpy's shortcuts, clipboard sync, phone audio, file drop and Wi-Fi
+    pairing. Packaged releases are a later milestone.
 badges: []

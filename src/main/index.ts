@@ -1,9 +1,13 @@
-import { createWriteStream } from "node:fs";
-import { app, BrowserWindow } from "electron";
+import { createWriteStream, type WriteStream } from "node:fs";
+import { join } from "node:path";
+import { app, BrowserWindow, Menu } from "electron";
 import { AdbHost } from "./adb-host";
 import { bindSource, DeviceSource } from "./app-controller";
 import { parseArgs } from "./cli";
+import { createLogger, type Logger } from "./logger";
 import type { MediaSink, MediaSource } from "./media-source";
+import { resolveOutputPath } from "./output-path";
+import { createQueuedWriter } from "./queued-writer";
 import { startSampler } from "./posture-sampler";
 import { runProbe } from "./probe";
 import { recordProgressHtml, recordResultHtml } from "./probe-window";
@@ -12,9 +16,15 @@ import { ReplaySource } from "./replay-source";
 import { ScrcpySession } from "./scrcpy-session";
 import { DEFAULT_STREAM_SETTINGS } from "./scrcpy-init";
 import { vendorPaths } from "./vendor-paths";
-import { createPhoneWindow, portLikeOf } from "./window";
+import { createPhoneWindow } from "./window";
 
-const mode = parseArgs(process.argv);
+let mode: ReturnType<typeof parseArgs>;
+try {
+  mode = parseArgs(process.argv);
+} catch (e) {
+  console.error(String(e));
+  process.exit(1);
+}
 
 function errorSource(message: string): MediaSource {
   return {
@@ -26,11 +36,41 @@ function errorSource(message: string): MediaSource {
 
 interface BuiltSource {
   source: MediaSource;
-  closeRecording: () => void;
+  closeRecording: () => Promise<void>;
 }
 
-async function buildSource(opts: { serial: string | null; replay: string | null; record: string | null }): Promise<BuiltSource> {
-  if (opts.replay) return { source: await ReplaySource.fromFile(opts.replay, { loop: false }), closeRecording: () => {} };
+/** Opens the write stream up front so a bad path or a permission error surfaces before mirroring starts, instead of crashing mid-session. */
+function openRecordStream(path: string): Promise<{ stream: WriteStream } | { error: string }> {
+  return new Promise((resolve) => {
+    const stream = createWriteStream(path);
+    const onError = (e: Error) => {
+      stream.off("open", onOpen);
+      resolve({ error: String(e) });
+    };
+    const onOpen = () => {
+      stream.off("error", onError);
+      resolve({ stream });
+    };
+    stream.once("error", onError);
+    stream.once("open", onOpen);
+  });
+}
+
+function closeRecordStream(stream: WriteStream | null): () => Promise<void> {
+  return () =>
+    new Promise((resolve) => {
+      if (!stream) {
+        resolve();
+        return;
+      }
+      stream.once("finish", () => resolve());
+      stream.once("error", () => resolve());
+      stream.end();
+    });
+}
+
+async function buildSource(opts: { serial: string | null; replay: string | null; record: string | null }, log: Logger["log"]): Promise<BuiltSource> {
+  if (opts.replay) return { source: await ReplaySource.fromFile(opts.replay, { loop: false }), closeRecording: async () => {} };
 
   const paths = vendorPaths({
     packaged: app.isPackaged,
@@ -41,17 +81,30 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
   const host = new AdbHost({ adbPath: paths.adb });
   await host.ensureServer();
 
-  let recordStream: ReturnType<typeof createWriteStream> | null = null;
-  const recordSink = opts.record
-    ? (sink: MediaSink) => {
-        recordStream = createWriteStream(opts.record as string);
-        return teeToRecording(sink, (chunk) => recordStream?.write(chunk), Date.now);
-      }
-    : undefined;
+  let recordStream: WriteStream | null = null;
+  let recordSink: ((sink: MediaSink) => MediaSink) | undefined;
+
+  if (opts.record) {
+    const path = resolveOutputPath(opts.record, app.getPath("desktop"));
+    const opened = await openRecordStream(path);
+    if ("error" in opened) {
+      const message = `Could not open the recording file ${path}: ${opened.error}`;
+      log(message);
+      recordSink = (sink) => {
+        sink.status({ state: "error", message });
+        return sink;
+      };
+    } else {
+      recordStream = opened.stream;
+      const write = createQueuedWriter(opened.stream);
+      recordSink = (sink) => teeToRecording(sink, write, Date.now);
+    }
+  }
 
   const source = new DeviceSource({
     host,
     preferredSerial: opts.serial,
+    log,
     createSession: (device, adb) =>
       new ScrcpySession({
         adb,
@@ -59,36 +112,55 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
         model: device.model,
         serverPath: paths.scrcpyServer,
         settings: DEFAULT_STREAM_SETTINGS,
+        log,
       }),
     recordSink,
     posture: startSampler,
   });
 
-  return { source, closeRecording: () => recordStream?.end() };
+  return { source, closeRecording: closeRecordStream(recordStream) };
+}
+
+/** Waits for source.stop() and the recording stream to finish, but never blocks quitting for more than a few seconds. */
+function shutdown(source: MediaSource, closeRecording: () => Promise<void>): Promise<void> {
+  return Promise.race([
+    (async () => {
+      await source.stop().catch(() => {});
+      await closeRecording();
+    })(),
+    new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+  ]);
 }
 
 async function runMode(opts: { serial: string | null; replay: string | null; record: string | null }): Promise<void> {
   await app.whenReady();
+  const logger = createLogger(join(app.getPath("logs"), "hinge.log"));
   const { win, port } = createPhoneWindow();
 
   let source: MediaSource;
-  let closeRecording = () => {};
+  let closeRecording: () => Promise<void> = async () => {};
   try {
-    const built = await buildSource(opts);
+    const built = await buildSource(opts, logger.log);
     source = built.source;
     closeRecording = built.closeRecording;
   } catch (e) {
     source = errorSource(String(e));
   }
 
-  bindSource(source, portLikeOf(port));
+  bindSource(source, port, { logPath: logger.path });
+
+  let shuttingDown: Promise<void> | null = null;
   win.on("closed", () => {
-    void source.stop().then(closeRecording);
+    shuttingDown = shutdown(source, closeRecording).then(() => app.quit());
+  });
+  app.on("window-all-closed", () => {
+    if (!shuttingDown) app.quit();
   });
 }
 
 async function probeMode(opts: { serial: string | null; seconds: number; out: string | null }): Promise<void> {
   await app.whenReady();
+  const logger = createLogger(join(app.getPath("logs"), "hinge.log"));
 
   const paths = vendorPaths({
     packaged: app.isPackaged,
@@ -107,6 +179,7 @@ async function probeMode(opts: { serial: string | null; seconds: number; out: st
   });
 
   const setProgress = (text: string): void => {
+    logger.log(text);
     void win.webContents.executeJavaScript(
       `document.getElementById('t').textContent = ${JSON.stringify(text)}`,
     );
@@ -123,16 +196,18 @@ async function probeMode(opts: { serial: string | null; seconds: number; out: st
       out: opts.out,
       onProgress: setProgress,
     });
-    await win.loadURL(`data:text/html,${encodeURIComponent(recordResultHtml(path))}`);
+    await win.loadURL(`data:text/html,${encodeURIComponent(recordResultHtml(path, logger.path))}`);
   } catch (e) {
-    setProgress(`Failed: ${String(e)}`);
+    logger.log(String(e));
+    setProgress(`Failed: ${String(e)} (log: ${logger.path})`);
   }
+  app.on("window-all-closed", () => app.quit());
 }
+
+Menu.setApplicationMenu(null);
 
 if (mode.mode === "run") {
   void runMode(mode);
 } else {
   void probeMode(mode);
 }
-
-app.on("window-all-closed", () => app.quit());

@@ -7,6 +7,7 @@ import { AdbScrcpyClient, AdbScrcpyOptions4_1 } from "@yume-chan/adb-scrcpy";
 import { DefaultServerPath } from "@yume-chan/scrcpy";
 import { PushReadableStream } from "@yume-chan/stream-extra";
 import type { AdbHost } from "./adb-host";
+import { resolveOutputPath } from "./output-path";
 import { startSampler } from "./posture-sampler";
 import { pickDevice, transportOf, type DeviceSummary } from "./transport";
 import { vendorPaths } from "./vendor-paths";
@@ -31,6 +32,7 @@ const ONE_SHOT = [
   "cmd device_state print-states-simple",
   "dumpsys device_state",
   "dumpsys input | grep -i SurfaceOrientation",
+  "dumpsys window displays | grep -m1 -E '^ *mRotation='",
   "wm size",
   "wm density",
   "dumpsys display | grep -iE 'mBaseDisplayInfo|uniqueId|type='",
@@ -41,13 +43,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForDevice(
-  host: AdbHost,
+export interface DeviceLister {
+  getDevices(): Promise<{ serial: string; state: string; model?: string | null }[]>;
+}
+
+export async function waitForDevice(
+  host: { client: DeviceLister },
   preferredSerial: string | null,
   onProgress: (text: string) => void,
 ): Promise<DeviceSummary> {
   onProgress("Waiting for a phone...");
   const deadline = Date.now() + 60_000;
+  let lastMessage = "waiting";
   for (;;) {
     const devices = await host.client.getDevices();
     const summaries: DeviceSummary[] = devices.map((d) => ({
@@ -58,6 +65,15 @@ async function waitForDevice(
     }));
     const device = pickDevice(summaries, preferredSerial);
     if (device && device.state === "device") return device;
+    if (device && (device.state === "unauthorized" || device.state === "authorizing")) {
+      if (lastMessage !== "unauthorized") {
+        onProgress("Allow USB debugging on your phone");
+        lastMessage = "unauthorized";
+      }
+    } else if (lastMessage !== "waiting") {
+      onProgress("Waiting for a phone...");
+      lastMessage = "waiting";
+    }
     if (Date.now() > deadline) throw new Error("timed out waiting for a phone");
     await sleep(500);
   }
@@ -88,7 +104,7 @@ async function getDisplays(adb: Adb, serverPath: string): Promise<unknown> {
         controller.close();
       }),
     );
-    return await AdbScrcpyClient.getDisplays(adb, DefaultServerPath, new AdbScrcpyOptions4_1({ videoCodec: "h264" }));
+    return await AdbScrcpyClient.getDisplays(adb, DefaultServerPath, new AdbScrcpyOptions4_1({ videoCodec: "h264", tunnelForward: true }));
   } catch (e) {
     return { error: String(e) };
   }
@@ -179,7 +195,12 @@ export async function runProbe(opts: {
     displays,
   };
 
-  const path = opts.out ?? join(app.getPath("desktop"), `hinge-probe-${safeSerial(device.serial)}-${timestamp()}.json`);
-  await writeFile(path, JSON.stringify(report, null, 2), "utf8");
+  const desktop = app.getPath("desktop");
+  const path = opts.out ? resolveOutputPath(opts.out, desktop) : join(desktop, `hinge-probe-${safeSerial(device.serial)}-${timestamp()}.json`);
+  try {
+    await writeFile(path, JSON.stringify(report, null, 2), "utf8");
+  } catch (e) {
+    throw new Error(`Could not write the probe report to ${path}: ${String(e)}`);
+  }
   return path;
 }

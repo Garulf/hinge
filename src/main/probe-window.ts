@@ -7,13 +7,14 @@ function escapeHtml(text: string): string {
 }
 
 export function recordProgressHtml(): string {
-  return `<!doctype html><html><body style="font-family:sans-serif;padding:16px;white-space:pre-wrap"><pre id="t"></pre></body></html>`;
+  return `<!doctype html><html><body style="font-family:sans-serif;padding:16px"><pre id="t" style="white-space:pre-wrap"></pre></body></html>`;
 }
 
-export function recordResultHtml(reportPath: string): string {
+export function recordResultHtml(reportPath: string, logPath?: string): string {
+  const logBlock = logPath ? `<p>Log:</p>\n<pre>${escapeHtml(logPath)}</pre>\n` : "";
   return `<!doctype html><html><body style="font-family:sans-serif;padding:16px">
 <p>Report written to:</p>
 <pre>${escapeHtml(reportPath)}</pre>
-<button onclick="window.close()">Close</button>
+${logBlock}<button onclick="window.close()">Close</button>
 </body></html>`;
 }

@@ -125,7 +125,7 @@ async function runSampler(
   let previous: string[] | null = null;
   let latest = "(waiting for a sample)";
 
-  const stop = await startSampler(adb, (sample) => {
+  const { stop } = await startSampler(adb, (sample) => {
     latest = sample.lines[0] ?? "(no reading)";
     if (previous === null || !sameLines(previous, sample.lines)) {
       timeline.push({ ms: Date.now() - start, lines: sample.lines });

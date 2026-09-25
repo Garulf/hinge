@@ -49,10 +49,16 @@ export function stdoutOf(process: unknown): ReadableStream<Uint8Array> {
   return (process as { output: ReadableStream<Uint8Array> }).output;
 }
 
+export interface SamplerHandle {
+  stop(): Promise<void>;
+  /** Resolves once the underlying shell's stdout ends, whether from stop() killing it or the shell exiting on its own (crash, adb disconnect, device reboot, ...). Lets a caller tell a deliberate stop apart from an unexpected death and react (fold-monitor.ts restarts once on an unexpected death). */
+  ended: Promise<void>;
+}
+
 export async function startSampler(
   adb: Adb,
   onSample: (sample: PostureSample, raw: string[]) => void,
-): Promise<() => Promise<void>> {
+): Promise<SamplerHandle> {
   const shell = adb.subprocess.shellProtocol;
   const spawned = shell ? await shell.spawn(SAMPLER_SCRIPT) : await adb.subprocess.noneProtocol.spawn(SAMPLER_SCRIPT);
 
@@ -60,6 +66,11 @@ export async function startSampler(
   let raw: string[] = [];
 
   const reader = stdoutOf(spawned).pipeThrough(new TextDecoderStream()).pipeThrough(new SplitStringStream("\n")).getReader();
+
+  let resolveEnded!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    resolveEnded = resolve;
+  });
 
   void (async () => {
     try {
@@ -75,10 +86,15 @@ export async function startSampler(
       }
     } catch {
       // the process is killed on stop(); reading a torn-down stream then rejects, nothing to act on
+    } finally {
+      resolveEnded();
     }
   })();
 
-  return async () => {
-    await spawned.kill();
+  return {
+    stop: async () => {
+      await spawned.kill();
+    },
+    ended,
   };
 }

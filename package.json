@@ -1,0 +1,39 @@
+{
+  "name": "hinge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "scrcpy client that shows your Galaxy Z Fold 7 as a 3D phone that folds with the real one",
+  "main": "out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "test:e2e": "npm run build && xvfb-run -a playwright test",
+    "fetch-vendor": "node scripts/fetch-vendor.mjs",
+    "pack:win": "npm run build && electron-builder --win --dir",
+    "pack:linux": "npm run build && electron-builder --linux --dir"
+  },
+  "dependencies": {
+    "@yume-chan/adb": "3.0.0-beta.3",
+    "@yume-chan/adb-scrcpy": "3.0.0-beta.3",
+    "@yume-chan/adb-server-node-tcp": "3.0.0-beta.3",
+    "@yume-chan/android-bin": "3.0.0-beta.3",
+    "@yume-chan/scrcpy": "3.0.0-beta.3",
+    "@yume-chan/scrcpy-decoder-webcodecs": "3.0.0-beta.3",
+    "@yume-chan/stream-extra": "3.0.0-beta.3",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63",
+    "@types/node": "^22.20.4",
+    "@types/three": "^0.186.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6",
+    "vitest": "^5.0.1"
+  }
+}

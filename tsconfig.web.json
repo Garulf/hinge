@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "composite": true, "target": "ES2023", "module": "ESNext", "moduleResolution": "Bundler",
+    "strict": true, "noEmit": false, "emitDeclarationOnly": true, "outDir": "out/tsc-web",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"], "skipLibCheck": true
+  },
+  "include": ["src/renderer", "src/shared", "src/preload/api.d.ts"]
+}

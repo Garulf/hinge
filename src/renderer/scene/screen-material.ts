@@ -41,19 +41,20 @@ void main() {
   vec3 color = vec3(0.0);
   if (hasMap) {
     vec2 st = (sampleMatrix * vec3(vUv, 1.0)).xy;
-    color = sRGBTransferEOTF(texture2D(map, st)).rgb;
+    color = texture2D(map, st).rgb;
   }
   color *= brightness;
   float hole = coverage(length(px - punchHolePx.xy) - punchHolePx.z);
   gl_FragColor = vec4(mix(color, vec3(0.0), hole), inside);
-  #include <colorspace_fragment>
 }
 `;
 
 /**
- * Samples a VideoFrameTexture (sRGB, decoded by hand since three only
- * decodes video textures for its built-in materials) through the stream's
- * rotation transform, masked to the screen's rounded corners and punch hole.
+ * Samples a VideoFrameTexture through the stream's rotation transform,
+ * masked to the screen's rounded corners and punch hole. three uploads video
+ * textures without sRGB decoding, so the samples are already in the output's
+ * sRGB encoding and pass through unconverted (brightness fades in that
+ * perceptual space).
  */
 export class ScreenMaterial extends THREE.ShaderMaterial {
   constructor(extras: ScreenExtras) {

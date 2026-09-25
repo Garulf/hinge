@@ -88,3 +88,20 @@ test("I3: applySize disposes on every distinct pixel size across repeated resize
 
   expect(disposeCalls.count).toBe(3);
 });
+
+test("applySize with the size it already has does not redraw, so the scene can call it every frame", () => {
+  let clears = 0;
+  const canvas = fakeCanvas();
+  const ctx = canvas.getContext("2d")!;
+  ctx.clearRect = () => {
+    clears++;
+  };
+  const overlay = new StatusOverlay({ canvas, makeTexture: () => fakeTexture({ count: 0 }) });
+  overlay.setText("Connecting...");
+  overlay.applySize(200, 100);
+  const afterFirst = clears;
+  overlay.applySize(200, 100);
+  expect(clears).toBe(afterFirst);
+  overlay.applySize(201, 100);
+  expect(clears).toBe(afterFirst + 1);
+});

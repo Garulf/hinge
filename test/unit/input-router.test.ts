@@ -41,7 +41,7 @@ function fakeScene() {
   const camera = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 1000);
   camera.position.z = 100;
   const screenMesh = new THREE.Mesh(new THREE.PlaneGeometry(100, 100));
-  return { camera: () => camera, screenMesh: () => screenMesh };
+  return { camera: () => camera, litScreenMesh: () => screenMesh };
 }
 
 let fakeWindow: ReturnType<typeof fakeTarget> & { hinge: { beginDrag: ReturnType<typeof vi.fn>; endDrag: ReturnType<typeof vi.fn> } };

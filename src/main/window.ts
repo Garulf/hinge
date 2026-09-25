@@ -2,7 +2,6 @@ import { join } from "node:path";
 import { BrowserWindow, MessageChannelMain, ipcMain, screen } from "electron";
 import type { MessagePortMain } from "electron";
 import type { PortLike } from "./app-controller";
-import { clampToWorkArea } from "../shared/clamp-bounds";
 import type { MainToRenderer, RendererToMain } from "../shared/wire";
 import { anchoredWindowBounds } from "./window-resize";
 
@@ -72,21 +71,6 @@ function registerWindowIpc(win: BrowserWindow): void {
       dragTimer = null;
     }
   };
-
-  ipcMain.on("hinge:set-content-size", (event, width: number, height: number) => {
-    if (event.sender !== win.webContents) return;
-    const bounds = win.getBounds();
-    const centerX = bounds.x + bounds.width / 2;
-    const centerY = bounds.y + bounds.height / 2;
-    win.setContentSize(width, height);
-    const next = win.getBounds();
-    const area = screen.getDisplayMatching(bounds).workArea;
-    const clamped = clampToWorkArea(
-      { x: Math.round(centerX - next.width / 2), y: Math.round(centerY - next.height / 2), width: next.width, height: next.height },
-      area,
-    );
-    win.setBounds(clamped);
-  });
 
   ipcMain.on("hinge:set-window-size", (event, width: number, height: number, rotation: 0 | 1 | 2 | 3) => {
     if (event.sender !== win.webContents) return;

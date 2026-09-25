@@ -9,10 +9,15 @@
  * texture pointing at a closed VideoFrame, which the next render tries (and
  * fails) to upload. end() forces one last render so the final frame is not
  * closed before it can be seen.
+ *
+ * A screen fading out after a handoff keeps showing a clone of the frame
+ * that was current when the stream moved away from it; the clone lives
+ * under that screen's key until releaseClone(), independent of the stream.
  */
-export class FrameLifecycle {
+export class FrameLifecycle<Key extends string = string> {
   #current: VideoFrame | null = null;
   #renderedSinceSet = false;
+  readonly #clones = new Map<Key, VideoFrame>();
 
   constructor(private readonly render: () => void) {}
 
@@ -34,5 +39,25 @@ export class FrameLifecycle {
     }
     this.#current?.close();
     this.#current = null;
+  }
+
+  /** Clones the current frame for `key`, replacing any clone it already held; null without a current frame. */
+  holdClone(key: Key): VideoFrame | null {
+    this.releaseClone(key);
+    if (!this.#current) return null;
+    const clone = this.#current.clone();
+    this.#clones.set(key, clone);
+    return clone;
+  }
+
+  releaseClone(key: Key): void {
+    this.#clones.get(key)?.close();
+    this.#clones.delete(key);
+  }
+
+  dispose(): void {
+    this.#current?.close();
+    this.#current = null;
+    for (const key of [...this.#clones.keys()]) this.releaseClone(key);
   }
 }

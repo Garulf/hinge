@@ -124,7 +124,9 @@ export class InputRouter {
     const rect = this.#canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
     this.#raycaster.setFromCamera(ndc, this.#scene.camera());
-    const [hit] = this.#raycaster.intersectObject(this.#scene.screenMesh());
+    const screen = this.#scene.litScreenMesh();
+    if (!screen) return null;
+    const [hit] = this.#raycaster.intersectObject(screen);
     if (!hit?.uv) return null;
     return { u: hit.uv.x, v: hit.uv.y };
   }

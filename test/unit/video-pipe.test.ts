@@ -149,3 +149,88 @@ test("a stale pipe's error after a later start() does not call onError", async (
 
   expect(onError).not.toHaveBeenCalled();
 });
+
+function sizedFrame(width: number, height: number) {
+  const f = { displayWidth: width, displayHeight: height, closed: false, close() { f.closed = true; } };
+  return f as unknown as VideoFrame;
+}
+
+/** A decoder whose size and output frames the test drives by hand. */
+function manualDecoderFactory() {
+  const handles: { setSize(w: number, h: number): void; emit(frame: VideoFrame): Promise<void> }[] = [];
+  const factory: DecoderFactory = (opts) => {
+    const writer = opts.renderer.writable.getWriter();
+    let listener: ((size: { width: number; height: number }) => void) | null = null;
+    handles.push({
+      setSize: (width, height) => listener?.({ width, height }),
+      emit: (frame) => writer.write(frame),
+    });
+    return {
+      writable: new WritableStream<ScrcpyVideoStreamPacket>(),
+      sizeChanged: (fn) => {
+        listener = fn;
+        return () => {
+          listener = null;
+        };
+      },
+      framesDecoded: 0,
+    };
+  };
+  return { factory, handles };
+}
+
+test("onFirstFrame fires once per size, only for a frame of the new size", async () => {
+  const { factory, handles } = manualDecoderFactory();
+  const onFirstFrame = vi.fn();
+  const pipe = new VideoPipe(fakeSceneTarget() as never, () => {}, { createDecoder: factory, onFirstFrame });
+
+  pipe.start({ ...info, width: 1080, height: 2520 });
+  const decoder = handles[0];
+  await decoder.emit(sizedFrame(1080, 2520));
+  await decoder.emit(sizedFrame(1080, 2520));
+  expect(onFirstFrame.mock.calls).toEqual([[1080, 2520]]);
+
+  decoder.setSize(1968, 2184);
+  // A frame the decoder had already queued at the old size is not the new stream's first.
+  await decoder.emit(sizedFrame(1080, 2520));
+  expect(onFirstFrame).toHaveBeenCalledTimes(1);
+  await decoder.emit(sizedFrame(1968, 2184));
+  await decoder.emit(sizedFrame(1968, 2184));
+  expect(onFirstFrame.mock.calls).toEqual([[1080, 2520], [1968, 2184]]);
+});
+
+test("after a decode failure the pipe drops packets until a configuration arrives, then decodes on a fresh decoder", async () => {
+  const onError = vi.fn();
+  const written: ScrcpyVideoStreamPacket[][] = [];
+  const factory: DecoderFactory = () => {
+    const log: ScrcpyVideoStreamPacket[] = [];
+    const index = written.push(log) - 1;
+    return {
+      writable: new WritableStream<ScrcpyVideoStreamPacket>({
+        write: (packet) => {
+          if (index === 0) throw new Error("decoder died");
+          log.push(packet);
+        },
+      }),
+      sizeChanged: () => () => {},
+      framesDecoded: 0,
+    };
+  };
+  const pipe = new VideoPipe(fakeSceneTarget() as never, () => {}, { createDecoder: factory, onError });
+
+  pipe.start(info);
+  pipe.push(dataPacket());
+  await flush();
+  expect(onError).toHaveBeenCalledOnce();
+
+  pipe.push(dataPacket());
+  expect(written).toHaveLength(1);
+
+  pipe.push({ type: "configuration", data: new Uint8Array([9]) });
+  pipe.push(dataPacket());
+  await flush();
+
+  expect(written).toHaveLength(2);
+  expect(written[1].map((p) => p.type)).toEqual(["configuration", "data"]);
+  expect(onError).toHaveBeenCalledOnce();
+});

@@ -12,6 +12,11 @@ export interface OverlayTexture {
   dispose(): void;
 }
 
+function backingSize(w: number, h: number): { pixelW: number; pixelH: number } {
+  const dpr = typeof window !== "undefined" && window.devicePixelRatio ? window.devicePixelRatio : 1;
+  return { pixelW: Math.max(1, Math.round(w * dpr)), pixelH: Math.max(1, Math.round(h * dpr)) };
+}
+
 export class StatusOverlay {
   readonly mesh: THREE.Mesh;
 
@@ -20,6 +25,7 @@ export class StatusOverlay {
   #makeTexture: (canvas: OverlayCanvas) => OverlayTexture;
   #texture: OverlayTexture;
   #text: string | null = null;
+  #size = { w: 0, h: 0 };
 
   constructor(opts?: { canvas?: OverlayCanvas; makeTexture?: (canvas: OverlayCanvas) => OverlayTexture }) {
     this.#canvas = opts?.canvas ?? document.createElement("canvas");
@@ -43,10 +49,11 @@ export class StatusOverlay {
    * stale storage; dispose and recreate it whenever the pixel size changes.
    */
   applySize(w: number, h: number): void {
-    const dpr = typeof window !== "undefined" && window.devicePixelRatio ? window.devicePixelRatio : 1;
-    const pixelW = Math.max(1, Math.round(w * dpr));
-    const pixelH = Math.max(1, Math.round(h * dpr));
-    if (this.#canvas.width !== pixelW || this.#canvas.height !== pixelH) {
+    const { pixelW, pixelH } = backingSize(w, h);
+    const canvasMatches = this.#canvas.width === pixelW && this.#canvas.height === pixelH;
+    if (canvasMatches && w === this.#size.w && h === this.#size.h) return;
+    this.#size = { w, h };
+    if (!canvasMatches) {
       this.#canvas.width = pixelW;
       this.#canvas.height = pixelH;
       this.#texture.dispose();

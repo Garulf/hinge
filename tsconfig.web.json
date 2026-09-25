@@ -11,6 +11,7 @@
     "test/unit/fold-model.test.ts",
     "test/unit/frame-lifecycle.test.ts",
     "test/unit/input-router.test.ts",
+    "test/unit/screen-routing.test.ts",
     "test/unit/status-overlay.test.ts",
     "test/unit/texture-renderer.test.ts",
     "test/unit/video-pipe.test.ts",

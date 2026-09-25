@@ -38,11 +38,31 @@ function reconstruct(packet: WireMediaPacket): ScrcpyVideoStreamPacket {
   return data;
 }
 
+const SAME_ASPECT_TOLERANCE = 0.02;
+
+function frameHasSize(frame: VideoFrame, size: { width: number; height: number }): boolean {
+  const { displayWidth, displayHeight } = frame as Partial<VideoFrame>;
+  if (!displayWidth || !displayHeight || !size.width || !size.height) return true;
+  const expected = size.width / size.height;
+  return Math.abs(displayWidth / displayHeight - expected) / expected < SAME_ASPECT_TOLERANCE;
+}
+
+export interface VideoPipeDeps {
+  createDecoder?: DecoderFactory;
+  onError?: (message: string) => void;
+  /** The first decoded frame at each new stream size, after start() or a size change. */
+  onFirstFrame?: (w: number, h: number) => void;
+}
+
 export class VideoPipe {
   readonly #target: FrameTarget;
+  readonly #frames: FrameTarget;
   readonly #onSize: (w: number, h: number) => void;
   readonly #createDecoder: DecoderFactory;
   readonly #onError: (message: string) => void;
+  readonly #onFirstFrame: (w: number, h: number) => void;
+  #awaitingFirstFrame = false;
+  #awaitingConfiguration = false;
 
   #info: VideoStreamInfo | null = null;
   #controller: ReadableStreamDefaultController<ScrcpyVideoStreamPacket> | null = null;
@@ -54,23 +74,41 @@ export class VideoPipe {
   // clobber the status overlay for the stream that replaced it.
   #generation = 0;
 
-  constructor(target: FrameTarget, onSize: (w: number, h: number) => void, deps?: { createDecoder?: DecoderFactory; onError?: (message: string) => void }) {
+  constructor(target: FrameTarget, onSize: (w: number, h: number) => void, deps?: VideoPipeDeps) {
     this.#target = target;
     this.#onSize = onSize;
     this.#createDecoder = deps?.createDecoder ?? defaultDecoderFactory;
     this.#onError = deps?.onError ?? (() => {});
+    this.#onFirstFrame = deps?.onFirstFrame ?? (() => {});
+    this.#frames = {
+      get disposed() {
+        return target.disposed;
+      },
+      setFrame: (frame) => this.#deliver(frame),
+      end: () => target.end(),
+    };
   }
 
   start(info: VideoStreamInfo): void {
     this.#teardown();
     this.#info = info;
-    this.#lastSize = { width: info.width, height: info.height };
-    this.#onSize(info.width, info.height);
+    this.#sizeChanged({ width: info.width, height: info.height });
     this.#openStream();
   }
 
   push(packet: WireMediaPacket): void {
-    this.#controller?.enqueue(reconstruct(packet));
+    if (this.#awaitingConfiguration) {
+      // A fresh decoder rejects anything before its configuration, so the
+      // packets still in flight from before a reset-video are dropped.
+      if (packet.type !== "configuration") return;
+      this.#awaitingConfiguration = false;
+      this.#openStream();
+    }
+    try {
+      this.#controller?.enqueue(reconstruct(packet));
+    } catch {
+      // the decoder pipe failed and cancelled this stream; its error handler takes over
+    }
   }
 
   end(): void {
@@ -93,24 +131,39 @@ export class VideoPipe {
     });
     const decoder = this.#createDecoder({
       codec: info.codecId,
-      renderer: new TextureFrameRenderer(this.#target),
+      renderer: new TextureFrameRenderer(this.#frames),
       hardwareAcceleration: "no-preference",
       optimizeForLatency: true,
     });
     this.#decoder = decoder;
-    this.#unsubscribeSize = decoder.sizeChanged((e) => {
-      this.#lastSize = { width: e.width, height: e.height };
-      this.#onSize(e.width, e.height);
-    });
+    this.#unsubscribeSize = decoder.sizeChanged((e) => this.#sizeChanged(e));
     readable.pipeTo(decoder.writable).catch((e: unknown) => {
       if (generation !== this.#generation) return;
       console.error("video decode pipe failed", e);
+      this.#teardown();
+      this.#awaitingConfiguration = true;
       this.#onError(e instanceof Error ? e.message : String(e));
     });
   }
 
+  #sizeChanged(size: { width: number; height: number }): void {
+    this.#lastSize = size;
+    this.#awaitingFirstFrame = true;
+    this.#onSize(size.width, size.height);
+  }
+
+  #deliver(frame: VideoFrame): void {
+    const first = this.#awaitingFirstFrame && frameHasSize(frame, this.#lastSize);
+    this.#target.setFrame(frame);
+    if (first) {
+      this.#awaitingFirstFrame = false;
+      this.#onFirstFrame(this.#lastSize.width, this.#lastSize.height);
+    }
+  }
+
   #teardown(): void {
     this.#generation++;
+    this.#awaitingConfiguration = false;
     try {
       this.#controller?.close();
     } catch {

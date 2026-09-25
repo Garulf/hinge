@@ -1,5 +1,9 @@
-import { classifyScreen, FOLD7, type ScreenClass } from "../shared/fold7";
-import { defaultScale, workLayout } from "../shared/layout";
+import { DecodeRecovery } from "../shared/decode-recovery";
+import { FoldDirector, type DirectorOutput } from "../shared/fold-director";
+import { classifyScreen, type ScreenClass } from "../shared/fold7";
+import { bodySizePx, defaultPxPerMm, FOLD7_BODY } from "../shared/layout";
+import type { Rotation } from "../shared/screen-uv";
+import { WindowSizer } from "../shared/window-sizer";
 import type { SessionStatus } from "../shared/wire";
 import { InputRouter } from "./input/input-router";
 import { PortClient, receivePort } from "./port-client";
@@ -22,58 +26,84 @@ function statusText(status: SessionStatus): string | null {
   }
 }
 
-const scene = new PhoneScene(document.body);
+async function loadModel(): Promise<ArrayBuffer> {
+  const response = await fetch(new URL("fold7.glb", window.location.href));
+  if (!response.ok) throw new Error(`fold7.glb: HTTP ${response.status}`);
+  return response.arrayBuffer();
+}
+
+const director = new FoldDirector({ view: "work" });
+const windowSizer = new WindowSizer((size, rotation) => window.hinge.setWindowSize(size.w, size.h, rotation));
+const decodeRecovery = new DecodeRecovery();
+let pxPerMm: number | null = null;
 let cls: ScreenClass | null = null;
-let scale: number | null = null;
 let videoSize: { w: number; h: number } | null = null;
 let client: PortClient | null = null;
 
-async function onSize(w: number, h: number): Promise<void> {
-  videoSize = { w, h };
-  cls = classifyScreen(w, h, cls);
-  scale ??= defaultScale(w, h, cls, await window.hinge.workAreaHeight());
-  const layout = workLayout(w, h, cls, scale);
-  scene.applyLayout(layout);
-  window.hinge.setContentSize(layout.window.w, layout.window.h);
+/** The window covers the model's current pose: open once the inner screen is lit or the hinge has started to move. */
+function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
+  if (pxPerMm === null) return;
+  const open = out.lit === "inner" || out.angle > 1;
+  windowSizer.update(bodySizePx(FOLD7_BODY, open, rotation, pxPerMm), rotation, out.settled);
+  windowSizer.verify({ w: innerWidth, h: innerHeight }, performance.now());
 }
 
-const pipe = new VideoPipe(scene, (w, h) => void onSize(w, h), {
-  onError: (message) => scene.setStatus(`Video error: ${message}`),
+const scene = new PhoneScene(document.body, director, { loadModel, onTick: sizeWindow });
+
+void window.hinge.workAreaHeight().then((height) => {
+  pxPerMm = defaultPxPerMm(FOLD7_BODY, height);
+  scene.setPxPerMm(pxPerMm);
 });
+
+function onSize(w: number, h: number): void {
+  videoSize = { w, h };
+  cls = classifyScreen(w, h, cls);
+  director.streamClass(cls);
+  scene.streamClass(cls);
+}
+
+function onFirstFrame(): void {
+  director.firstFrame();
+  scene.firstFrameOfClass();
+}
+
+function onDecodeError(message: string): void {
+  if (decodeRecovery.onError(performance.now()) === "reset") client?.send({ kind: "control", intent: { type: "reset-video" } });
+  else scene.setStatus(`Video error: ${message}`);
+}
+
+const pipe = new VideoPipe(scene, onSize, { onError: onDecodeError, onFirstFrame });
 
 const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
 new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
 
-/**
- * Before the first frame there is no stream size to lay out from, so the
- * window and overlay would otherwise sit at their raw BrowserWindow default
- * (an odd, wrongly proportioned box that can't even be dragged sensibly).
- * Lay out for the cover screen, portrait, at the usual default scale so the
- * first status the user sees renders at a normal size and DPR.
- */
-async function applyPlaceholderLayout(): Promise<void> {
-  const placeholderCls: ScreenClass = { screen: "cover", rotated: false };
-  const spec = FOLD7[placeholderCls.screen];
-  const workAreaHeight = await window.hinge.workAreaHeight();
-  const placeholderScale = defaultScale(spec.px.w, spec.px.h, placeholderCls, workAreaHeight);
-  const layout = workLayout(spec.px.w, spec.px.h, placeholderCls, placeholderScale);
-  scene.applyLayout(layout);
-  window.hinge.setContentSize(layout.window.w, layout.window.h);
-}
-void applyPlaceholderLayout();
-
-void receivePort().then((port) => {
+void Promise.all([receivePort(), scene.ready]).then(([port]) => {
   client = new PortClient(port);
   client.on((msg) => {
     if (msg.kind === "video-start") pipe.start(msg.info);
     else if (msg.kind === "video-packet") pipe.push(msg.packet);
-    else if (msg.kind === "video-end") pipe.end();
-    else if (msg.kind === "status") scene.setStatus(statusText(msg.status));
+    else if (msg.kind === "video-end") {
+      pipe.end();
+      director.streamEnded();
+    } else if (msg.kind === "status") scene.setStatus(statusText(msg.status));
+    else if (msg.kind === "posture") director.posture(msg.reading);
   });
   client.send({ kind: "ready" });
 });
 
 (window as unknown as { __hinge: unknown }).__hinge = {
-  stats: () => ({ ...pipe.stats(), cls, window: { w: innerWidth, h: innerHeight } }),
+  stats: () => {
+    const out = scene.output();
+    return {
+      ...pipe.stats(),
+      cls,
+      window: { w: innerWidth, h: innerHeight },
+      angle: out?.angle ?? null,
+      lit: out?.lit ?? null,
+      rotation: scene.rotation(),
+      badge: out?.badge ?? null,
+      settled: out?.settled ?? false,
+    };
+  },
 };

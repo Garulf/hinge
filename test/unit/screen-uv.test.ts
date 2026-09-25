@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { screenUvToStream, streamSampleMatrix, type Rotation } from "../../src/shared/screen-uv";
+import { insideScreenMask, screenUvToStream, streamSampleMatrix, type Rotation } from "../../src/shared/screen-uv";
 
 const ROTATIONS: Rotation[] = [0, 1, 2, 3];
 
@@ -69,4 +69,18 @@ test.each(ROTATIONS)("rotation %i: the matrix (s right, t up) and the function (
       expect(fromMatrix.t).toBeCloseTo(1 - fromFn.y, 10);
     }
   }
+});
+
+test("insideScreenMask cuts the rounded corners, measured in screen pixels", () => {
+  const radius: [number, number] = [0.1, 0.05];
+  const pixels: [number, number] = [100, 200];
+  expect(insideScreenMask(0.5, 0.5, radius, pixels)).toBe(true);
+  expect(insideScreenMask(0.5, 0.001, radius, pixels)).toBe(true);
+  expect(insideScreenMask(0.001, 0.5, radius, pixels)).toBe(true);
+  expect(insideScreenMask(0.01, 0.005, radius, pixels)).toBe(false);
+  expect(insideScreenMask(0.99, 0.995, radius, pixels)).toBe(false);
+  // 10 px radius: a point 2 px in from both edges is outside, 4 px in along the diagonal of a 10 px arc is inside.
+  expect(insideScreenMask(0.02, 0.01, radius, pixels)).toBe(false);
+  expect(insideScreenMask(0.04, 0.02, radius, pixels)).toBe(true);
+  expect(insideScreenMask(1.01, 0.5, radius, pixels)).toBe(false);
 });

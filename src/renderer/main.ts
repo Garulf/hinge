@@ -4,8 +4,9 @@ import { classifyScreen, type ScreenClass } from "../shared/fold7";
 import { bodySizePx, defaultPxPerMm, FOLD7_BODY } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
 import { WindowSizer } from "../shared/window-sizer";
-import type { SessionStatus } from "../shared/wire";
+import type { MainToRenderer, SessionStatus } from "../shared/wire";
 import { InputRouter } from "./input/input-router";
+import { MediaGate } from "./media-gate";
 import { PortClient, receivePort } from "./port-client";
 import { PhoneScene } from "./scene/phone-scene";
 import { VideoPipe } from "./video-pipe";
@@ -25,6 +26,8 @@ function statusText(status: SessionStatus): string | null {
       return null;
   }
 }
+
+const SCENE_READY_CAP_MS = 5000;
 
 async function loadModel(): Promise<ArrayBuffer> {
   const response = await fetch(new URL("fold7.glb", window.location.href));
@@ -83,16 +86,22 @@ const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
 new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
 
-void Promise.all([receivePort(), scene.ready]).then(([port]) => {
+function onStreamMessage(msg: Exclude<MainToRenderer, { kind: "status" }>): void {
+  if (msg.kind === "video-start") pipe.start(msg.info);
+  else if (msg.kind === "video-packet") pipe.push(msg.packet);
+  else if (msg.kind === "video-end") {
+    pipe.end();
+    director.streamEnded();
+  } else director.posture(msg.reading);
+}
+
+const streamGate = new MediaGate(onStreamMessage, scene.ready, SCENE_READY_CAP_MS);
+
+void receivePort().then((port) => {
   client = new PortClient(port);
   client.on((msg) => {
-    if (msg.kind === "video-start") pipe.start(msg.info);
-    else if (msg.kind === "video-packet") pipe.push(msg.packet);
-    else if (msg.kind === "video-end") {
-      pipe.end();
-      director.streamEnded();
-    } else if (msg.kind === "status") scene.setStatus(statusText(msg.status));
-    else if (msg.kind === "posture") director.posture(msg.reading);
+    if (msg.kind === "status") scene.setStatus(statusText(msg.status));
+    else streamGate.push(msg);
   });
   client.send({ kind: "ready" });
 });

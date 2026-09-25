@@ -5,7 +5,7 @@ import type { DirectorOutput, FoldDirector } from "../../shared/fold-director";
 import type { Rotation } from "../../shared/screen-uv";
 import { StatusOverlay } from "../status-overlay";
 import type { FrameTarget } from "../texture-renderer";
-import { FoldModel } from "./fold-model";
+import { FoldModel, type ScreenExtras } from "./fold-model";
 import { FrameLifecycle } from "./frame-lifecycle";
 import { ScreenMaterial } from "./screen-material";
 import { ScreenRouting } from "./screen-routing";
@@ -56,22 +56,30 @@ function boxInFrameOf(frame: THREE.Object3D, object: THREE.Object3D): THREE.Box3
 
 const SMOOTH_FRAME_COUNT = 10;
 const SMOOTH_FRAME_GAP_MS = 100;
-const SMOOTH_FRAMES_TIMEOUT_MS = 60_000;
+const SMOOTH_FRAMES_CAP_MS = 10_000;
 
 /**
- * Resolves once animation frames arrive steadily again. A software GL keeps
- * building pipelines in the GPU process well after the first draw, which
- * stalls the compositor (and the video decoder behind it) for seconds.
+ * Resolves once animation frames arrive steadily again, or after the cap
+ * (animation frames stop altogether while the window is hidden). A software
+ * GL keeps building pipelines in the GPU process well after the first draw,
+ * which stalls the compositor (and the video decoder behind it) for seconds.
  */
 function smoothFrames(): Promise<void> {
   return new Promise((resolve) => {
-    const start = performance.now();
-    let last = start;
+    let done = false;
+    const finish = () => {
+      done = true;
+      clearTimeout(cap);
+      resolve();
+    };
+    const cap = setTimeout(finish, SMOOTH_FRAMES_CAP_MS);
+    let last = performance.now();
     let steady = 0;
     const tick = (now: number) => {
+      if (done) return;
       steady = now - last < SMOOTH_FRAME_GAP_MS ? steady + 1 : 0;
       last = now;
-      if (steady >= SMOOTH_FRAME_COUNT || now - start > SMOOTH_FRAMES_TIMEOUT_MS) resolve();
+      if (steady >= SMOOTH_FRAME_COUNT) finish();
       else requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -118,7 +126,11 @@ export interface PhoneSceneOptions {
  */
 export class PhoneScene implements FrameTarget {
   disposed = false;
-  /** Settles once the model is on screen with every shader compiled (or failed to load), so the stream can start without stalls. */
+  /**
+   * Settles once the model is on screen with every shader compiled (or it
+   * failed to load); on a software GL also once the warm-up draws are done
+   * and frames arrive steadily.
+   */
   readonly ready: Promise<void>;
 
   readonly #renderer: THREE.WebGLRenderer;
@@ -148,11 +160,14 @@ export class PhoneScene implements FrameTarget {
   #lastTime: number | null = null;
   #frameDirty = true;
   #layoutDirty = true;
+  #fatalStatus: string | null = null;
+  readonly #software: boolean;
 
   constructor(canvasParent: HTMLElement, director: FoldDirector, options: PhoneSceneOptions) {
     this.#director = director;
     this.#onTick = options.onTick ?? (() => {});
     const software = isSoftwareGl();
+    this.#software = software;
     this.#renderer = new THREE.WebGLRenderer({ antialias: !software, alpha: true });
     this.#renderer.setClearColor(0x000000, 0);
     this.#renderer.autoClear = false;
@@ -174,7 +189,8 @@ export class PhoneScene implements FrameTarget {
       .then((model) => this.#attach(model))
       .catch((e: unknown) => {
         console.error("failed to load fold7.glb", e);
-        this.setStatus(`Could not load the phone model: ${e instanceof Error ? e.message : String(e)}`);
+        this.#fatalStatus = `Could not load the phone model: ${e instanceof Error ? e.message : String(e)}`;
+        this.setStatus(null);
       });
 
     this.#renderer.setAnimationLoop((time) => this.#animationFrame(time));
@@ -229,8 +245,9 @@ export class PhoneScene implements FrameTarget {
     this.#layoutDirty = true;
   }
 
+  /** A model load failure stays on screen over any later status until the app restarts. */
   setStatus(text: string | null): void {
-    this.#overlay.setText(text);
+    this.#overlay.setText(this.#fatalStatus ?? text);
     this.#layoutDirty = true;
   }
 
@@ -238,11 +255,13 @@ export class PhoneScene implements FrameTarget {
     return this.#camera;
   }
 
-  /** The mesh of the screen showing the stream, or null before the model or a stream. */
-  litScreenMesh(): THREE.Mesh | null {
-    const screen = this.#out?.lit ?? null;
-    if (!this.#model || !screen) return null;
-    return this.#model[screen].mesh;
+  /** The screen showing the stream, or null before the model or a stream and while the lit inner screen is folded away. */
+  litScreen(): { mesh: THREE.Mesh; extras: ScreenExtras } | null {
+    const out = this.#out;
+    const screen = out?.lit ?? null;
+    if (!this.#model || !out || !screen) return null;
+    if (screen === "inner" && !out.innerVisible) return null;
+    return this.#model[screen];
   }
 
   rotation(): Rotation {
@@ -271,7 +290,10 @@ export class PhoneScene implements FrameTarget {
     this.#pivot.add(model.root);
     this.#layoutDirty = true;
     await this.#precompile(model);
-    await smoothFrames();
+    if (this.#software) {
+      this.#warmUp(model);
+      await smoothFrames();
+    }
   }
 
   /**
@@ -289,9 +311,8 @@ export class PhoneScene implements FrameTarget {
     await this.#renderer.compileAsync(this.#scene, this.#camera);
     await this.#renderer.compileAsync(this.#overlayScene, this.#overlayCamera);
     for (const program of this.#renderer.info.programs ?? []) program.getUniforms();
-    this.#warmUp(model);
-    this.#renderer.render(this.#overlayScene, this.#overlayCamera);
     for (const o of hidden) o.visible = false;
+    this.#overlay.mesh.visible = this.#overlay.text !== null;
     this.#layoutDirty = true;
   }
 
@@ -304,7 +325,9 @@ export class PhoneScene implements FrameTarget {
     const materials = this.#materials;
     if (!materials) return;
     const size = 16;
-    const frame = new VideoFrame(new Uint8Array((size * size * 3) / 2), { format: "I420", codedWidth: size, codedHeight: size, timestamp: 0 });
+    const black = new Uint8Array((size * size * 3) / 2).fill(128);
+    black.fill(16, 0, size * size);
+    const frame = new VideoFrame(black, { format: "I420", codedWidth: size, codedHeight: size, timestamp: 0 });
     const texture = videoTexture(frame);
     for (const screen of SCREENS) {
       materials[screen].setVideo(texture);
@@ -316,7 +339,8 @@ export class PhoneScene implements FrameTarget {
       this.#renderer.render(this.#scene, this.#camera);
     }
     for (const screen of SCREENS) {
-      materials[screen].setVideo(this.#routing.videoScreen === screen ? this.#live : null);
+      const held = this.#cloneTextures.get(screen) ?? null;
+      materials[screen].setVideo(this.#routing.videoScreen === screen ? this.#live : held);
       materials[screen].setBrightness(0);
     }
     texture.dispose();

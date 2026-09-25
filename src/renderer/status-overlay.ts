@@ -65,6 +65,10 @@ export class StatusOverlay {
     this.#redraw();
   }
 
+  get text(): string | null {
+    return this.#text;
+  }
+
   setText(text: string | null): void {
     this.#text = text;
     this.mesh.visible = text !== null;

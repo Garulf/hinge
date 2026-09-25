@@ -42,8 +42,11 @@ function fakeCanvas() {
 function fakeScene(rotation: 0 | 1 | 2 | 3 = 0) {
   const camera = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 1000);
   camera.position.z = 100;
-  const screenMesh = new THREE.Mesh(new THREE.PlaneGeometry(100, 100));
-  return { camera: () => camera, litScreenMesh: (): THREE.Mesh | null => screenMesh, rotation: () => rotation };
+  const screen = {
+    mesh: new THREE.Mesh(new THREE.PlaneGeometry(100, 100)),
+    extras: { punchHole: [0.5, 0.95, 0.02] as [number, number, number], cornerRadiusUv: [0.1, 0.1] as [number, number], pixelSize: [100, 100] as [number, number] },
+  };
+  return { camera: () => camera, litScreen: (): typeof screen | null => screen, rotation: () => rotation };
 }
 
 let fakeWindow: ReturnType<typeof fakeTarget> & { hinge: { beginDrag: ReturnType<typeof vi.fn>; endDrag: ReturnType<typeof vi.fn> } };
@@ -202,10 +205,17 @@ test("scrolling maps through the same rotation", () => {
 
 test("with no lit screen a left press drags the window", () => {
   const canvas = fakeCanvas();
-  const scene = { ...fakeScene(), litScreenMesh: () => null };
+  const scene = { ...fakeScene(), litScreen: () => null };
   const sent: ControlIntent[] = [];
   new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => ({ w: 100, h: 100 }), (intent) => sent.push(intent));
   canvas.fire("pointerdown", { pointerId: 10, button: 0, buttons: 1, ...CENTER });
+  expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledOnce();
+  expect(sent).toEqual([]);
+});
+
+test("a press in a masked-off rounded corner of the lit screen drags the window", () => {
+  const { canvas, sent } = setup();
+  canvas.fire("pointerdown", { pointerId: 11, button: 0, buttons: 1, clientX: 1, clientY: 1 });
   expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledOnce();
   expect(sent).toEqual([]);
 });

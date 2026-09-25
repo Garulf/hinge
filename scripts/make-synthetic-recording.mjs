@@ -13,10 +13,14 @@ const FRAME_MS = 33;
 const FRAME_PTS_US = 33333;
 const DEVICE_NAME = "synthetic-fold7";
 
+// The renderer holds stream messages for up to 5 s while the scene loads
+// and then catches up in a burst, so the first segment runs longer than
+// that, and every segment is long enough for a software GL, rendering a
+// frame every few hundred milliseconds, to settle in each pose.
 const SEGMENTS = [
-  { w: 544, h: 1264, secs: 2, label: "COVER" },
-  { w: 984, h: 1092, secs: 2, label: "INNER" },
-  { w: 1092, h: 984, secs: 1, label: "INNER LAND" },
+  { w: 544, h: 1264, secs: 7, label: "COVER" },
+  { w: 984, h: 1092, secs: 4, label: "INNER" },
+  { w: 1092, h: 984, secs: 3, label: "INNER LAND" },
 ];
 
 const STATES_LINE = "@states 0=CLOSED,1=TENT,2=HALF_OPENED,3=OPENED,4=CONCURRENT_INNER_DEFAULT,5=CONCURRENT_OUTER_DEFAULT";

@@ -39,3 +39,17 @@ export function streamSampleMatrix(rotation: Rotation): number[] {
   const t = TABLE[rotation];
   return [t.a, 0 - t.d, 0, t.b, 0 - t.e, 0, t.c, 1 - t.f, 1];
 }
+
+/**
+ * Whether a screen UV falls inside the visible screen: the rounded rectangle
+ * the screen shader draws, with the corner radius measured in screen pixels
+ * (the average of the two UV radii, as the shader uses).
+ */
+export function insideScreenMask(u: number, v: number, cornerRadiusUv: [number, number], pixelSize: [number, number]): boolean {
+  const [w, h] = pixelSize;
+  const radius = (cornerRadiusUv[0] * w + cornerRadiusUv[1] * h) / 2;
+  const qx = Math.abs(u * w - w / 2) - w / 2 + radius;
+  const qy = Math.abs(v * h - h / 2) - h / 2 + radius;
+  const distance = Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - radius;
+  return distance <= 0;
+}

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
-import { screenUvToStream } from "../../shared/screen-uv";
+import { insideScreenMask, screenUvToStream } from "../../shared/screen-uv";
 import { streamToDevice, TouchTracker, type StreamPoint } from "../../shared/touch";
 import type { ControlIntent } from "../../shared/wire";
 import type { PhoneScene } from "../scene/phone-scene";
@@ -122,18 +122,19 @@ export class InputRouter {
   }
 
   /**
-   * Only the lit screen takes touches: a press on the dark screen, the body
-   * or around the phone is a bezel press. three raycasts the skinned inner
-   * screen in its current (bent) pose.
+   * Only the lit screen takes touches: a press on the dark or folded-away
+   * screen, its masked-off corners, the body or around the phone is a bezel
+   * press. three raycasts the skinned inner screen in its current (bent) pose.
    */
   #hitOf(e: PointerEvent | WheelEvent): StreamPoint | null {
-    const screen = this.#scene.litScreenMesh();
+    const screen = this.#scene.litScreen();
     if (!screen) return null;
     const rect = this.#canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
     this.#raycaster.setFromCamera(ndc, this.#scene.camera());
-    const [hit] = this.#raycaster.intersectObject(screen);
+    const [hit] = this.#raycaster.intersectObject(screen.mesh);
     if (!hit?.uv) return null;
+    if (!insideScreenMask(hit.uv.x, hit.uv.y, screen.extras.cornerRadiusUv, screen.extras.pixelSize)) return null;
     return screenUvToStream(hit.uv.x, hit.uv.y, this.#scene.rotation());
   }
 }

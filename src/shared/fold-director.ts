@@ -36,6 +36,7 @@ export class FoldDirector {
   #announcedClass: ScreenClass | null = null;
   #lastPosture: Posture | null = null;
   #lastRotation: 0 | 1 | 2 | 3 | null = null;
+  #lastLandscape: 1 | 3 | null = null;
   #brightness: Record<ScreenKind, number> = { cover: 0, inner: 0 };
   #brightnessTarget: Record<ScreenKind, number> = { cover: 0, inner: 0 };
   /**
@@ -70,6 +71,7 @@ export class FoldDirector {
       }
     }
     if (reading.rotation !== null) this.#lastRotation = reading.rotation;
+    if (reading.rotation === 1 || reading.rotation === 3) this.#lastLandscape = reading.rotation;
   }
 
   streamClass(cls: ScreenClass): void {
@@ -139,9 +141,10 @@ export class FoldDirector {
     if (cls && cls.rotated) {
       // Only 1 and 3 are valid rotations for a rotated class; a stale 0 or 2
       // (from before the device turned, or a posture reading that predates
-      // this class) cannot be shown as an unrotated stream.
+      // this class) cannot be shown as an unrotated stream, so the last
+      // landscape rotation seen stands in for it.
       if (this.#lastRotation === 1 || this.#lastRotation === 3) return this.#lastRotation;
-      return 1;
+      return this.#lastLandscape ?? 1;
     }
     return this.#lastRotation ?? 0;
   }

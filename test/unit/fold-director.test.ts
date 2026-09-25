@@ -231,6 +231,22 @@ test("a rotated class with a posture rotation of 0 or 2 (invalid for a rotated c
   expect(two.tick(16).rotation).toBe(1);
 });
 
+test("a rotated class whose posture reading says 0 or 2 keeps the last landscape rotation seen", () => {
+  const director = new FoldDirector();
+  director.streamClass(INNER_ROTATED);
+  director.posture(reading({ rotation: 3 }));
+  expect(director.tick(16).rotation).toBe(3);
+
+  director.posture(reading({ rotation: 0 }));
+  expect(director.tick(16).rotation).toBe(3);
+  director.posture(reading({ rotation: 2 }));
+  expect(director.tick(16).rotation).toBe(3);
+
+  director.posture(reading({ rotation: 1 }));
+  director.posture(reading({ rotation: 0 }));
+  expect(director.tick(16).rotation).toBe(1);
+});
+
 test("innerVisible is false below 25 degrees and true at or above it", () => {
   const director = new FoldDirector();
   director.streamClass(COVER);

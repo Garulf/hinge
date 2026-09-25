@@ -59,14 +59,15 @@ test("a resize that never lands is nudged through again, a bounded number of tim
   s.update(CLOSED, 0, true);
   s.update(OPEN, 0, true);
   s.verify(CLOSED, 0);
-  s.verify(CLOSED, 400);
+  s.verify(CLOSED, 399);
   expect(requests).toHaveLength(2);
   s.verify(CLOSED, 500);
   expect(requests.slice(2)).toEqual([[{ w: OPEN.w + 1, h: OPEN.h }, 0], [OPEN, 0]]);
   s.verify(CLOSED, 1000);
   s.verify(CLOSED, 1500);
+  s.verify(CLOSED, 2000);
   s.verify(CLOSED, 9000);
-  expect(requests).toHaveLength(6);
+  expect(requests).toHaveLength(8);
 });
 
 test("a window that reached its requested size is left alone", () => {
@@ -86,4 +87,13 @@ test("a new request restarts the wait before nudging", () => {
   expect(requests).toHaveLength(2);
   s.verify(CLOSED, 2000);
   expect(requests).toHaveLength(4);
+});
+
+test("a sideways window is nudged along its height, the axis anchored to the fixed edge", () => {
+  const { requests, sizer: s } = sizer();
+  const LANDSCAPE = { w: 158, h: 144 };
+  s.update(LANDSCAPE, 1, true);
+  s.verify(OPEN, 0);
+  s.verify(OPEN, 500);
+  expect(requests.slice(1)).toEqual([[{ w: 158, h: 145 }, 1], [LANDSCAPE, 1]]);
 });

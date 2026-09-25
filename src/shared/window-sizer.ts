@@ -6,8 +6,8 @@ export interface Size {
   h: number;
 }
 
-const NUDGE_AFTER_MS = 500;
-const MAX_NUDGES = 2;
+const NUDGE_AFTER_MS = 400;
+const MAX_NUDGES = 3;
 
 function sameSize(a: Size, b: Size): boolean {
   return a.w === b.w && a.h === b.h;
@@ -47,6 +47,7 @@ export class WindowSizer {
    * On X11 a resize requested while the compositor is stalled can leave the
    * page at its old size even though the window system took the new one,
    * and asking for the same size again is then a no-op; a one pixel detour
+   * along the anchored axis (so the centred axis does not drift by rounding)
    * gets it through.
    */
   verify(actual: Size, nowMs: number): void {
@@ -62,7 +63,9 @@ export class WindowSizer {
     if (nowMs - this.#mismatchSinceMs < NUDGE_AFTER_MS || this.#nudges >= MAX_NUDGES) return;
     this.#nudges++;
     this.#mismatchSinceMs = nowMs;
-    this.#request({ w: requested.w + 1, h: requested.h }, this.#rotation);
+    const sideways = this.#rotation === 1 || this.#rotation === 3;
+    const detour = sideways ? { w: requested.w, h: requested.h + 1 } : { w: requested.w + 1, h: requested.h };
+    this.#request(detour, this.#rotation);
     this.#request(requested, this.#rotation);
   }
 

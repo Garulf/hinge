@@ -45,8 +45,11 @@ function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
   if (pxPerMm === null) return;
   const open = out.lit === "inner" || out.angle > 1;
   windowSizer.update(bodySizePx(FOLD7_BODY, open, rotation, pxPerMm), rotation, out.settled);
-  windowSizer.verify({ w: innerWidth, h: innerHeight }, performance.now());
 }
+
+// Checked on a timer rather than per animation frame, which a busy GPU can
+// hold off for longer than the check is meant to wait.
+setInterval(() => windowSizer.verify({ w: innerWidth, h: innerHeight }, performance.now()), 100);
 
 const scene = new PhoneScene(document.body, director, { loadModel, onTick: sizeWindow });
 

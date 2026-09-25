@@ -4,6 +4,7 @@ import type { MessagePortMain } from "electron";
 import type { PortLike } from "./app-controller";
 import type { MainToRenderer, RendererToMain } from "../shared/wire";
 import type { Rotation } from "../shared/screen-uv";
+import { appIconPath } from "./app-icon";
 import { WindowPlacer } from "./window-resize";
 
 /** onMoved fires when a drag ends or the window system reports a finished move. */
@@ -19,6 +20,7 @@ export function createPhoneWindow(opts?: { onMoved?: () => void }): { win: Brows
     alwaysOnTop: false,
     skipTaskbar: false,
     title: "hinge",
+    icon: appIconPath(),
     show: false,
     webPreferences: { preload: join(import.meta.dirname, "../preload/index.cjs"), sandbox: false },
   });

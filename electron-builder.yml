@@ -1,7 +1,7 @@
 appId: net.garulf.hinge
 productName: hinge
 directories: { output: dist }
-files: ["out/**", "package.json"]
+files: ["out/**", "package.json", "build/icon.png"]
 artifactName: "hinge-${version}-${os}-${arch}.${ext}"
 extraResources:
   - { from: vendor/scrcpy-server-v4.1, to: vendor/scrcpy-server-v4.1 }
@@ -10,7 +10,7 @@ extraResources:
 win:
   target: [nsis, portable]
   icon: build/icon.ico
-  signAndEditExecutable: false
+  signAndEditExecutable: true
   extraResources: [{ from: vendor/platform-tools-win, to: vendor/platform-tools-win }]
 nsis:
   oneClick: false
@@ -25,4 +25,6 @@ linux:
   target: [AppImage, deb]
   category: Utility
   icon: build/icon.png
+  maintainer: "Garulf <535299+Garulf@users.noreply.github.com>"
+  syncDesktopName: true
   extraResources: [{ from: vendor/platform-tools-linux, to: vendor/platform-tools-linux }]

@@ -1,6 +1,7 @@
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
 import { defaultScale, workLayout } from "../shared/layout";
 import type { SessionStatus } from "../shared/wire";
+import { InputRouter } from "./input/input-router";
 import { PortClient } from "./port-client";
 import { PhoneScene } from "./scene/phone-scene";
 import { VideoPipe } from "./video-pipe";
@@ -24,8 +25,11 @@ function statusText(status: SessionStatus): string | null {
 const scene = new PhoneScene(document.body);
 let cls: ScreenClass | null = null;
 let scale: number | null = null;
+let videoSize: { w: number; h: number } | null = null;
+let client: PortClient | null = null;
 
 async function onSize(w: number, h: number): Promise<void> {
+  videoSize = { w, h };
   cls = classifyScreen(w, h, cls);
   scale ??= defaultScale(w, h, cls, await window.hinge.workAreaHeight());
   const layout = workLayout(w, h, cls, scale);
@@ -35,8 +39,12 @@ async function onSize(w: number, h: number): Promise<void> {
 
 const pipe = new VideoPipe(scene, (w, h) => void onSize(w, h));
 
+const canvas = document.body.querySelector("canvas");
+if (!canvas) throw new Error("PhoneScene did not create a canvas");
+new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
+
 window.hinge.onPort((port) => {
-  const client = new PortClient(port);
+  client = new PortClient(port);
   client.on((msg) => {
     if (msg.kind === "video-start") pipe.start(msg.info);
     else if (msg.kind === "video-packet") pipe.push(msg.packet);

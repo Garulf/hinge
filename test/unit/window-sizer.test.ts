@@ -113,3 +113,23 @@ test("without lost-resize nudging a mismatch is left alone", () => {
   s.verify(CLOSED, 5000);
   expect(requests).toHaveLength(1);
 });
+
+test("follow requests each new size directly, growing or shrinking, and never repeats one", () => {
+  const { requests, sizer: s } = sizer();
+  s.update(CLOSED, 0, true);
+  s.follow({ w: 100, h: 158 }, 0);
+  s.follow({ w: 100, h: 158 }, 0);
+  s.follow({ w: 90, h: 158 }, 0);
+  expect(requests).toEqual([[CLOSED, 0], [{ w: 100, h: 158 }, 0], [{ w: 90, h: 158 }, 0]]);
+});
+
+test("after following, a fold update shrinks to its target once settled", () => {
+  const { requests, sizer: s } = sizer();
+  s.update(OPEN, 0, true);
+  s.follow({ w: 200, h: 158 }, 0);
+  s.follow({ w: 150, h: 158 }, 0);
+  s.update(CLOSED, 0, false);
+  expect(requests.at(-1)).toEqual([{ w: 150, h: 158 }, 0]);
+  s.update(CLOSED, 0, true);
+  expect(requests.at(-1)).toEqual([CLOSED, 0]);
+});

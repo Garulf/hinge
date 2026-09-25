@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { anchoredWindowBounds } from "../../src/main/window-resize";
+import { anchoredWindowBounds, WindowPlacer } from "../../src/main/window-resize";
 
 const AREA = { x: 0, y: 0, width: 1920, height: 1080 };
 
@@ -73,4 +73,32 @@ test("a fold at an unchanged rotation still anchors the fixed half's edge", () =
   const sideways = { x: 800, y: 100, width: 945, height: 431 };
   const openSideways = anchoredWindowBounds(sideways, { w: 945, h: 859 }, 1, 1, QHD_125);
   expect(openSideways.y).toBe(sideways.y);
+});
+
+test("growing past the work area's left edge and shrinking back returns the window to where it was", () => {
+  const placer = new WindowPlacer();
+  const start = { x: 48, y: 77, width: 790, height: 870 };
+  let current = placer.place(start, { w: 790, h: 870 }, 0, AREA);
+  expect(current).toEqual(start);
+  for (const w of [900, 1066]) current = placer.place(current, { w, h: 870 }, 0, AREA);
+  expect(current.x).toBe(0);
+  for (const w of [900, 790]) current = placer.place(current, { w, h: 870 }, 0, AREA);
+  expect(current).toEqual(start);
+});
+
+test("once the window has been moved, placement anchors from where it is now", () => {
+  const placer = new WindowPlacer();
+  let current = placer.place({ x: 48, y: 77, width: 790, height: 870 }, { w: 790, h: 870 }, 0, AREA);
+  current = placer.place(current, { w: 1066, h: 870 }, 0, AREA);
+  const moved = { ...current, x: 400, y: 100 };
+  current = placer.place(moved, { w: 790, h: 870 }, 0, AREA);
+  expect(current).toEqual({ x: 676, y: 100, width: 790, height: 870 });
+});
+
+test("a window that came back a pixel off (fractional scaling) still counts as where it was placed", () => {
+  const placer = new WindowPlacer();
+  let current = placer.place({ x: 48, y: 77, width: 790, height: 870 }, { w: 790, h: 870 }, 0, AREA);
+  current = placer.place(current, { w: 1066, h: 870 }, 0, AREA);
+  current = placer.place({ ...current, width: current.width + 1 }, { w: 790, h: 870 }, 0, AREA);
+  expect(current.x).toBe(48);
 });

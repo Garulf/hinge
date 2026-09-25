@@ -1,7 +1,7 @@
 import { DecodeRecovery } from "../shared/decode-recovery";
 import { bodyIsOpen, FoldDirector, type DirectorOutput } from "../shared/fold-director";
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
-import { bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY } from "../shared/layout";
+import { bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY, lerpSize, showcaseSizePx } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
 import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
@@ -10,7 +10,7 @@ import { createWorkletPlayer } from "./audio/worklet-player";
 import { InputRouter } from "./input/input-router";
 import { MediaGate } from "./media-gate";
 import { PortClient, receivePort } from "./port-client";
-import { PhoneScene } from "./scene/phone-scene";
+import { PhoneScene, type ViewState } from "./scene/phone-scene";
 import { VideoPipe } from "./video-pipe";
 
 function statusText(status: SessionStatus): string | null {
@@ -67,19 +67,24 @@ function logPhase(out: DirectorOutput, rotation: Rotation): void {
   if (phases.length > MAX_PHASES) phases.shift();
 }
 
-function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
+function sizeWindow(out: DirectorOutput, rotation: Rotation, view: ViewState): void {
   if (pxPerMm === null) return;
-  const size = bodySizePx(FOLD7_BODY, bodyIsOpen(out), rotation, pxPerMm);
-  windowSizer.update(deviceAlignedSize(size, window.devicePixelRatio), rotation, out.settled);
+  const work = bodySizePx(FOLD7_BODY, bodyIsOpen(out), rotation, pxPerMm);
+  if (view.t === 0 && !view.active) {
+    windowSizer.update(deviceAlignedSize(work, window.devicePixelRatio), rotation, out.settled);
+    return;
+  }
+  const size = lerpSize(work, showcaseSizePx(FOLD7_BODY, rotation, pxPerMm), view.t);
+  windowSizer.follow(deviceAlignedSize(size, window.devicePixelRatio), rotation);
 }
 
 // Checked on a timer rather than per animation frame, which a busy GPU can
 // hold off for longer than the check is meant to wait.
 setInterval(() => windowSizer.verify({ w: innerWidth, h: innerHeight }, performance.now()), 100);
 
-function onTick(out: DirectorOutput, rotation: Rotation): void {
+function onTick(out: DirectorOutput, rotation: Rotation, view: ViewState): void {
   logPhase(out, rotation);
-  sizeWindow(out, rotation);
+  sizeWindow(out, rotation, view);
 }
 
 const scene = new PhoneScene(document.body, director, { loadModel, onTick });
@@ -112,7 +117,11 @@ const audioPipe = new AudioPipe({ createPlayer: createWorkletPlayer, onError: (m
 
 const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
-new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
+new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }), {
+  onAction: (action) => {
+    if (action === "toggle-view") scene.toggleView();
+  },
+});
 
 // Deliberately minimal: only resolves dropped files to real paths and hands them to main.
 window.addEventListener("dragover", (e) => e.preventDefault());
@@ -179,6 +188,7 @@ void receivePort().then((port) => {
       rotation: scene.rotation(),
       badge: out?.badge ?? null,
       settled: out?.settled ?? false,
+      view: scene.view(),
       brightness: { cover: out?.coverBrightness ?? 0, inner: out?.innerBrightness ?? 0 },
     };
   },

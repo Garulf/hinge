@@ -51,7 +51,7 @@ function postureTarget(posture: Posture): number {
 }
 
 export class FoldDirector {
-  #view: ViewMode;
+  #blend: number;
   #workAngle: Spring;
   #trueAngle: Spring;
   #lit: ScreenKind | null = null;
@@ -74,7 +74,7 @@ export class FoldDirector {
   #lastFrameAtMs: number | null = null;
 
   constructor(opts?: { view?: ViewMode; settleMs?: number }) {
-    this.#view = opts?.view ?? "work";
+    this.#blend = opts?.view === "showcase" ? 1 : 0;
     const settleMs = opts?.settleMs ?? DEFAULT_SETTLE_MS;
     this.#workAngle = new Spring({ value: 0, settleMs });
     this.#trueAngle = new Spring({ value: 0, settleMs });
@@ -139,8 +139,9 @@ export class FoldDirector {
     this.#lit = null;
   }
 
-  setView(view: ViewMode): void {
-    this.#view = view;
+  /** `blend` runs from 0 (the work angle) to 1 (the true angle) as the view transition eases between them. */
+  setView(view: ViewMode, blend: number = view === "showcase" ? 1 : 0): void {
+    this.#blend = blend;
   }
 
   tick(dtMs: number): DirectorOutput {
@@ -156,7 +157,8 @@ export class FoldDirector {
     this.#brightness.cover = stepBrightness(this.#brightness.cover, this.#brightnessTarget.cover, dtMs);
     this.#brightness.inner = stepBrightness(this.#brightness.inner, this.#brightnessTarget.inner, dtMs);
 
-    const displayed = this.#view === "work" ? this.#workAngle.value : this.#trueAngle.value;
+    const work = this.#workAngle.value;
+    const displayed = work + (this.#trueAngle.value - work) * this.#blend;
     const fading = this.#brightness.cover !== this.#brightnessTarget.cover || this.#brightness.inner !== this.#brightnessTarget.inner;
 
     return {

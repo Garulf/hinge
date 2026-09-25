@@ -12,6 +12,7 @@ const HOLD_MS = 2000;
  * swing back within the window (about 496 ms and 464 ms respectively).
  */
 const SETTLE_MS = 550;
+const REST_EPSILON_DEG = 0.01;
 
 function clamp(n: number, [min, max]: [number, number]): number {
   return Math.min(Math.max(n, min), max);
@@ -52,6 +53,8 @@ export class Orbit {
       this.#pitch.target = this.#rest.pitch;
       this.#yaw.step(dtMs);
       this.#pitch.step(dtMs);
+      this.#yaw.snapIfSettled(REST_EPSILON_DEG);
+      this.#pitch.snapIfSettled(REST_EPSILON_DEG);
     }
     return { yaw: this.#yaw.value, pitch: this.#pitch.value };
   }

@@ -20,6 +20,20 @@ export function bodySizePx(body: BodyDims, open: boolean, rotation: 0 | 1 | 2 | 
   return rotated ? { w: h, h: w } : { w, h };
 }
 
+const SHOWCASE_WIDTH_FACTOR = 1.35;
+
+/** The work view's height and room across for the angled open phone and its shadow: 1.35 times the open body's width. */
+export function showcaseSizePx(body: BodyDims, rotation: 0 | 1 | 2 | 3, pxPerMm: number): { w: number; h: number } {
+  const w = Math.round(SHOWCASE_WIDTH_FACTOR * body.openWidthMm * pxPerMm);
+  const h = Math.round(body.heightMm * pxPerMm);
+  const rotated = rotation === 1 || rotation === 3;
+  return rotated ? { w: h, h: w } : { w, h };
+}
+
+export function lerpSize(a: { w: number; h: number }, b: { w: number; h: number }, t: number): { w: number; h: number } {
+  return { w: Math.round(a.w + (b.w - a.w) * t), h: Math.round(a.h + (b.h - a.h) * t) };
+}
+
 const MAX_ALIGN_STEP_PX = 16;
 const WHOLE_PX_EPSILON = 1e-6;
 

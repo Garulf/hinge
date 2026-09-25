@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { anchoredRect, bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY, unionSize, type Rect } from "../../src/shared/layout";
+import { anchoredRect, bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY, lerpSize, showcaseSizePx, unionSize, type Rect } from "../../src/shared/layout";
 
 test("FOLD7_BODY matches the measured dimensions", () => {
   expect(FOLD7_BODY).toEqual({ openWidthMm: 143.7, closedWidthMm: 72.1, heightMm: 158.4 });
@@ -98,4 +98,23 @@ test("deviceAlignedSize: 1.25 rounds up to a multiple of 4 CSS px (5 device px)"
 
 test("deviceAlignedSize: a scale with no whole-pixel CSS size nearby keeps the size as it is", () => {
   expect(deviceAlignedSize({ w: 431, h: 945 }, 1.0123)).toEqual({ w: 431, h: 945 });
+});
+
+test("showcaseSizePx: the work view's height and 1.35 times the open body's width, turned with the phone", () => {
+  const pxPerMm = 5;
+  const open = bodySizePx(FOLD7_BODY, true, 0, pxPerMm);
+  expect(showcaseSizePx(FOLD7_BODY, 0, pxPerMm)).toEqual({ w: Math.round(1.35 * FOLD7_BODY.openWidthMm * pxPerMm), h: open.h });
+  expect(showcaseSizePx(FOLD7_BODY, 2, pxPerMm)).toEqual(showcaseSizePx(FOLD7_BODY, 0, pxPerMm));
+  const portrait = showcaseSizePx(FOLD7_BODY, 0, pxPerMm);
+  expect(showcaseSizePx(FOLD7_BODY, 1, pxPerMm)).toEqual({ w: portrait.h, h: portrait.w });
+  expect(showcaseSizePx(FOLD7_BODY, 3, pxPerMm)).toEqual({ w: portrait.h, h: portrait.w });
+});
+
+test("lerpSize: whole pixels from a at 0 to b at 1", () => {
+  const a = { w: 360, h: 800 };
+  const b = { w: 971, h: 800 };
+  expect(lerpSize(a, b, 0)).toEqual(a);
+  expect(lerpSize(a, b, 1)).toEqual(b);
+  expect(lerpSize(a, b, 0.5)).toEqual({ w: 666, h: 800 });
+  expect(lerpSize(b, a, 0.25)).toEqual({ w: 818, h: 800 });
 });

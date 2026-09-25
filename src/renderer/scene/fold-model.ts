@@ -31,6 +31,29 @@ function screenExtras(node: THREE.Object3D): ScreenExtras {
   return { punchHole, cornerRadiusUv, pixelSize };
 }
 
+/** The box of an object's non-skinned meshes in the frame of `frame`; skinned meshes span both halves. */
+function rigidBox(object: THREE.Object3D, frame: THREE.Object3D): THREE.Box3 {
+  frame.updateWorldMatrix(true, true);
+  const worldToFrame = frame.matrixWorld.clone().invert();
+  const box = new THREE.Box3();
+  object.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || (mesh as THREE.SkinnedMesh).isSkinnedMesh) return;
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+    box.union(mesh.geometry.boundingBox!.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(worldToFrame, mesh.matrixWorld)));
+  });
+  return box;
+}
+
+const corner = new THREE.Vector3();
+
+function expandByCorners(target: THREE.Box3, box: THREE.Box3, matrix: THREE.Matrix4): void {
+  for (let i = 0; i < 8; i++) {
+    corner.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z);
+    target.expandByPoint(corner.applyMatrix4(matrix));
+  }
+}
+
 function parseGltf(data: ArrayBuffer): Promise<THREE.Object3D> {
   return new Promise((resolve, reject) => {
     new GLTFLoader().parse(data, "", (gltf) => resolve(gltf.scene), reject);
@@ -48,6 +71,9 @@ export class FoldModel {
   readonly #boneCover: THREE.Object3D;
   readonly #innerScreen: THREE.Object3D;
   readonly #skinned: THREE.SkinnedMesh[] = [];
+  readonly #fixedBox: THREE.Box3;
+  readonly #coverBoxInHinge: THREE.Box3;
+  readonly #openRadius: number;
 
   static async load(data: ArrayBuffer): Promise<FoldModel> {
     return new FoldModel(await parseGltf(data));
@@ -81,6 +107,27 @@ export class FoldModel {
       }
     });
     this.setAngle(180);
+    this.#fixedBox = rigidBox(this.fixedHalf, this.root);
+    this.#coverBoxInHinge = rigidBox(this.#coverHalf, this.#hinge);
+    this.#openRadius = this.#fixedBox.clone().union(rigidBox(this.#coverHalf, this.root)).getBoundingSphere(new THREE.Sphere()).radius;
+  }
+
+  /** The bounding sphere radius of the open body, in metres. */
+  openRadius(): number {
+    return this.#openRadius;
+  }
+
+  /**
+   * The world box of the current pose, from the two rigid halves' boxes
+   * (sixteen corners) rather than the skinned screens, so it is cheap
+   * enough to take every frame.
+   */
+  poseBox(target = new THREE.Box3()): THREE.Box3 {
+    this.root.updateWorldMatrix(true, true);
+    target.makeEmpty();
+    expandByCorners(target, this.#fixedBox, this.root.matrixWorld);
+    expandByCorners(target, this.#coverBoxInHinge, this.#hinge.matrixWorld);
+    return target;
   }
 
   setAngle(degrees: number): void {

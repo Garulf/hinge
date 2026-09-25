@@ -87,3 +87,52 @@ test("ScreenMaterial masks in screen pixels and samples through the rotation tra
   material.setBrightness(0.5);
   expect(material.uniforms.brightness.value).toBe(0.5);
 });
+
+test("poseBox follows the rigid halves: the body's width open and closed, and deeper when half open", () => {
+  model.root.position.set(0, 0, 0);
+  model.setAngle(180);
+  const open = model.poseBox();
+  expect(Math.abs((open.max.x - open.min.x) * 1000 - model.bodyWidthMm())).toBeLessThanOrEqual(0.5);
+  expect(Math.abs((open.max.y - open.min.y) * 1000 - FOLD7_BODY.heightMm)).toBeLessThanOrEqual(0.5);
+
+  model.setAngle(0);
+  const closed = model.poseBox();
+  expect(Math.abs((closed.max.x - closed.min.x) * 1000 - model.bodyWidthMm())).toBeLessThanOrEqual(0.5);
+
+  model.setAngle(100);
+  const half = model.poseBox();
+  expect((half.max.z - half.min.z) * 1000).toBeGreaterThan(50);
+  model.setAngle(180);
+});
+
+test("openRadius is the bounding sphere of the open body", () => {
+  const radiusMm = model.openRadius() * 1000;
+  const halfDiagonal = Math.hypot(FOLD7_BODY.openWidthMm, FOLD7_BODY.heightMm) / 2;
+  expect(radiusMm).toBeGreaterThan(halfDiagonal - 1);
+  expect(radiusMm).toBeLessThan(halfDiagonal + 3);
+});
+
+test("both screens carry normals for the glass reflection", () => {
+  expect(model.cover.mesh.geometry.getAttribute("normal")).toBeDefined();
+  expect(model.inner.mesh.geometry.getAttribute("normal")).toBeDefined();
+});
+
+test("ScreenMaterial's glass is off by default and samples the environment's cube UV layout when one is given", () => {
+  const material = new ScreenMaterial(model.inner.extras);
+  expect(material.uniforms.glass.value).toBe(0);
+  material.setGlass(0.7);
+  expect(material.uniforms.glass.value).toBe(0.7);
+
+  const env = new THREE.Texture({ width: 768, height: 1024 } as unknown as HTMLImageElement);
+  env.mapping = THREE.CubeUVReflectionMapping;
+  material.setEnvironment(env);
+  expect(material.uniforms.envMap.value).toBe(env);
+  expect(material.defines.ENVMAP_TYPE_CUBE_UV).toBe("");
+  expect(Number(material.defines.CUBEUV_MAX_MIP)).toBe(8);
+  expect(Number(material.defines.CUBEUV_TEXEL_HEIGHT)).toBeCloseTo(1 / 1024, 12);
+  expect(Number(material.defines.CUBEUV_TEXEL_WIDTH)).toBeCloseTo(1 / (3 * 256), 12);
+
+  material.setEnvironment(null);
+  expect(material.defines.ENVMAP_TYPE_CUBE_UV).toBeUndefined();
+  expect(material.uniforms.envMap.value).toBeNull();
+});

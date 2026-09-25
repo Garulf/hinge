@@ -490,3 +490,43 @@ test("posture flickering between half and open with the cover lit does not cycle
   expect(out.lit).toBe("cover");
   expect(out.angle).toBe(0);
 });
+
+test("the displayed angle blends from the work angle to the true angle, so a view toggle mid-fold stays continuous", () => {
+  const drive = (d: FoldDirector) => {
+    d.streamClass(COVER);
+    d.firstFrame();
+    ticks(d, 70);
+    d.posture(reading({ posture: "half" }));
+    d.streamClass(INNER);
+    d.firstFrame();
+  };
+  const work = new FoldDirector();
+  const showcase = new FoldDirector({ view: "showcase" });
+  const blended = new FoldDirector();
+  for (const d of [work, showcase, blended]) drive(d);
+
+  for (let i = 0; i < 60; i++) {
+    const blend = Math.min(1, Math.max(0, (i - 5) / 37));
+    blended.setView(blend > 0 ? "showcase" : "work", blend);
+    const a = work.tick(16).angle;
+    const b = showcase.tick(16).angle;
+    const out = blended.tick(16);
+    expect(out.angle).toBeCloseTo(a + (b - a) * blend, 9);
+    expect(out.innerVisible).toBe(out.angle >= 25);
+  }
+  const rest = ticks(blended, 30);
+  expect(rest.angle).toBe(100);
+  expect(rest.trueAngle).toBe(100);
+});
+
+test("setView without a blend shows the whole view it names", () => {
+  const director = new FoldDirector();
+  director.streamClass(INNER);
+  director.firstFrame();
+  director.posture(reading({ posture: "half" }));
+  ticks(director, 70);
+  director.setView("showcase");
+  expect(director.tick(16).angle).toBe(100);
+  director.setView("work");
+  expect(director.tick(16).angle).toBe(180);
+});

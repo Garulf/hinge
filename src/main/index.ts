@@ -16,6 +16,7 @@ import { teeToRecording } from "./recorder";
 import { ReplaySource } from "./replay-source";
 import { ScrcpySession } from "./scrcpy-session";
 import { toStreamSettings } from "./scrcpy-init";
+import { withDryRunTransfers } from "./dry-run-transfers";
 import { loadSettings, type SettingsStore } from "./settings";
 import { bridgeSettings } from "./settings-bridge";
 import { vendorPaths } from "./vendor-paths";
@@ -86,7 +87,10 @@ function closeRecordStream(stream: WriteStream, writer: ReturnType<typeof create
 type RunOptions = Extract<ReturnType<typeof parseArgs>, { mode: "run" }>;
 
 async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logger["log"]): Promise<BuiltSource> {
-  if (opts.replay) return { source: await ReplaySource.fromFile(opts.replay, { loop: false }), closeRecording: async () => {} };
+  if (opts.replay) {
+    const replay = await ReplaySource.fromFile(opts.replay, { loop: false });
+    return { source: opts.dryRunTransfers ? withDryRunTransfers(replay) : replay, closeRecording: async () => {} };
+  }
 
   const paths = vendorPaths({
     packaged: app.isPackaged,
@@ -164,6 +168,7 @@ function shutdown(source: MediaSource, closeRecording: () => Promise<void>): Pro
 }
 
 async function runMode(opts: RunOptions): Promise<void> {
+  if (opts.userData) app.setPath("userData", opts.userData);
   await app.whenReady();
   const logger = createLogger(join(app.getPath("logs"), "hinge.log"));
   const settingsPath = join(app.getPath("userData"), "settings.json");

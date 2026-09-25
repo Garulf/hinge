@@ -1,8 +1,10 @@
 import { expect, test } from "vitest";
 import { parseArgs, reportStartupError } from "../../src/main/cli";
 
-test("defaults to run mode", () => expect(parseArgs([])).toEqual({ mode: "run", serial: null, replay: null, record: null }));
-test("replay and serial", () => expect(parseArgs(["--replay", "a.hrec", "--serial", "X"])).toEqual({ mode: "run", serial: "X", replay: "a.hrec", record: null }));
+test("defaults to run mode", () => expect(parseArgs([])).toEqual({ mode: "run", serial: null, replay: null, record: null, userData: null, dryRunTransfers: false }));
+test("replay and serial", () => expect(parseArgs(["--replay", "a.hrec", "--serial", "X"])).toMatchObject({ mode: "run", serial: "X", replay: "a.hrec", record: null }));
+test("a separate settings folder and dry-run transfers, for tests", () =>
+  expect(parseArgs(["--replay", "a.hrec", "--user-data", "/tmp/h", "--dry-run-transfers"])).toMatchObject({ userData: "/tmp/h", dryRunTransfers: true }));
 test("record", () => expect(parseArgs(["--record", "out.hrec"])).toMatchObject({ mode: "run", record: "out.hrec" }));
 test("probe with defaults", () => expect(parseArgs(["--probe"])).toEqual({ mode: "probe", serial: null, seconds: 90, out: null }));
 test("probe with seconds and out", () => expect(parseArgs(["--probe", "--seconds", "30", "--out", "r.json"])).toEqual({ mode: "probe", serial: null, seconds: 30, out: "r.json" }));

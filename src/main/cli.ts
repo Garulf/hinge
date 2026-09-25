@@ -1,5 +1,5 @@
 export type Mode =
-  | { mode: "run"; serial: string | null; replay: string | null; record: string | null }
+  | { mode: "run"; serial: string | null; replay: string | null; record: string | null; userData: string | null; dryRunTransfers: boolean }
   | { mode: "probe"; serial: string | null; seconds: number; out: string | null };
 
 export function parseArgs(argv: string[]): Mode {
@@ -9,6 +9,8 @@ export function parseArgs(argv: string[]): Mode {
   let record: string | null = null;
   let seconds = 90;
   let out: string | null = null;
+  let userData: string | null = null;
+  let dryRunTransfers = false;
 
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -34,13 +36,19 @@ export function parseArgs(argv: string[]): Mode {
       case "--out":
         out = argv[++i] ?? null;
         break;
+      case "--user-data":
+        userData = argv[++i] ?? null;
+        break;
+      case "--dry-run-transfers":
+        dryRunTransfers = true;
+        break;
       default:
         break;
     }
   }
 
   if (probe) return { mode: "probe", serial, seconds, out };
-  return { mode: "run", serial, replay, record };
+  return { mode: "run", serial, replay, record, userData, dryRunTransfers };
 }
 
 /**

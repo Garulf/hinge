@@ -40,6 +40,8 @@ function fakeCanvas() {
 // WebGL context, so this is testable without a real PhoneScene/canvas.
 // The plane's UV runs u left to right and v bottom to top across the
 // canvas, standing in for the lit screen mesh's UV as the scene shows it.
+type View = { target: "work" | "showcase"; t: number; active: boolean };
+
 function fakeScene(rotation: 0 | 1 | 2 | 3 = 0) {
   const camera = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 1000);
   camera.position.z = 100;
@@ -47,7 +49,20 @@ function fakeScene(rotation: 0 | 1 | 2 | 3 = 0) {
     mesh: new THREE.Mesh(new THREE.PlaneGeometry(100, 100)),
     extras: { punchHole: [0.5, 0.95, 0.02] as [number, number, number], cornerRadiusUv: [0.1, 0.1] as [number, number], pixelSize: [100, 100] as [number, number] },
   };
-  return { camera: () => camera, litScreen: (): typeof screen | null => screen, rotation: () => rotation };
+  const state = { view: { target: "work", t: 0, active: false } as View };
+  const orbits: [number, number][] = [];
+  let releases = 0;
+  return {
+    camera: () => camera,
+    litScreen: (): typeof screen | null => screen,
+    rotation: () => rotation,
+    view: () => state.view,
+    orbitBy: (dx: number, dy: number) => orbits.push([dx, dy]),
+    releaseOrbit: () => releases++,
+    state,
+    orbits,
+    releases: () => releases,
+  };
 }
 
 let fakeWindow: ReturnType<typeof fakeTarget> & { hinge: { beginDrag: ReturnType<typeof vi.fn>; endDrag: ReturnType<typeof vi.fn> } };
@@ -61,9 +76,10 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
 });
 
-function setup(opts?: { rotation?: 0 | 1 | 2 | 3; video?: { w: number; h: number }; onAction?: (action: HingeAction) => void }) {
+function setup(opts?: { rotation?: 0 | 1 | 2 | 3; video?: { w: number; h: number }; onAction?: (action: HingeAction) => void; view?: View }) {
   const canvas = fakeCanvas();
   const scene = fakeScene(opts?.rotation);
+  if (opts?.view) scene.state.view = opts.view;
   const sent: ControlIntent[] = [];
   const video = opts?.video ?? { w: 100, h: 100 };
   const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => video, (intent) => sent.push(intent), {
@@ -293,4 +309,115 @@ test("a press in a masked-off rounded corner of the lit screen drags the window"
   canvas.fire("pointerdown", { pointerId: 11, button: 0, buttons: 1, clientX: 1, clientY: 1 });
   expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledOnce();
   expect(sent).toEqual([]);
+});
+
+const SHOWCASE: View = { target: "showcase", t: 1, active: false };
+const OFF_PHONE = { clientX: 500, clientY: 500 };
+
+function touchActions(sent: ControlIntent[]) {
+  return sent.filter((i) => i.type === "touch").map((i) => i.type === "touch" && i.action);
+}
+
+test("showcase: a press on the lit screen is a touch and never orbits", () => {
+  const { canvas, sent, scene } = setup({ view: SHOWCASE });
+  canvas.fire("pointerdown", { pointerId: 20, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointermove", { pointerId: 20, button: -1, buttons: 1, clientX: 60, clientY: 50 });
+  canvas.fire("pointerup", { pointerId: 20, button: 0, buttons: 0, clientX: 60, clientY: 50 });
+  expect(touchActions(sent)).toEqual(["down", "move", "up"]);
+  expect(scene.orbits).toEqual([]);
+  expect(fakeWindow.hinge.beginDrag).not.toHaveBeenCalled();
+});
+
+test("showcase: a press off the lit screen orbits by the pointer's movement and releases on pointerup", () => {
+  const { canvas, sent, scene } = setup({ view: SHOWCASE });
+  canvas.fire("pointerdown", { pointerId: 21, button: 0, buttons: 1, ...OFF_PHONE });
+  canvas.fire("pointermove", { pointerId: 21, button: -1, buttons: 1, clientX: 510, clientY: 495 });
+  canvas.fire("pointermove", { pointerId: 21, button: -1, buttons: 1, clientX: 530, clientY: 500 });
+  canvas.fire("pointerup", { pointerId: 21, button: 0, buttons: 0, clientX: 530, clientY: 500 });
+  expect(scene.orbits).toEqual([
+    [10, -5],
+    [20, 5],
+  ]);
+  expect(scene.releases()).toBe(1);
+  expect(sent).toEqual([]);
+  expect(fakeWindow.hinge.beginDrag).not.toHaveBeenCalled();
+});
+
+test("showcase: Shift and a press off the lit screen drags the window instead of orbiting", () => {
+  const { canvas, sent, scene } = setup({ view: SHOWCASE });
+  canvas.fire("pointerdown", { pointerId: 22, button: 0, buttons: 1, shiftKey: true, ...OFF_PHONE });
+  canvas.fire("pointermove", { pointerId: 22, button: -1, buttons: 1, shiftKey: true, clientX: 520, clientY: 500 });
+  canvas.fire("pointerup", { pointerId: 22, button: 0, buttons: 0, shiftKey: true, clientX: 520, clientY: 500 });
+  expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledOnce();
+  expect(fakeWindow.hinge.endDrag).toHaveBeenCalledOnce();
+  expect(scene.orbits).toEqual([]);
+  expect(sent).toEqual([]);
+});
+
+test("showcase: a touch that slides off the screen stays a touch until release", () => {
+  const { canvas, sent, scene } = setup({ view: SHOWCASE });
+  canvas.fire("pointerdown", { pointerId: 23, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointermove", { pointerId: 23, button: -1, buttons: 1, ...OFF_PHONE });
+  canvas.fire("pointerup", { pointerId: 23, button: 0, buttons: 0, ...OFF_PHONE });
+  expect(touchActions(sent)).toEqual(["down", "up"]);
+  expect(scene.orbits).toEqual([]);
+});
+
+test("showcase: an orbit that slides onto the screen stays an orbit until release", () => {
+  const { canvas, sent, scene } = setup({ view: SHOWCASE });
+  canvas.fire("pointerdown", { pointerId: 24, button: 0, buttons: 1, clientX: 150, clientY: 50 });
+  canvas.fire("pointermove", { pointerId: 24, button: -1, buttons: 1, ...CENTER });
+  canvas.fire("pointerup", { pointerId: 24, button: 0, buttons: 0, ...CENTER });
+  expect(scene.orbits).toEqual([[-100, 0]]);
+  expect(sent).toEqual([]);
+});
+
+test("showcase: a blur mid-orbit releases the orbit", () => {
+  const { canvas, scene } = setup({ view: SHOWCASE });
+  canvas.fire("pointerdown", { pointerId: 25, button: 0, buttons: 1, ...OFF_PHONE });
+  fakeWindow.fire("blur", {});
+  expect(scene.releases()).toBe(1);
+  canvas.fire("pointermove", { pointerId: 25, button: -1, buttons: 1, clientX: 520, clientY: 500 });
+  expect(scene.orbits).toEqual([]);
+});
+
+test("while the view transition runs, a press does nothing until it is released", () => {
+  const { canvas, sent, scene } = setup({ view: { target: "showcase", t: 0.4, active: true } });
+  canvas.fire("pointerdown", { pointerId: 26, button: 0, buttons: 1, ...CENTER });
+  scene.state.view = SHOWCASE;
+  canvas.fire("pointermove", { pointerId: 26, button: -1, buttons: 1, clientX: 60, clientY: 50 });
+  canvas.fire("pointerup", { pointerId: 26, button: 0, buttons: 0, clientX: 60, clientY: 50 });
+  expect(sent).toEqual([]);
+  expect(scene.orbits).toEqual([]);
+  expect(fakeWindow.hinge.beginDrag).not.toHaveBeenCalled();
+
+  canvas.fire("pointerdown", { pointerId: 27, button: 0, buttons: 1, ...OFF_PHONE });
+  expect(fakeWindow.hinge.beginDrag).not.toHaveBeenCalled();
+  canvas.fire("pointerup", { pointerId: 27, button: 0, buttons: 0, ...OFF_PHONE });
+  expect(scene.releases()).toBe(1);
+});
+
+test("a touch in progress when the transition starts ignores moves but still lifts on release", () => {
+  const { canvas, sent, scene } = setup();
+  canvas.fire("pointerdown", { pointerId: 28, button: 0, buttons: 1, ...CENTER });
+  scene.state.view = { target: "showcase", t: 0.2, active: true };
+  canvas.fire("pointermove", { pointerId: 28, button: -1, buttons: 1, clientX: 60, clientY: 50 });
+  canvas.fire("pointerup", { pointerId: 28, button: 0, buttons: 0, clientX: 60, clientY: 50 });
+  expect(touchActions(sent)).toEqual(["down", "up"]);
+  expect(sent.at(-1)).toMatchObject({ x: 50, y: 50 });
+});
+
+test("the wheel does nothing while the transition runs", () => {
+  const { canvas, sent } = setup({ view: { target: "work", t: 0.5, active: true } });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, ...CENTER });
+  expect(sent).toEqual([]);
+});
+
+test("work view: Shift and a press off the screen still drags, and a plain one never orbits", () => {
+  const { canvas, scene } = setup();
+  canvas.fire("pointerdown", { pointerId: 29, button: 0, buttons: 1, ...OFF_PHONE });
+  canvas.fire("pointermove", { pointerId: 29, button: -1, buttons: 1, clientX: 520, clientY: 500 });
+  canvas.fire("pointerup", { pointerId: 29, button: 0, buttons: 0, clientX: 520, clientY: 500 });
+  expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledOnce();
+  expect(scene.orbits).toEqual([]);
 });

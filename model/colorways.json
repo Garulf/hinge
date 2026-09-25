@@ -1,0 +1,145 @@
+{
+  "default": "jetblack",
+  "colorways": {
+    "jetblack": {
+      "label": "Jet Black",
+      "materials": {
+        "frame": {
+          "baseColor": "#141414",
+          "metallic": 1.0,
+          "roughness": 0.35
+        },
+        "back_glass": {
+          "baseColor": "#1c1c1e",
+          "metallic": 0.0,
+          "roughness": 0.45
+        },
+        "hinge_spine": {
+          "baseColor": "#141414",
+          "metallic": 1.0,
+          "roughness": 0.4
+        },
+        "camera_island": {
+          "baseColor": "#1a1a1c",
+          "metallic": 1.0,
+          "roughness": 0.3
+        },
+        "button": {
+          "baseColor": "#141414",
+          "metallic": 1.0,
+          "roughness": 0.35
+        },
+        "antenna_band": {
+          "baseColor": "#242426",
+          "metallic": 0.0,
+          "roughness": 0.5
+        }
+      }
+    },
+    "blue-shadow": {
+      "label": "Blue Shadow",
+      "materials": {
+        "frame": {
+          "baseColor": "#232d4e",
+          "metallic": 1.0,
+          "roughness": 0.35
+        },
+        "back_glass": {
+          "baseColor": "#28345c",
+          "metallic": 0.0,
+          "roughness": 0.45
+        },
+        "hinge_spine": {
+          "baseColor": "#232d4e",
+          "metallic": 1.0,
+          "roughness": 0.4
+        },
+        "camera_island": {
+          "baseColor": "#28345c",
+          "metallic": 1.0,
+          "roughness": 0.3
+        },
+        "button": {
+          "baseColor": "#232d4e",
+          "metallic": 1.0,
+          "roughness": 0.35
+        },
+        "antenna_band": {
+          "baseColor": "#1a2240",
+          "metallic": 0.0,
+          "roughness": 0.5
+        }
+      }
+    },
+    "silver-shadow": {
+      "label": "Silver Shadow",
+      "materials": {
+        "frame": {
+          "baseColor": "#b8b6b2",
+          "metallic": 1.0,
+          "roughness": 0.35
+        },
+        "back_glass": {
+          "baseColor": "#c8c6c2",
+          "metallic": 0.0,
+          "roughness": 0.45
+        },
+        "hinge_spine": {
+          "baseColor": "#b8b6b2",
+          "metallic": 1.0,
+          "roughness": 0.4
+        },
+        "camera_island": {
+          "baseColor": "#c0beba",
+          "metallic": 1.0,
+          "roughness": 0.3
+        },
+        "button": {
+          "baseColor": "#b8b6b2",
+          "metallic": 1.0,
+          "roughness": 0.35
+        },
+        "antenna_band": {
+          "baseColor": "#a09e9a",
+          "metallic": 0.0,
+          "roughness": 0.5
+        }
+      }
+    },
+    "mint": {
+      "label": "Mint",
+      "materials": {
+        "frame": {
+          "baseColor": "#cddcd2",
+          "metallic": 1.0,
+          "roughness": 0.35
+        },
+        "back_glass": {
+          "baseColor": "#dce8e0",
+          "metallic": 0.0,
+          "roughness": 0.45
+        },
+        "hinge_spine": {
+          "baseColor": "#cddcd2",
+          "metallic": 1.0,
+          "roughness": 0.4
+        },
+        "camera_island": {
+          "baseColor": "#d4e2d9",
+          "metallic": 1.0,
+          "roughness": 0.3
+        },
+        "button": {
+          "baseColor": "#cddcd2",
+          "metallic": 1.0,
+          "roughness": 0.35
+        },
+        "antenna_band": {
+          "baseColor": "#b4c4ba",
+          "metallic": 0.0,
+          "roughness": 0.5
+        }
+      }
+    }
+  }
+}

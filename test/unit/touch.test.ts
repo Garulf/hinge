@@ -1,12 +1,5 @@
 import { expect, test } from "vitest";
-import { streamToDevice, TouchTracker, uvToDevice } from "../../src/shared/touch";
-
-test("uv origin is bottom-left, device origin is top-left, result is clamped", () => {
-  expect(uvToDevice(0, 1, 1080, 2520)).toEqual({ x: 0, y: 0 });
-  expect(uvToDevice(1, 0, 1080, 2520)).toEqual({ x: 1079, y: 2519 });
-  expect(uvToDevice(0.5, 0.5, 1080, 2520)).toEqual({ x: 540, y: 1260 });
-  expect(uvToDevice(1.2, -0.1, 1080, 2520)).toEqual({ x: 1079, y: 2519 });
-});
+import { streamToDevice, TouchTracker } from "../../src/shared/touch";
 
 test("normalised stream points scale to device pixels, y down, clamped to the stream", () => {
   expect(streamToDevice(0, 0, 1080, 2520)).toEqual({ x: 0, y: 0 });

@@ -1,10 +1,10 @@
 export type ScreenKind = "cover" | "inner";
 export interface ScreenClass { screen: ScreenKind; rotated: boolean }
-export interface ScreenSpec { px: { w: number; h: number }; mm: { w: number; h: number }; bodyMm: { w: number; h: number } }
+export interface ScreenSpec { px: { w: number; h: number } }
 
 export const FOLD7 = {
-  cover: { px: { w: 1080, h: 2520 }, mm: { w: 65.0, h: 151.7 }, bodyMm: { w: 72.8, h: 158.4 } },
-  inner: { px: { w: 1968, h: 2184 }, mm: { w: 135.8, h: 150.7 }, bodyMm: { w: 143.2, h: 158.4 } },
+  cover: { px: { w: 1080, h: 2520 } },
+  inner: { px: { w: 1968, h: 2184 } },
 } as const satisfies Record<ScreenKind, ScreenSpec>;
 
 const COVER_MIN_ASPECT = 1.6;

@@ -17,11 +17,6 @@ export function streamToDevice(x: number, y: number, videoWidth: number, videoHe
   };
 }
 
-/** A texture UV with v up, as on an unrotated screen. */
-export function uvToDevice(u: number, v: number, videoWidth: number, videoHeight: number): { x: number; y: number } {
-  return streamToDevice(u, 1 - v, videoWidth, videoHeight);
-}
-
 export type PointerEventLike = { kind: "down" | "move" | "up" | "leave" | "blur"; button: number; buttons: number; hit: StreamPoint | null };
 
 const HOME_KEYCODE = 3;

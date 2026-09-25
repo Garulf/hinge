@@ -1,7 +1,7 @@
 import { DecodeRecovery } from "../shared/decode-recovery";
 import { FoldDirector, type DirectorOutput } from "../shared/fold-director";
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
-import { bodySizePx, defaultPxPerMm, FOLD7_BODY } from "../shared/layout";
+import { bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
 import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
@@ -69,7 +69,8 @@ function logPhase(out: DirectorOutput, rotation: Rotation): void {
 function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
   if (pxPerMm === null) return;
   const open = out.lit === "inner" || out.angle > 1;
-  windowSizer.update(bodySizePx(FOLD7_BODY, open, rotation, pxPerMm), rotation, out.settled);
+  const size = bodySizePx(FOLD7_BODY, open, rotation, pxPerMm);
+  windowSizer.update(deviceAlignedSize(size, window.devicePixelRatio), rotation, out.settled);
 }
 
 // Checked on a timer rather than per animation frame, which a busy GPU can

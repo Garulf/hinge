@@ -20,6 +20,32 @@ export function bodySizePx(body: BodyDims, open: boolean, rotation: 0 | 1 | 2 | 
   return rotated ? { w: h, h: w } : { w, h };
 }
 
+const MAX_ALIGN_STEP_PX = 16;
+const WHOLE_PX_EPSILON = 1e-6;
+
+function coversWholeDevicePixels(cssPx: number, devicePixelRatio: number): boolean {
+  const device = cssPx * devicePixelRatio;
+  return Math.abs(device - Math.round(device)) < WHOLE_PX_EPSILON;
+}
+
+function alignedSide(cssPx: number, devicePixelRatio: number): number {
+  for (let step = 0; step <= MAX_ALIGN_STEP_PX; step++) {
+    if (coversWholeDevicePixels(cssPx + step, devicePixelRatio)) return cssPx + step;
+  }
+  return cssPx;
+}
+
+/**
+ * Grows a whole-CSS-pixel window size by the few pixels it takes to cover a
+ * whole number of device pixels, so the canvas maps 1:1 onto the screen at
+ * fractional scale factors instead of being resampled a fraction of a pixel.
+ * Electron rounds window bounds to whole CSS pixels, so dividing a rounded
+ * device size back down would be rounded away again.
+ */
+export function deviceAlignedSize(size: { w: number; h: number }, devicePixelRatio: number): { w: number; h: number } {
+  return { w: alignedSide(size.w, devicePixelRatio), h: alignedSide(size.h, devicePixelRatio) };
+}
+
 export interface Rect {
   x: number;
   y: number;
@@ -40,6 +66,17 @@ export function anchoredRect(current: Rect, next: { w: number; h: number }, rota
   }
   const y = current.y + (current.h - next.h) / 2;
   const x = rotation === 2 ? current.x : current.x + current.w - next.w;
+  return { x, y, w: next.w, h: next.h };
+}
+
+/**
+ * Keeps the centre in place, as when the phone turns. The offset is
+ * truncated toward zero so that turning back lands on the starting position
+ * instead of creeping by a rounding pixel per round trip.
+ */
+export function centredRect(current: Rect, next: { w: number; h: number }): Rect {
+  const x = current.x + Math.trunc((current.w - next.w) / 2);
+  const y = current.y + Math.trunc((current.h - next.h) / 2);
   return { x, y, w: next.w, h: next.h };
 }
 

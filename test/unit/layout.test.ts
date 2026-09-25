@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { anchoredRect, bodySizePx, defaultPxPerMm, FOLD7_BODY, unionSize, type Rect } from "../../src/shared/layout";
+import { anchoredRect, bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY, unionSize, type Rect } from "../../src/shared/layout";
 
 test("FOLD7_BODY matches the measured dimensions", () => {
   expect(FOLD7_BODY).toEqual({ openWidthMm: 143.7, closedWidthMm: 72.1, heightMm: 158.4 });
@@ -75,4 +75,27 @@ test("anchoredRect keeps the bottom edge for rotation 3 and centres width", () =
 
 test("unionSize takes the maximum of each dimension", () => {
   expect(unionSize({ w: 300, h: 900 }, { w: 500, h: 800 })).toEqual({ w: 500, h: 900 });
+});
+
+test("deviceAlignedSize: every size covers a whole number of device pixels at common scale factors", () => {
+  for (const dpr of [1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 3]) {
+    for (let css = 300; css < 1400; css += 37) {
+      const size = deviceAlignedSize({ w: css, h: css + 11 }, dpr);
+      for (const side of [size.w, size.h]) {
+        expect(Number.isInteger(side)).toBe(true);
+        expect(side * dpr).toBeCloseTo(Math.round(side * dpr), 6);
+      }
+      expect(size.w).toBeGreaterThanOrEqual(css);
+      expect(size.w - css).toBeLessThan(4);
+    }
+  }
+});
+
+test("deviceAlignedSize: 1.25 rounds up to a multiple of 4 CSS px (5 device px)", () => {
+  expect(deviceAlignedSize({ w: 431, h: 945 }, 1.25)).toEqual({ w: 432, h: 948 });
+  expect(deviceAlignedSize({ w: 432, h: 944 }, 1.25)).toEqual({ w: 432, h: 944 });
+});
+
+test("deviceAlignedSize: a scale with no whole-pixel CSS size nearby keeps the size as it is", () => {
+  expect(deviceAlignedSize({ w: 431, h: 945 }, 1.0123)).toEqual({ w: 431, h: 945 });
 });

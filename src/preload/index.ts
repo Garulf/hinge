@@ -33,6 +33,7 @@ window.addEventListener("message", (event) => {
 
 const api: HingeApi = {
   setContentSize: (w, h) => ipcRenderer.send("hinge:set-content-size", w, h),
+  setWindowSize: (w, h, rotation) => ipcRenderer.send("hinge:set-window-size", w, h, rotation),
   beginDrag: () => ipcRenderer.send("hinge:begin-drag"),
   endDrag: () => ipcRenderer.send("hinge:end-drag"),
   workAreaHeight: () => ipcRenderer.invoke("hinge:work-area-height"),

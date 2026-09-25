@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { HingeApi } from "./api";
 
 // contextBridge copies function arguments across the isolated/main world
@@ -36,6 +36,7 @@ const api: HingeApi = {
   beginDrag: () => ipcRenderer.send("hinge:begin-drag"),
   endDrag: () => ipcRenderer.send("hinge:end-drag"),
   workAreaHeight: () => ipcRenderer.invoke("hinge:work-area-height"),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   platform: process.platform,
 };
 

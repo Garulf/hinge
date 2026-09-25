@@ -5,6 +5,8 @@ import { bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY } from "../sh
 import type { Rotation } from "../shared/screen-uv";
 import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
+import { AudioPipe } from "./audio-pipe";
+import { createWorkletPlayer } from "./audio/worklet-player";
 import { InputRouter } from "./input/input-router";
 import { MediaGate } from "./media-gate";
 import { PortClient, receivePort } from "./port-client";
@@ -105,18 +107,53 @@ function onDecodeError(message: string): void {
 }
 
 const pipe = new VideoPipe(scene, onSize, { onError: onDecodeError, onFirstFrame });
+// audioPipe has no UI surface to report failures through; logged only.
+const audioPipe = new AudioPipe({ createPlayer: createWorkletPlayer, onError: (message) => console.error("audio:", message) });
 
 const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
 new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
 
-function onStreamMessage(msg: Exclude<MainToRenderer, { kind: "status" }>): void {
-  if (msg.kind === "video-start") pipe.start(msg.info);
-  else if (msg.kind === "video-packet") pipe.push(msg.packet);
-  else if (msg.kind === "video-end") {
-    pipe.end();
-    director.streamEnded();
-  } else director.posture(msg.reading);
+// Deliberately minimal: only resolves dropped files to real paths and hands them to main.
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => {
+  e.preventDefault();
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+  const paths = Array.from(files)
+    .map((file) => window.hinge.getPathForFile(file))
+    .filter((path) => path !== "");
+  if (paths.length === 0) return;
+  client?.send({ kind: "drop-files", paths });
+});
+
+type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" }>;
+
+function onStreamMessage(msg: StreamMessage): void {
+  switch (msg.kind) {
+    case "video-start":
+      pipe.start(msg.info);
+      break;
+    case "video-packet":
+      pipe.push(msg.packet);
+      break;
+    case "video-end":
+      pipe.end();
+      director.streamEnded();
+      break;
+    case "posture":
+      director.posture(msg.reading);
+      break;
+    case "audio-start":
+      audioPipe.start(msg.info);
+      break;
+    case "audio-packet":
+      audioPipe.push(msg.packet);
+      break;
+    case "audio-end":
+      audioPipe.end();
+      break;
+  }
 }
 
 const streamGate = new MediaGate(onStreamMessage, scene.ready, SCENE_READY_CAP_MS);
@@ -125,7 +162,7 @@ void receivePort().then((port) => {
   client = new PortClient(port);
   client.on((msg) => {
     if (msg.kind === "status") scene.setStatus(statusText(msg.status));
-    else streamGate.push(msg);
+    else if (msg.kind !== "transfer-progress" && msg.kind !== "device-command-result") streamGate.push(msg);
   });
   client.send({ kind: "ready" });
 });

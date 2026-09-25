@@ -1,5 +1,5 @@
 /**
- * Holds stream messages (video and posture) while the scene is still
+ * Holds stream messages (video, audio and posture) while the scene is still
  * loading, so the device can start in parallel with the model, and replays
  * them in order once the scene is ready or the cap runs out, whichever
  * comes first.

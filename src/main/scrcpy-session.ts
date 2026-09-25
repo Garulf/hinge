@@ -1,12 +1,44 @@
 import { readFile } from "node:fs/promises";
+import { PackageManager } from "@yume-chan/android-bin";
 import type { Adb } from "@yume-chan/adb";
 import { AdbScrcpyClient, AdbScrcpyExitedError, AdbScrcpyOptions4_1 } from "@yume-chan/adb-scrcpy";
 import { DefaultServerPath, type ScrcpyVideoStreamPacket } from "@yume-chan/scrcpy";
 import { PushReadableStream } from "@yume-chan/stream-extra";
-import { applyIntent } from "./intents";
+import { createClipboardSync, type ClipboardHost, type ClipboardSync } from "./clipboard-sync";
+import { applyIntent, type ApplyIntentDeps } from "./intents";
 import type { MediaSink, MediaSource } from "./media-source";
 import { buildInit, type StreamSettings } from "./scrcpy-init";
-import { toWire, type ControlIntent } from "../shared/wire";
+import { createTransferQueue, defaultOpenFile, type TransferDeps, type TransferQueue } from "./transfers";
+import { toWire, toWireAudio, type ControlIntent } from "../shared/wire";
+
+/**
+ * Bridges a plain (DOM-shaped) ReadableStream<Uint8Array> from transfers.ts
+ * into the PushReadableStream Tango's own sync/install calls expect;
+ * backpressure and cancellation both flow through in either direction.
+ */
+function toPushReadable(source: ReadableStream<Uint8Array>): PushReadableStream<Uint8Array> {
+  return new PushReadableStream<Uint8Array>(async (controller) => {
+    const reader = source.getReader();
+    try {
+      for (;;) {
+        if (controller.abortSignal.aborted) {
+          await reader.cancel();
+          return;
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
+        const ok = await controller.enqueue(value);
+        if (!ok) {
+          await reader.cancel();
+          return;
+        }
+      }
+      controller.close();
+    } catch (e) {
+      controller.error(e);
+    }
+  });
+}
 
 type Client = AdbScrcpyClient<AdbScrcpyOptions4_1<any>>;
 
@@ -45,6 +77,10 @@ export class ScrcpySession implements MediaSource {
   readonly ended: Promise<void>;
   readonly #deps: ScrcpyServerDeps;
   readonly #firstPacketTimeoutMs: number;
+  readonly #clipboardHost: ClipboardHost | undefined;
+  #clipboardSync: ClipboardSync | null = null;
+  readonly #transfers: TransferQueue;
+  #sink: MediaSink | null = null;
 
   constructor(
     private readonly opts: {
@@ -56,16 +92,47 @@ export class ScrcpySession implements MediaSource {
       log?: (line: string) => void;
       deps?: Partial<ScrcpyServerDeps>;
       firstPacketTimeoutMs?: number;
+      /** Absent in contexts with no PC clipboard access (e.g. the probe mode): clipboard sync and clipboard-paste are then both no-ops. */
+      clipboardHost?: ClipboardHost;
+      /** Overrides for tests; production uses PackageManager/adb.sync/controller.scanFile against opts.adb. */
+      transferDeps?: Partial<TransferDeps>;
     },
   ) {
     this.#deps = { ...defaultDeps, ...opts.deps };
     this.#firstPacketTimeoutMs = opts.firstPacketTimeoutMs ?? FIRST_PACKET_TIMEOUT_MS;
+    this.#clipboardHost = opts.clipboardHost;
     this.ended = new Promise((resolve) => {
       this.#resolveEnded = resolve;
     });
+
+    // Constructed lazily, not here: a real PackageManager probes adb
+    // features on construction, which a fake adb (as tests without their
+    // own transferDeps override pass) does not support.
+    let pm: PackageManager | undefined;
+    const getPm = (): PackageManager => (pm ??= new PackageManager(opts.adb));
+    const defaultTransferDeps: TransferDeps = {
+      openFile: defaultOpenFile,
+      installApk: (stream) => getPm().pushAndInstallStream(toPushReadable(stream), { replaceExisting: true }),
+      pushFile: async (path, stream) => {
+        await opts.adb.sync.write({ path, readable: toPushReadable(stream) });
+      },
+      scanFile: async (path) => {
+        const controller = this.#client?.controller;
+        if (!controller) throw new Error("no control connection to scan the pushed file");
+        await controller.scanFile(path);
+      },
+      removeFile: async (path) => {
+        const shell = opts.adb.subprocess.shellProtocol;
+        if (!shell) return;
+        await shell.spawn(["rm", "-f", path]).wait();
+      },
+    };
+    this.#transfers = createTransferQueue({ ...defaultTransferDeps, ...opts.transferDeps }, opts.log);
+    this.#transfers.onProgress((progress) => this.#sink?.transferProgress?.(progress));
   }
 
   async start(sink: MediaSink): Promise<void> {
+    this.#sink = sink;
     try {
       sink.status({ state: "connecting", serial: this.opts.serial });
 
@@ -88,12 +155,92 @@ export class ScrcpySession implements MediaSource {
   control(intent: ControlIntent): void {
     const controller = this.#client?.controller;
     if (!controller) return;
-    applyIntent(controller, intent).catch((e) => this.opts.log?.(`control failed: ${String(e)}`));
+    applyIntent(controller, intent, this.#clipboardDeps()).catch((e) => this.opts.log?.(`control failed: ${String(e)}`));
+  }
+
+  transfer(localPaths: string[]): void {
+    this.#transfers.enqueue(localPaths);
   }
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#clipboardSync?.stop();
+    this.#clipboardSync = null;
+    this.#transfers.cancelAll();
     await this.#client?.close().catch(() => {});
+  }
+
+  #clipboardDeps(): ApplyIntentDeps {
+    const host = this.#clipboardHost;
+    if (!host) return {};
+    return {
+      readPcClipboard: () => host.readText(),
+      beginClipboardPush: (content) => this.#clipboardSync?.beginPush(content) ?? 0n,
+    };
+  }
+
+  /** client.clipboard blocks on backpressure once clipboardAutosync is on, so this must run for the life of every successful attempt, not just when a clipboard host happens to be wired. */
+  #startClipboardSync(client: Client): void {
+    const sync = createClipboardSync({
+      stream: client.clipboard,
+      host: this.#clipboardHost ?? { readText: async () => "", writeText: async () => {} },
+      log: this.opts.log,
+    });
+    this.#clipboardSync = sync;
+    void sync.start();
+  }
+
+  /**
+   * Disabled/errored metadata and a stream that fails before producing
+   * anything both surface as one "unsupported" audio-end: whichever it is,
+   * the outcome for the session is the same (audio off, one toast), and
+   * there is no separate device message to tell them apart.
+   */
+  async #startAudio(client: Client, sink: MediaSink): Promise<void> {
+    if (!this.opts.settings.audio) {
+      // Off by the user's own setting: not a failure, no toast.
+      sink.audioEnd?.("disabled");
+      return;
+    }
+    // client.audioStream must always be awaited, even with nothing to
+    // forward audio to: scrcpy-server is already streaming it once
+    // audio:true was passed, and never reading the socket would leave it
+    // sitting unread on the adb server relay for the life of the session.
+    let metadata: Awaited<Client["audioStream"]>;
+    try {
+      metadata = await client.audioStream;
+    } catch (e) {
+      if (this.#stopped) return;
+      this.opts.log?.(`audio stream metadata failed: ${String(e)}`);
+      sink.audioEnd?.("unsupported");
+      return;
+    }
+    if (this.#stopped) return;
+    if (!metadata || metadata.type !== "success") {
+      sink.audioEnd?.("unsupported");
+      return;
+    }
+
+    if (!sink.audioStart) {
+      await metadata.stream.cancel().catch(() => {});
+      return;
+    }
+
+    sink.audioStart({ codec: metadata.codec.webCodecId, sampleRate: 48000, channels: 2 });
+    const reader = metadata.stream.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (this.#stopped) return;
+        if (done) break;
+        sink.audioPacket?.(toWireAudio(value));
+      }
+      if (!this.#stopped) sink.audioEnd?.();
+    } catch (e) {
+      if (this.#stopped) return;
+      this.opts.log?.(`audio stream error: ${String(e)}`);
+      sink.audioEnd?.("unsupported");
+    }
   }
 
   async #tryAttempt(
@@ -152,6 +299,8 @@ export class ScrcpySession implements MediaSource {
       });
       sink.status({ state: "streaming", serial: this.opts.serial, model: this.opts.model });
       sink.videoPacket(toWire(first.value));
+      this.#startClipboardSync(client);
+      void this.#startAudio(client, sink);
       void this.#pump(reader, sink);
       return "started";
     } catch (e) {

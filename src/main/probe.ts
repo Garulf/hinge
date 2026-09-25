@@ -44,7 +44,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export interface DeviceLister {
-  getDevices(): Promise<{ serial: string; state: string; model?: string | null }[]>;
+  getDevices(): Promise<{ serial: string; state: string; model?: string | null; device?: string | null }[]>;
 }
 
 export async function waitForDevice(
@@ -61,6 +61,7 @@ export async function waitForDevice(
       serial: d.serial,
       state: d.state,
       model: d.model ?? null,
+      device: d.device ?? null,
       transport: transportOf(d.serial),
     }));
     const device = pickDevice(summaries, preferredSerial);

@@ -1,7 +1,8 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, dialog, Menu } from "electron";
+import { app, BrowserWindow, clipboard, dialog, Menu } from "electron";
 import { AdbHost } from "./adb-host";
+import type { ClipboardHost } from "./clipboard-sync";
 import { bindSource, DeviceSource, type SessionFactory } from "./app-controller";
 import { parseArgs, reportStartupError } from "./cli";
 import { createLogger, type Logger } from "./logger";
@@ -14,9 +15,11 @@ import { recordProgressHtml, recordResultHtml } from "./probe-window";
 import { teeToRecording } from "./recorder";
 import { ReplaySource } from "./replay-source";
 import { ScrcpySession } from "./scrcpy-session";
-import { DEFAULT_STREAM_SETTINGS } from "./scrcpy-init";
+import { toStreamSettings } from "./scrcpy-init";
+import { loadSettings } from "./settings";
 import { vendorPaths } from "./vendor-paths";
 import { createPhoneWindow } from "./window";
+import { createWirelessDeps } from "./wireless";
 
 function reportAndExit(e: unknown): never {
   const report = reportStartupError(e, { packaged: app.isPackaged, platform: process.platform });
@@ -91,18 +94,34 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
   const host = new AdbHost({ adbPath: paths.adb });
   await host.ensureServer();
 
+  const settings = await loadSettings(join(app.getPath("userData"), "settings.json"));
+  const wireless = createWirelessDeps(host.client);
+  const onConnected = (serial: string): void => {
+    settings.save({ lastDevice: serial }).catch((e) => log(`failed to save lastDevice: ${String(e)}`));
+  };
+
+  const clipboardHost: ClipboardHost = { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) };
   const createSession: SessionFactory = (device, adb) =>
     new ScrcpySession({
       adb,
       serial: device.serial,
       model: device.model,
       serverPath: paths.scrcpyServer,
-      settings: DEFAULT_STREAM_SETTINGS,
+      settings: toStreamSettings(settings.current),
       log,
+      clipboardHost,
     });
 
   if (!opts.record) {
-    const source = new DeviceSource({ host, preferredSerial: opts.serial, log, createSession, foldMonitor: startFoldMonitor });
+    const source = new DeviceSource({
+      host,
+      preferredSerial: opts.serial ?? settings.current.lastDevice,
+      log,
+      createSession,
+      foldMonitor: startFoldMonitor,
+      wireless,
+      onConnected,
+    });
     return { source, closeRecording: async () => {} };
   }
 
@@ -120,11 +139,13 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
   const writer = createQueuedWriter(opened.stream);
   const source = new DeviceSource({
     host,
-    preferredSerial: opts.serial,
+    preferredSerial: opts.serial ?? settings.current.lastDevice,
     log,
     createSession,
     recordSink: (sink) => teeToRecording(sink, writer, Date.now, log),
     foldMonitor: startFoldMonitor,
+    wireless,
+    onConnected,
   });
   return { source, closeRecording: closeRecordStream(opened.stream, writer) };
 }

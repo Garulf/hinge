@@ -1,7 +1,10 @@
 import { expect, test } from "vitest";
 import { bindSource, DeviceSource, type DeviceWatcher, type FoldMonitorStarter, type PortLike } from "../../src/main/app-controller";
 import type { MediaSource, MediaSink } from "../../src/main/media-source";
-import type { ControlIntent, MainToRenderer, RendererToMain, SessionStatus } from "../../src/shared/wire";
+import { ScrcpySession, type ScrcpyServerDeps } from "../../src/main/scrcpy-session";
+import { DEFAULT_STREAM_SETTINGS } from "../../src/main/scrcpy-init";
+import type { TransferDeps } from "../../src/main/transfers";
+import type { ControlIntent, MainToRenderer, RendererToMain, SessionStatus, TransferProgress } from "../../src/shared/wire";
 import type { DeviceSummary } from "../../src/main/transport";
 
 test("forwards source events to the port with transferables and routes control back", async () => {
@@ -80,6 +83,101 @@ test("a second ready (renderer reload) replays the last video-start and configur
   ]);
 });
 
+test("forwards audio events to the port and replays the last audio-start and configuration packet on a second ready", async () => {
+  const posted: MainToRenderer[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: (m) => posted.push(m), onMessage: (fn) => { handler = fn; } };
+  let sink!: MediaSink;
+  const source: MediaSource = { start: async (s) => { sink = s; }, control: () => {}, stop: async () => {} };
+  bindSource(source, port);
+  handler({ kind: "ready" });
+  await flush();
+
+  sink.audioStart!({ codec: "opus", sampleRate: 48000, channels: 2 });
+  sink.audioPacket!({ type: "configuration", data: new Uint8Array([1, 2]) });
+  sink.audioPacket!({ type: "data", pts: 1, data: new Uint8Array([3]) });
+
+  posted.length = 0;
+  handler({ kind: "ready" });
+  await flush();
+
+  expect(posted).toEqual([
+    { kind: "audio-start", info: { codec: "opus", sampleRate: 48000, channels: 2 } },
+    { kind: "audio-packet", packet: { type: "configuration", data: new Uint8Array([1, 2]) } },
+  ]);
+});
+
+test("audioEnd forwards the reason and clears the replay state so a later ready does not resurrect a dead audio stream", async () => {
+  const posted: MainToRenderer[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: (m) => posted.push(m), onMessage: (fn) => { handler = fn; } };
+  let sink!: MediaSink;
+  const source: MediaSource = { start: async (s) => { sink = s; }, control: () => {}, stop: async () => {} };
+  bindSource(source, port);
+  handler({ kind: "ready" });
+  await flush();
+
+  sink.audioStart!({ codec: "opus", sampleRate: 48000, channels: 2 });
+  sink.audioEnd!("unsupported");
+  expect(posted).toContainEqual({ kind: "audio-end", reason: "unsupported" });
+
+  posted.length = 0;
+  handler({ kind: "ready" });
+  await flush();
+
+  expect(posted.some((m) => m.kind === "audio-start" || m.kind === "audio-packet")).toBe(false);
+});
+
+test("forwards transfer-progress from the sink to the port, and routes a drop-files message to the source's transfer()", async () => {
+  const posted: MainToRenderer[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: (m) => posted.push(m), onMessage: (fn) => { handler = fn; } };
+  const transferred: string[][] = [];
+  let sink!: MediaSink;
+  const source: MediaSource = {
+    start: async (s) => { sink = s; },
+    control: () => {},
+    transfer: (paths) => transferred.push(paths),
+    stop: async () => {},
+  };
+  bindSource(source, port);
+  handler({ kind: "ready" });
+  await flush();
+
+  handler({ kind: "drop-files", paths: ["/tmp/a.apk", "/tmp/b.png"] });
+  expect(transferred).toEqual([["/tmp/a.apk", "/tmp/b.png"]]);
+
+  sink.transferProgress!({ id: "t1", name: "a.apk", kind: "install", state: "running", bytesWritten: 1, totalBytes: 2 });
+  expect(posted).toContainEqual({
+    kind: "transfer-progress",
+    progress: { id: "t1", name: "a.apk", kind: "install", state: "running", bytesWritten: 1, totalBytes: 2 },
+  });
+});
+
+test("DeviceSource.transfer() forwards to the current session and is a no-op with no session connected", async () => {
+  const watcher = fakeWatcher();
+  const transferred: string[][] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: (): MediaSource => ({
+      start: async () => {},
+      control: () => {},
+      transfer: (paths) => transferred.push(paths),
+      stop: async () => {},
+    }),
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  source.transfer(["/tmp/nowhere.txt"]);
+  expect(transferred).toEqual([]);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  source.transfer(["/tmp/here.txt"]);
+  expect(transferred).toEqual([["/tmp/here.txt"]]);
+});
+
 function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -96,7 +194,7 @@ function fakeSink(): { sink: MediaSink; statuses: SessionStatus[] } {
 }
 
 function device(serial: string, transport: DeviceSummary["transport"] = "usb"): DeviceSummary {
-  return { serial, state: "device", model: null, transport };
+  return { serial, state: "device", model: null, device: null, transport };
 }
 
 class FakeSession implements MediaSource {
@@ -1056,4 +1154,516 @@ test("a second ready (renderer reload) also replays the last posture reading aft
 
   expect(posted.map((m) => m.kind)).toEqual(["video-start", "posture"]);
   expect(posted[1]).toEqual({ kind: "posture", reading: { stateId: 3, posture: "open", rotation: 1 } });
+});
+
+function fakeWireless(): { wireless: import("../../src/main/wireless").WirelessDeps; calls: Record<string, unknown[]> } {
+  const calls: Record<string, unknown[]> = { pair: [], connect: [], disconnect: [], mdnsServices: [], setTcpIpPort: [], wlanIp: [] };
+  return {
+    calls,
+    wireless: {
+      pair: async (hostPort, code) => {
+        calls.pair.push([hostPort, code]);
+      },
+      connect: async (address) => {
+        calls.connect.push([address]);
+      },
+      disconnect: async (address) => {
+        calls.disconnect.push([address]);
+      },
+      mdnsServices: async () => {
+        calls.mdnsServices.push([]);
+        return [];
+      },
+      setTcpIpPort: async (adb, port) => {
+        calls.setTcpIpPort.push([adb, port]);
+      },
+      wlanIp: async (adb) => {
+        calls.wlanIp.push([adb]);
+        return "192.168.1.50";
+      },
+    },
+  };
+}
+
+test("a TCP device disappearing triggers wireless.connect on the 1/2/4/8/15s backoff until it succeeds, once it has streamed at least once", async () => {
+  const watcher = fakeWatcher();
+  const { wireless } = fakeWireless();
+  const delays: number[] = [];
+  let connectAttempts = 0;
+  wireless.connect = async () => {
+    connectAttempts++;
+    if (connectAttempts < 3) throw new Error("still unreachable");
+  };
+  const sessions: FakeSession[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+    wireless,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const tcp = device("10.0.0.5:5555", "tcp");
+  watcher.emit([tcp]);
+  await flush();
+  sessions[0].streamed();
+
+  watcher.emit([]); // the phone drops off Wi-Fi
+  await flush();
+
+  expect(delays).toEqual([1000, 2000, 4000]);
+  expect(connectAttempts).toBe(3);
+});
+
+test("TCP reconnect backoff caps at 15s and keeps repeating at 15s, not climbing forever", async () => {
+  const watcher = fakeWatcher();
+  const { wireless } = fakeWireless();
+  const delays: number[] = [];
+  let connectAttempts = 0;
+  wireless.connect = async () => {
+    connectAttempts++;
+    if (connectAttempts < 6) throw new Error("still unreachable");
+  };
+  const sessions: FakeSession[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+    wireless,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("10.0.0.5:5555", "tcp")]);
+  await flush();
+  sessions[0].streamed();
+
+  watcher.emit([]);
+  await flush();
+
+  expect(delays).toEqual([1000, 2000, 4000, 8000, 15000, 15000]);
+  expect(connectAttempts).toBe(6);
+});
+
+test("a stale lastDevice that never streamed this run does not trigger TCP reconnect at launch", async () => {
+  const watcher = fakeWatcher();
+  const { wireless } = fakeWireless();
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    preferredSerial: "10.0.0.9:5555",
+    createSession: () => new FakeSession(),
+    wireless,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  // The remembered device is not in the first device list at all: never
+  // having streamed this run, it must not start a reconnect loop.
+  watcher.emit([]);
+  await flush();
+
+  expect(delays).toEqual([]);
+});
+
+test("TCP reconnect is not attempted for a USB device dropping, and stops once the device list changes again", async () => {
+  const watcher = fakeWatcher();
+  const { wireless } = fakeWireless();
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    wireless,
+    delay: (_ms, signal) =>
+      new Promise((resolve) => {
+        delays.push(_ms);
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      }),
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1", "usb")]);
+  await flush();
+  watcher.emit([]);
+  await flush();
+  expect(delays).toEqual([]); // USB dropping never starts a wireless reconnect loop
+
+  const tcpSessions: FakeSession[] = [];
+  const tcpSource = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      tcpSessions.push(s);
+      return s;
+    },
+    wireless,
+    delay: (ms, signal) =>
+      new Promise((resolve) => {
+        delays.push(ms);
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      }),
+  });
+  const { sink: sink2 } = fakeSink();
+  await tcpSource.start(sink2);
+  watcher.emit([device("10.0.0.5:5555", "tcp")]);
+  await flush();
+  tcpSessions[0].streamed();
+  watcher.emit([]);
+  await flush();
+  expect(delays).toEqual([1000]);
+
+  // The device reappears through adb's own tracking before the reconnect
+  // loop's delay resolves: the pending wireless.connect attempt is cancelled.
+  watcher.emit([device("10.0.0.5:5555", "tcp")]);
+  await flush();
+  expect(delays).toEqual([1000]); // no further delay scheduled
+});
+
+test("chooseDevice() switches the session to a specific already-listed device, overriding the USB-preferred default", async () => {
+  const watcher = fakeWatcher();
+  const opened: string[] = [];
+  const sessions: FakeSession[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return {} as never;
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const usb = device("USB1", "usb");
+  const tcp = device("10.0.0.5:5555", "tcp");
+  watcher.emit([usb, tcp]);
+  await flush();
+  expect(opened).toEqual(["USB1"]); // USB wins by default
+
+  source.chooseDevice("10.0.0.5:5555");
+  await flush();
+  expect(opened).toEqual(["USB1", "10.0.0.5:5555"]);
+  expect(sessions[0].stopped).toBe(true);
+});
+
+test("handleDeviceCommand('list') returns the deduped device list", async () => {
+  const watcher = fakeWatcher();
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession() });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const tcp = { serial: "10.0.0.5:5555", state: "device", model: "Pixel 8", device: "shiba", transport: "tcp" as const };
+  const mdns = { serial: "adb-x._adb-tls-connect._tcp", state: "device", model: "Pixel 8", device: "shiba", transport: "mdns" as const };
+  watcher.emit([tcp, mdns]);
+  await flush();
+
+  const result = await source.handleDeviceCommand!({ type: "list" });
+  expect(result).toEqual({ type: "list", devices: [tcp] });
+});
+
+test("handleDeviceCommand('pair') pairs and, once mDNS resolves a connect service, switches the session to it", async () => {
+  const watcher = fakeWatcher();
+  const opened: string[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return {} as never;
+  };
+  const { wireless, calls } = fakeWireless();
+  wireless.mdnsServices = async () => [{ name: "x", service: "_adb-tls-connect._tcp", address: "192.168.1.42:5000" }];
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const result = await source.handleDeviceCommand!({ type: "pair", hostPort: "192.168.1.42:37251", code: "123456" });
+  expect(calls.pair).toEqual([["192.168.1.42:37251", "123456"]]);
+  expect(result).toEqual({ type: "pair", ok: true, connectedAddress: "192.168.1.42:5000" });
+
+  watcher.emit([device("192.168.1.42:5000", "tcp")]);
+  await flush();
+  expect(opened).toEqual(["192.168.1.42:5000"]);
+});
+
+test("handleDeviceCommand('switch-to-wifi') opens the USB device, drives switchDeviceToWifi, closes the opened adb, and moves the session to the new address", async () => {
+  const watcher = fakeWatcher();
+  let closeCalls = 0;
+  const openedAdb = { marker: "usb-adb", close: async () => { closeCalls++; } };
+  const opened: unknown[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return openedAdb as never;
+  };
+  const { wireless, calls } = fakeWireless();
+  const sessions: FakeSession[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+    wireless,
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const result = await source.handleDeviceCommand!({ type: "switch-to-wifi", serial: "USB1" });
+  expect(calls.wlanIp).toEqual([[openedAdb]]);
+  expect(calls.setTcpIpPort).toEqual([[openedAdb, 5555]]);
+  expect(result).toEqual({ type: "switch-to-wifi", ok: true, address: "192.168.1.50:5555" });
+  expect(closeCalls).toBe(1);
+
+  // The session moved to the new wireless address, not left waiting on USB1.
+  watcher.emit([device("192.168.1.50:5555", "tcp")]);
+  await flush();
+  expect(opened).toEqual(["USB1", "192.168.1.50:5555"]);
+});
+
+test("handleDeviceCommand('switch-to-wifi') refuses a non-USB serial", async () => {
+  const watcher = fakeWatcher();
+  const { wireless, calls } = fakeWireless();
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const result = await source.handleDeviceCommand!({ type: "switch-to-wifi", serial: "10.0.0.5:5555" });
+  expect(result).toEqual({ type: "switch-to-wifi", ok: false, address: null, message: expect.stringContaining("USB") });
+  expect(calls.wlanIp).toEqual([]);
+});
+
+test("handleDeviceCommand('disconnect') disconnects a wireless device but refuses a USB one", async () => {
+  const watcher = fakeWatcher();
+  const { wireless, calls } = fakeWireless();
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const tcpResult = await source.handleDeviceCommand!({ type: "disconnect", serial: "10.0.0.5:5555" });
+  expect(calls.disconnect).toEqual([["10.0.0.5:5555"]]);
+  expect(tcpResult).toEqual({ type: "disconnect", ok: true });
+
+  const usbResult = await source.handleDeviceCommand!({ type: "disconnect", serial: "USB1" });
+  if (usbResult.type !== "disconnect") throw new Error("type");
+  expect(usbResult.ok).toBe(false);
+  expect(calls.disconnect).toEqual([["10.0.0.5:5555"]]);
+});
+
+test("handleDeviceCommand('disconnect') reports failure when wireless.disconnect rejects, instead of throwing", async () => {
+  const watcher = fakeWatcher();
+  const { wireless } = fakeWireless();
+  wireless.disconnect = async () => {
+    throw new Error("device already gone");
+  };
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const result = await source.handleDeviceCommand!({ type: "disconnect", serial: "10.0.0.5:5555" });
+  expect(result).toEqual({ type: "disconnect", ok: false, message: expect.stringContaining("device already gone") });
+});
+
+test("an explicit disconnect suppresses TCP reconnect for that serial until the user picks it again", async () => {
+  const watcher = fakeWatcher();
+  const { wireless } = fakeWireless();
+  const delays: number[] = [];
+  const sessions: FakeSession[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+    wireless,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const tcp = device("10.0.0.5:5555", "tcp");
+  watcher.emit([tcp]);
+  await flush();
+  sessions[0].streamed();
+
+  await source.handleDeviceCommand!({ type: "disconnect", serial: "10.0.0.5:5555" });
+  watcher.emit([]); // the device list update racing the disconnect
+  await flush();
+
+  expect(delays).toEqual([]); // no reconnect loop armed for the serial we just disconnected
+
+  // Even if the (already-disconnected) serial flickers back into the device
+  // list before the user picks anything, it must not be auto-selected.
+  watcher.emit([tcp]);
+  await flush();
+  expect(sessions).toHaveLength(1);
+
+  // The user explicitly choosing it again clears the suppression.
+  source.chooseDevice("10.0.0.5:5555");
+  await flush();
+  expect(sessions).toHaveLength(2);
+});
+
+test("handleDeviceCommand('connect') on an address not yet listed by adb (the 'ask for the connect port' fallback) calls wireless.connect first, then chooses it", async () => {
+  const watcher = fakeWatcher();
+  const opened: string[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return {} as never;
+  };
+  const { wireless, calls } = fakeWireless();
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const result = await source.handleDeviceCommand!({ type: "connect", serial: "192.168.1.42:5000" });
+  expect(calls.connect).toEqual([["192.168.1.42:5000"]]);
+  expect(result).toEqual({ type: "connect", ok: true });
+
+  watcher.emit([device("192.168.1.42:5000", "tcp")]);
+  await flush();
+  expect(opened).toEqual(["192.168.1.42:5000"]);
+});
+
+test("handleDeviceCommand('connect') on an already-listed serial chooses it directly without an extra wireless.connect", async () => {
+  const watcher = fakeWatcher();
+  const opened: string[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return {} as never;
+  };
+  const { wireless, calls } = fakeWireless();
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1", "usb"), device("10.0.0.5:5555", "tcp")]);
+  await flush();
+  expect(opened).toEqual(["USB1"]);
+
+  const result = await source.handleDeviceCommand!({ type: "connect", serial: "10.0.0.5:5555" });
+  expect(result).toEqual({ type: "connect", ok: true });
+  expect(calls.connect).toEqual([]);
+  expect(opened).toEqual(["USB1", "10.0.0.5:5555"]);
+});
+
+test("handleDeviceCommand('connect') reports failure when wireless.connect rejects", async () => {
+  const watcher = fakeWatcher();
+  const { wireless } = fakeWireless();
+  wireless.connect = async () => {
+    throw new Error("connection refused");
+  };
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const result = await source.handleDeviceCommand!({ type: "connect", serial: "192.168.1.42:5000" });
+  expect(result).toEqual({ type: "connect", ok: false, message: expect.stringContaining("connection refused") });
+});
+
+test("chooseDevice() with a real transfer in flight cancels it through the actual adb.sync stream, not just relabels it", async () => {
+  function neverEndingReadableStream(): ReadableStream<{ type: "data"; data: Uint8Array }> {
+    return new ReadableStream({ start: () => {} });
+  }
+  function oneShotClient(videoStream: ReadableStream<{ type: "data"; data: Uint8Array }>) {
+    return {
+      videoStream: Promise.resolve({ metadata: { codec: 1, deviceName: "Pixel" }, width: 100, height: 200, stream: videoStream }),
+      audioStream: Promise.resolve({ type: "disabled" }),
+      output: new ReadableStream<string>({ start: (c) => c.close() }),
+      controller: {},
+      close: async () => {},
+    };
+  }
+  const scrcpyDeps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(neverEndingReadableStream()) as never,
+  };
+  const pushCancelled = { value: false };
+  const bigFile = new ReadableStream<Uint8Array>({ start: () => {} }); // never-ending: the file "content" itself
+  const transferDeps: Partial<TransferDeps> = {
+    openFile: async () => ({ size: 10_000_000, stream: bigFile }),
+    pushFile: async (_path, stream) => {
+      const reader = stream.getReader();
+      try {
+        for (;;) {
+          const { done } = await reader.read();
+          if (done) break;
+        }
+      } catch {
+        pushCancelled.value = true;
+        throw new Error("write aborted");
+      }
+    },
+    scanFile: async () => {},
+    removeFile: async () => {},
+  };
+
+  const watcher = fakeWatcher();
+  watcher.host.open = async () => ({}) as never;
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: (device, adb) =>
+      new ScrcpySession({
+        adb,
+        serial: device.serial,
+        model: device.model,
+        serverPath: "/vendor/scrcpy-server",
+        settings: DEFAULT_STREAM_SETTINGS,
+        deps: scrcpyDeps,
+        transferDeps,
+      }),
+  });
+  const transfers: TransferProgress[] = [];
+  const { sink } = fakeSink();
+  sink.transferProgress = (p) => transfers.push(p);
+  await source.start(sink);
+
+  // Both devices are already listed, so chooseDevice() below can switch
+  // immediately instead of merely remembering a preference for later.
+  watcher.emit([device("10.0.0.5:5555", "tcp"), device("192.168.1.9:5555", "tcp")]);
+  await flush();
+  source.transfer(["/tmp/huge.bin"]);
+  await flush();
+  expect(transfers.map((p) => p.state)).toEqual(["queued", "running"]);
+
+  // Switching devices mid-transfer must cancel it cleanly through the real
+  // stream Tango's adb.sync.write is reading, not just relabel it after the
+  // fact while the write keeps running to completion.
+  source.chooseDevice("192.168.1.9:5555");
+  await flush();
+  await flush();
+
+  expect(pushCancelled.value).toBe(true);
+  expect(transfers.map((p) => p.state)).toEqual(["queued", "running", "cancelled"]);
+  expect(transfers.some((p) => p.state === "done")).toBe(false);
 });

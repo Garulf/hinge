@@ -7,6 +7,11 @@ export type WireMediaPacket =
 
 export interface VideoStreamInfo { codecId: number; width: number; height: number; deviceName: string | null }
 
+export type WireAudioPacket = { type: "configuration"; data: Uint8Array } | { type: "data"; pts: number | null; data: Uint8Array };
+
+/** codec is the WebCodecs AudioDecoder codec string (e.g. "opus"), not a numeric id like VideoStreamInfo's. */
+export interface AudioStreamInfo { codec: string; sampleRate: number; channels: number }
+
 export type SessionStatus =
   | { state: "no-device" }
   | { state: "unauthorized"; serial: string }
@@ -22,20 +27,80 @@ export type ControlIntent =
   | { type: "key"; action: "down" | "up"; keyCode: number; repeat: number; metaState: number }
   | { type: "text"; text: string }
   | { type: "back-or-screen-on"; action: "down" | "up" }
-  | { type: "reset-video" };
+  | { type: "reset-video" }
+  /**
+   * Unresolved: main fills in the PC clipboard content and (for a real
+   * paste) a fresh sequence number, since neither is available to the
+   * renderer. asText true injects the text directly (MOD+Shift+v); false
+   * sets the device clipboard and pastes (Ctrl+V, MOD+v).
+   */
+  | { type: "clipboard-paste"; asText: boolean };
 
 export interface PostureMessage { kind: "posture"; reading: PostureReading }
+
+export type TransportKind = "usb" | "tcp" | "mdns";
+
+/** device is Tango's Device.device (the codename), used with model to dedupe the same phone listed twice (ip:port and mDNS serial). */
+export interface DeviceSummary {
+  serial: string;
+  state: string;
+  model: string | null;
+  device: string | null;
+  transport: TransportKind;
+}
+
+export type DeviceCommand =
+  | { type: "list" }
+  | { type: "pair"; hostPort: string; code: string }
+  | { type: "connect"; serial: string }
+  | { type: "switch-to-wifi"; serial: string }
+  | { type: "disconnect"; serial: string };
+
+export type DeviceCommandResult =
+  | { type: "list"; devices: DeviceSummary[] }
+  | { type: "pair"; ok: boolean; connectedAddress: string | null; message?: string }
+  | { type: "connect"; ok: boolean; message?: string }
+  | { type: "switch-to-wifi"; ok: boolean; address: string | null; message?: string }
+  | { type: "disconnect"; ok: boolean; message?: string };
+
+export type TransferKind = "install" | "push";
+export type TransferState = "queued" | "running" | "done" | "error" | "cancelled";
+
+export interface TransferProgress {
+  id: string;
+  name: string;
+  kind: TransferKind;
+  state: TransferState;
+  bytesWritten: number;
+  totalBytes: number;
+  message?: string;
+}
 
 export type MainToRenderer =
   | { kind: "video-start"; info: VideoStreamInfo }
   | { kind: "video-packet"; packet: WireMediaPacket }
   | { kind: "video-end" }
+  | { kind: "audio-start"; info: AudioStreamInfo }
+  | { kind: "audio-packet"; packet: WireAudioPacket }
+  /**
+   * reason "unsupported" covers both the device metadata reporting
+   * "disabled"/"errored" and the audio stream failing before it produced
+   * anything (both toast-worthy); "disabled" is audio turned off by the
+   * user's own settings, not a failure; absent for a clean end (e.g.
+   * session stop).
+   */
+  | { kind: "audio-end"; reason?: "unsupported" | "disabled" }
   | { kind: "status"; status: SessionStatus }
+  | { kind: "transfer-progress"; progress: TransferProgress }
+  | { kind: "device-command-result"; id: string; result: DeviceCommandResult }
   | PostureMessage;
 
 export type RendererToMain =
   | { kind: "ready" }
-  | { kind: "control"; intent: ControlIntent };
+  | { kind: "control"; intent: ControlIntent }
+  /** Local PC file paths, already resolved in the preload via webUtils.getPathForFile; main decides install vs. push by extension. */
+  | { kind: "drop-files"; paths: string[] }
+  | { kind: "device-command"; id: string; command: DeviceCommand };
 
 type LooseMediaPacket =
   | { type: "configuration"; data: Uint8Array }
@@ -57,8 +122,18 @@ export function toWire(packet: LooseMediaPacket): WireMediaPacket {
   };
 }
 
+type LooseAudioPacket = { type: "configuration"; data: Uint8Array } | { type: "data"; pts?: bigint; data: Uint8Array };
+
+export function toWireAudio(packet: LooseAudioPacket): WireAudioPacket {
+  if (packet.type === "configuration") return { type: "configuration", data: ownedCopy(packet.data) };
+  return { type: "data", pts: packet.pts === undefined ? null : Number(packet.pts), data: ownedCopy(packet.data) };
+}
+
 export function transferablesOf(msg: MainToRenderer): ArrayBuffer[] {
-  if (msg.kind !== "video-packet") return [];
-  if (msg.packet.type === "session") return [];
-  return [msg.packet.data.buffer as ArrayBuffer];
+  if (msg.kind === "video-packet") {
+    if (msg.packet.type === "session") return [];
+    return [msg.packet.data.buffer as ArrayBuffer];
+  }
+  if (msg.kind === "audio-packet") return [msg.packet.data.buffer as ArrayBuffer];
+  return [];
 }

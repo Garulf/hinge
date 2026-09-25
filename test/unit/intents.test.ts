@@ -10,6 +10,7 @@ function fake() {
     injectText: async (t) => { calls.push(["text", t]); },
     backOrScreenOn: async (a) => { calls.push(["back", a]); },
     resetVideo: async () => { calls.push(["reset-video", undefined]); },
+    setClipboard: async (m) => { calls.push(["set-clipboard", m]); },
   };
   return { c, calls };
 }
@@ -43,4 +44,26 @@ test("reset-video calls the controller's resetVideo", async () => {
   const { c, calls } = fake();
   await applyIntent(c, { type: "reset-video" });
   expect(calls).toEqual([["reset-video", undefined]]);
+});
+
+test("clipboard-paste with asText injects the PC clipboard text instead of setting the device clipboard", async () => {
+  const { c, calls } = fake();
+  await applyIntent(c, { type: "clipboard-paste", asText: true }, { readPcClipboard: async () => "hello" });
+  expect(calls).toEqual([["text", "hello"]]);
+});
+
+test("clipboard-paste without asText sets the device clipboard with a fresh sequence and pastes", async () => {
+  const { c, calls } = fake();
+  await applyIntent(
+    c,
+    { type: "clipboard-paste", asText: false },
+    { readPcClipboard: async () => "hello", beginClipboardPush: () => 7n },
+  );
+  expect(calls).toEqual([["set-clipboard", { content: "hello", sequence: 7n, paste: true }]]);
+});
+
+test("clipboard-paste is a no-op when no PC clipboard reader is wired", async () => {
+  const { c, calls } = fake();
+  await applyIntent(c, { type: "clipboard-paste", asText: false });
+  expect(calls).toEqual([]);
 });

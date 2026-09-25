@@ -33,7 +33,9 @@ async function loadModel(): Promise<ArrayBuffer> {
 }
 
 const director = new FoldDirector({ view: "work" });
-const windowSizer = new WindowSizer((size, rotation) => window.hinge.setWindowSize(size.w, size.h, rotation));
+const windowSizer = new WindowSizer((size, rotation) => window.hinge.setWindowSize(size.w, size.h, rotation), {
+  nudgeLostResizes: window.hinge.platform === "linux",
+});
 const decodeRecovery = new DecodeRecovery();
 let pxPerMm: number | null = null;
 let cls: ScreenClass | null = null;

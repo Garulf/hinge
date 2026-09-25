@@ -36,6 +36,7 @@ const api: HingeApi = {
   beginDrag: () => ipcRenderer.send("hinge:begin-drag"),
   endDrag: () => ipcRenderer.send("hinge:end-drag"),
   workAreaHeight: () => ipcRenderer.invoke("hinge:work-area-height"),
+  platform: process.platform,
 };
 
 contextBridge.exposeInMainWorld("hinge", api);

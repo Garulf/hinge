@@ -5,9 +5,9 @@ import type { Rotation } from "../../src/shared/screen-uv";
 const CLOSED = { w: 72, h: 158 };
 const OPEN = { w: 144, h: 158 };
 
-function sizer() {
+function sizer(opts: { nudgeLostResizes?: boolean } = { nudgeLostResizes: true }) {
   const requests: [Size, Rotation][] = [];
-  return { requests, sizer: new WindowSizer((size, rotation) => requests.push([size, rotation])) };
+  return { requests, sizer: new WindowSizer((size, rotation) => requests.push([size, rotation]), opts) };
 }
 
 test("the first update requests the target", () => {
@@ -96,4 +96,20 @@ test("a sideways window is nudged along its height, the axis anchored to the fix
   s.verify(OPEN, 0);
   s.verify(OPEN, 500);
   expect(requests.slice(1)).toEqual([[{ w: 158, h: 145 }, 1], [LANDSCAPE, 1]]);
+});
+
+test("a page within 1 px of the requested size counts as landed", () => {
+  const { requests, sizer: s } = sizer();
+  s.update(OPEN, 0, true);
+  s.verify({ w: OPEN.w - 1, h: OPEN.h + 1 }, 0);
+  s.verify({ w: OPEN.w - 1, h: OPEN.h + 1 }, 5000);
+  expect(requests).toHaveLength(1);
+});
+
+test("without lost-resize nudging a mismatch is left alone", () => {
+  const { requests, sizer: s } = sizer({ nudgeLostResizes: false });
+  s.update(OPEN, 0, true);
+  s.verify(CLOSED, 0);
+  s.verify(CLOSED, 5000);
+  expect(requests).toHaveLength(1);
 });

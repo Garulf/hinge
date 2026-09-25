@@ -9,8 +9,14 @@ export interface Size {
 const NUDGE_AFTER_MS = 400;
 const MAX_NUDGES = 3;
 
+const LANDED_TOLERANCE_PX = 1;
+
 function sameSize(a: Size, b: Size): boolean {
   return a.w === b.w && a.h === b.h;
+}
+
+function landed(actual: Size, requested: Size): boolean {
+  return Math.abs(actual.w - requested.w) <= LANDED_TOLERANCE_PX && Math.abs(actual.h - requested.h) <= LANDED_TOLERANCE_PX;
 }
 
 /**
@@ -25,9 +31,11 @@ export class WindowSizer {
   #target: Size | null = null;
   #mismatchSinceMs: number | null = null;
   #nudges = 0;
+  readonly #nudgeLostResizes: boolean;
 
-  constructor(request: (size: Size, rotation: Rotation) => void) {
+  constructor(request: (size: Size, rotation: Rotation) => void, opts?: { nudgeLostResizes?: boolean }) {
     this.#request = request;
+    this.#nudgeLostResizes = opts?.nudgeLostResizes ?? false;
   }
 
   update(target: Size, rotation: Rotation, settled: boolean): void {
@@ -44,15 +52,17 @@ export class WindowSizer {
   }
 
   /**
-   * On X11 a resize requested while the compositor is stalled can leave the
-   * page at its old size even though the window system took the new one,
-   * and asking for the same size again is then a no-op; a one pixel detour
-   * along the anchored axis (so the centred axis does not drift by rounding)
-   * gets it through.
+   * With nudgeLostResizes (X11 only): a resize requested while the
+   * compositor is stalled can leave the page at its old size even though
+   * the window system took the new one, and asking for the same size again
+   * is then a no-op; a one pixel detour along the anchored axis (so the
+   * centred axis does not drift by rounding) gets it through. Elsewhere
+   * fractional scaling or an OS size cap could keep the page from ever
+   * matching exactly, and nudging would only jitter the window.
    */
   verify(actual: Size, nowMs: number): void {
     const requested = this.#requested;
-    if (!requested || this.#rotation === null || sameSize(actual, requested)) {
+    if (!this.#nudgeLostResizes || !requested || this.#rotation === null || landed(actual, requested)) {
       this.#mismatchSinceMs = null;
       return;
     }

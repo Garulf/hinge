@@ -4,14 +4,14 @@
 # Run `readwright badges` / `readwright blocks` to list badge presets and template blocks.
 project:
   name: hinge
-  tagline: A desktop scrcpy client that mirrors a Galaxy Z Fold 7 onto a placeholder
-    phone model
+  tagline: A desktop scrcpy client that shows a Galaxy Z Fold 7 as a 3D phone
+    that folds with the real one
   license: MIT
 vars:
   status: >-
-    Early development, M1 (flat mirror). The app connects to a phone over adb,
-    starts scrcpy-server 4.1, and shows the video feed on a placeholder phone
-    slab with touch and keyboard input routed back to the device. Folding
-    reactions, the 3D showcase view, and packaged releases are later
-    milestones.
+    Early development, M3 (fold reaction). The app connects to a phone over
+    adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the
+    Fold 7 that folds, unfolds and turns with the real phone, with touch and
+    keyboard input routed back to the device. The 3D showcase view, audio and
+    packaged releases are later milestones.
 badges: []

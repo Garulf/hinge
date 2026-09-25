@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { InputRouter } from "../../src/renderer/input/input-router";
+import type { HingeAction } from "../../src/shared/shortcuts";
 import type { ControlIntent } from "../../src/shared/wire";
 
 type Handler = (e: Record<string, unknown>) => void;
@@ -57,12 +58,14 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
 });
 
-function setup(opts?: { rotation?: 0 | 1 | 2 | 3; video?: { w: number; h: number } }) {
+function setup(opts?: { rotation?: 0 | 1 | 2 | 3; video?: { w: number; h: number }; onAction?: (action: HingeAction) => void }) {
   const canvas = fakeCanvas();
   const scene = fakeScene(opts?.rotation);
   const sent: ControlIntent[] = [];
   const video = opts?.video ?? { w: 100, h: 100 };
-  const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => video, (intent) => sent.push(intent));
+  const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => video, (intent) => sent.push(intent), {
+    onAction: opts?.onAction,
+  });
   return { canvas, scene, sent, router };
 }
 
@@ -198,6 +201,27 @@ test("scrolling maps through the same rotation", () => {
   const { canvas, sent } = setup({ rotation: 1, video: { w: 200, h: 100 } });
   canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, ...POINT });
   expect(sent[0]).toMatchObject({ type: "scroll", x: 60, y: 80 });
+});
+
+test("MOD+D fires the toggle-view action and is never forwarded to the phone", () => {
+  const onAction = vi.fn();
+  const { sent } = setup({ onAction });
+  const preventDefault = vi.fn();
+  fakeWindow.fire("keydown", { type: "keydown", code: "KeyD", key: "d", repeat: false, ctrlKey: false, altKey: true, metaKey: false, shiftKey: false, preventDefault });
+
+  expect(onAction).toHaveBeenCalledOnce();
+  expect(onAction).toHaveBeenCalledWith("toggle-view");
+  expect(preventDefault).toHaveBeenCalledOnce();
+  expect(sent).toEqual([]);
+});
+
+test("MOD+D with no onAction supplied is a silent no-op default, still not forwarded", () => {
+  const { sent } = setup();
+  const preventDefault = vi.fn();
+  fakeWindow.fire("keydown", { type: "keydown", code: "KeyD", key: "d", repeat: false, ctrlKey: false, altKey: true, metaKey: false, shiftKey: false, preventDefault });
+
+  expect(preventDefault).toHaveBeenCalledOnce();
+  expect(sent).toEqual([]);
 });
 
 test("with no lit screen a left press drags the window", () => {

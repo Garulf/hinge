@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import type { Adb } from "@yume-chan/adb";
-import type { ControlIntent, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
+import type { AudioStreamInfo, ControlIntent, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
 import type { MediaSink, MediaSource } from "./media-source";
 import { deviceStatus, pickDevice, type DeviceSummary } from "./transport";
@@ -31,6 +31,8 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
 
   let lastVideoStart: VideoStreamInfo | null = null;
   let lastConfigPacket: { type: "configuration"; data: Uint8Array } | null = null;
+  let lastAudioStart: AudioStreamInfo | null = null;
+  let lastAudioConfigPacket: { type: "configuration"; data: Uint8Array } | null = null;
 
   const sink: MediaSink = {
     videoStart: (info) => {
@@ -45,6 +47,20 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
     videoEnd: () => post({ kind: "video-end" }),
     status: (status) => post({ kind: "status", status: withLogHint(status, logHint) }),
     posture: (reading) => post({ kind: "posture", reading }),
+    audioStart: (info) => {
+      lastAudioStart = info;
+      lastAudioConfigPacket = null;
+      post({ kind: "audio-start", info });
+    },
+    audioPacket: (packet) => {
+      if (packet.type === "configuration") lastAudioConfigPacket = { type: "configuration", data: packet.data.slice() };
+      post({ kind: "audio-packet", packet });
+    },
+    audioEnd: (reason) => {
+      lastAudioStart = null;
+      lastAudioConfigPacket = null;
+      post({ kind: "audio-end", reason });
+    },
   };
 
   let started = false;
@@ -53,6 +69,8 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
       if (started) {
         if (lastVideoStart) post({ kind: "video-start", info: lastVideoStart });
         if (lastConfigPacket) post({ kind: "video-packet", packet: { type: "configuration", data: lastConfigPacket.data.slice() } });
+        if (lastAudioStart) post({ kind: "audio-start", info: lastAudioStart });
+        if (lastAudioConfigPacket) post({ kind: "audio-packet", packet: { type: "configuration", data: lastAudioConfigPacket.data.slice() } });
         return;
       }
       started = true;

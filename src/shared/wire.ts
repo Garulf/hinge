@@ -7,6 +7,11 @@ export type WireMediaPacket =
 
 export interface VideoStreamInfo { codecId: number; width: number; height: number; deviceName: string | null }
 
+export type WireAudioPacket = { type: "configuration"; data: Uint8Array } | { type: "data"; pts: number | null; data: Uint8Array };
+
+/** codec is the WebCodecs AudioDecoder codec string (e.g. "opus"), not a numeric id like VideoStreamInfo's. */
+export interface AudioStreamInfo { codec: string; sampleRate: number; channels: number }
+
 export type SessionStatus =
   | { state: "no-device" }
   | { state: "unauthorized"; serial: string }
@@ -37,6 +42,10 @@ export type MainToRenderer =
   | { kind: "video-start"; info: VideoStreamInfo }
   | { kind: "video-packet"; packet: WireMediaPacket }
   | { kind: "video-end" }
+  | { kind: "audio-start"; info: AudioStreamInfo }
+  | { kind: "audio-packet"; packet: WireAudioPacket }
+  /** reason "unsupported" covers both the device metadata reporting "disabled"/"errored" and the audio stream failing before it produced anything; absent for a clean end (e.g. session stop). */
+  | { kind: "audio-end"; reason?: "unsupported" }
   | { kind: "status"; status: SessionStatus }
   | PostureMessage;
 
@@ -64,8 +73,18 @@ export function toWire(packet: LooseMediaPacket): WireMediaPacket {
   };
 }
 
+type LooseAudioPacket = { type: "configuration"; data: Uint8Array } | { type: "data"; pts?: bigint; data: Uint8Array };
+
+export function toWireAudio(packet: LooseAudioPacket): WireAudioPacket {
+  if (packet.type === "configuration") return { type: "configuration", data: ownedCopy(packet.data) };
+  return { type: "data", pts: packet.pts === undefined ? null : Number(packet.pts), data: ownedCopy(packet.data) };
+}
+
 export function transferablesOf(msg: MainToRenderer): ArrayBuffer[] {
-  if (msg.kind !== "video-packet") return [];
-  if (msg.packet.type === "session") return [];
-  return [msg.packet.data.buffer as ArrayBuffer];
+  if (msg.kind === "video-packet") {
+    if (msg.packet.type === "session") return [];
+    return [msg.packet.data.buffer as ArrayBuffer];
+  }
+  if (msg.kind === "audio-packet") return [msg.packet.data.buffer as ArrayBuffer];
+  return [];
 }

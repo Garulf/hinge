@@ -5,6 +5,8 @@ import { bodySizePx, defaultPxPerMm, FOLD7_BODY } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
 import { WindowSizer } from "../shared/window-sizer";
 import type { SessionStatus } from "../shared/wire";
+import { AudioPipe } from "./audio-pipe";
+import { pcmPlayerFactory } from "./audio-player-adapter";
 import { InputRouter } from "./input/input-router";
 import { PortClient, receivePort } from "./port-client";
 import { PhoneScene } from "./scene/phone-scene";
@@ -78,6 +80,8 @@ function onDecodeError(message: string): void {
 }
 
 const pipe = new VideoPipe(scene, onSize, { onError: onDecodeError, onFirstFrame });
+// Task 7 wires the actual toast; a failure here just goes to the console for now.
+const audioPipe = new AudioPipe({ createPlayer: pcmPlayerFactory, onError: (message) => console.error("audio:", message) });
 
 const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
@@ -93,6 +97,9 @@ void Promise.all([receivePort(), scene.ready]).then(([port]) => {
       director.streamEnded();
     } else if (msg.kind === "status") scene.setStatus(statusText(msg.status));
     else if (msg.kind === "posture") director.posture(msg.reading);
+    else if (msg.kind === "audio-start") audioPipe.start(msg.info);
+    else if (msg.kind === "audio-packet") audioPipe.push(msg.packet);
+    else if (msg.kind === "audio-end") audioPipe.end();
   });
   client.send({ kind: "ready" });
 });

@@ -8,6 +8,7 @@
     "src/renderer",
     "src/shared",
     "src/preload/api.d.ts",
+    "test/unit/audio-pipe.test.ts",
     "test/unit/fold-model.test.ts",
     "test/unit/frame-lifecycle.test.ts",
     "test/unit/input-router.test.ts",

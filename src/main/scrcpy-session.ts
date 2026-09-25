@@ -7,7 +7,7 @@ import { createClipboardSync, type ClipboardHost, type ClipboardSync } from "./c
 import { applyIntent, type ApplyIntentDeps } from "./intents";
 import type { MediaSink, MediaSource } from "./media-source";
 import { buildInit, type StreamSettings } from "./scrcpy-init";
-import { toWire, type ControlIntent } from "../shared/wire";
+import { toWire, toWireAudio, type ControlIntent } from "../shared/wire";
 
 type Client = AdbScrcpyClient<AdbScrcpyOptions4_1<any>>;
 
@@ -124,6 +124,46 @@ export class ScrcpySession implements MediaSource {
     void sync.start();
   }
 
+  /**
+   * Disabled/errored metadata and a stream that fails before producing
+   * anything both surface as one "unsupported" audio-end: whichever it is,
+   * the outcome for the session is the same (audio off, one toast), and
+   * there is no separate device message to tell them apart.
+   */
+  async #startAudio(client: Client, sink: MediaSink): Promise<void> {
+    if (!sink.audioStart) return;
+    let metadata: Awaited<Client["audioStream"]>;
+    try {
+      metadata = await client.audioStream;
+    } catch (e) {
+      if (this.#stopped) return;
+      this.opts.log?.(`audio stream metadata failed: ${String(e)}`);
+      sink.audioEnd?.("unsupported");
+      return;
+    }
+    if (this.#stopped) return;
+    if (!metadata || metadata.type !== "success") {
+      sink.audioEnd?.("unsupported");
+      return;
+    }
+
+    sink.audioStart({ codec: metadata.codec.webCodecId, sampleRate: 48000, channels: 2 });
+    const reader = metadata.stream.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (this.#stopped) return;
+        if (done) break;
+        sink.audioPacket?.(toWireAudio(value));
+      }
+      if (!this.#stopped) sink.audioEnd?.();
+    } catch (e) {
+      if (this.#stopped) return;
+      this.opts.log?.(`audio stream error: ${String(e)}`);
+      sink.audioEnd?.("unsupported");
+    }
+  }
+
   async #tryAttempt(
     attempt: 0 | 1 | 2,
     sink: MediaSink,
@@ -181,6 +221,7 @@ export class ScrcpySession implements MediaSource {
       sink.status({ state: "streaming", serial: this.opts.serial, model: this.opts.model });
       sink.videoPacket(toWire(first.value));
       this.#startClipboardSync(client);
+      void this.#startAudio(client, sink);
       void this.#pump(reader, sink);
       return "started";
     } catch (e) {

@@ -80,6 +80,51 @@ test("a second ready (renderer reload) replays the last video-start and configur
   ]);
 });
 
+test("forwards audio events to the port and replays the last audio-start and configuration packet on a second ready", async () => {
+  const posted: MainToRenderer[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: (m) => posted.push(m), onMessage: (fn) => { handler = fn; } };
+  let sink!: MediaSink;
+  const source: MediaSource = { start: async (s) => { sink = s; }, control: () => {}, stop: async () => {} };
+  bindSource(source, port);
+  handler({ kind: "ready" });
+  await flush();
+
+  sink.audioStart!({ codec: "opus", sampleRate: 48000, channels: 2 });
+  sink.audioPacket!({ type: "configuration", data: new Uint8Array([1, 2]) });
+  sink.audioPacket!({ type: "data", pts: 1, data: new Uint8Array([3]) });
+
+  posted.length = 0;
+  handler({ kind: "ready" });
+  await flush();
+
+  expect(posted).toEqual([
+    { kind: "audio-start", info: { codec: "opus", sampleRate: 48000, channels: 2 } },
+    { kind: "audio-packet", packet: { type: "configuration", data: new Uint8Array([1, 2]) } },
+  ]);
+});
+
+test("audioEnd forwards the reason and clears the replay state so a later ready does not resurrect a dead audio stream", async () => {
+  const posted: MainToRenderer[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: (m) => posted.push(m), onMessage: (fn) => { handler = fn; } };
+  let sink!: MediaSink;
+  const source: MediaSource = { start: async (s) => { sink = s; }, control: () => {}, stop: async () => {} };
+  bindSource(source, port);
+  handler({ kind: "ready" });
+  await flush();
+
+  sink.audioStart!({ codec: "opus", sampleRate: 48000, channels: 2 });
+  sink.audioEnd!("unsupported");
+  expect(posted).toContainEqual({ kind: "audio-end", reason: "unsupported" });
+
+  posted.length = 0;
+  handler({ kind: "ready" });
+  await flush();
+
+  expect(posted.some((m) => m.kind === "audio-start" || m.kind === "audio-packet")).toBe(false);
+});
+
 function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }

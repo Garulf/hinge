@@ -11,7 +11,7 @@ export const DEFAULT_STREAM_SETTINGS: StreamSettings = {
   videoBitRate: 16_000_000,
   maxSize: 0,
   maxFps: 0,
-  audio: false,
+  audio: true,
 };
 
 export function buildInit(s: StreamSettings, attempt: 0 | 1 | 2): Record<string, unknown> {

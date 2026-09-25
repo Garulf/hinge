@@ -4,9 +4,20 @@ import type { MediaSink } from "../../src/main/media-source";
 import { DEFAULT_STREAM_SETTINGS } from "../../src/main/scrcpy-init";
 import type { SessionStatus } from "../../src/shared/wire";
 
-function fakeSink(): { sink: MediaSink; statuses: SessionStatus[]; packets: unknown[]; endCalls: () => number } {
+function fakeSink(): {
+  sink: MediaSink;
+  statuses: SessionStatus[];
+  packets: unknown[];
+  endCalls: () => number;
+  audioStarts: unknown[];
+  audioPackets: unknown[];
+  audioEnds: (string | undefined)[];
+} {
   const statuses: SessionStatus[] = [];
   const packets: unknown[] = [];
+  const audioStarts: unknown[] = [];
+  const audioPackets: unknown[] = [];
+  const audioEnds: (string | undefined)[] = [];
   let ended = 0;
   const sink: MediaSink = {
     videoStart: () => {},
@@ -15,8 +26,11 @@ function fakeSink(): { sink: MediaSink; statuses: SessionStatus[]; packets: unkn
       ended++;
     },
     status: (s) => statuses.push(s),
+    audioStart: (info) => audioStarts.push(info),
+    audioPacket: (p) => audioPackets.push(p),
+    audioEnd: (reason) => audioEnds.push(reason),
   };
-  return { sink, statuses, packets, endCalls: () => ended };
+  return { sink, statuses, packets, endCalls: () => ended, audioStarts, audioPackets, audioEnds };
 }
 
 function neverEndingStream(): ReadableStream<{ type: "data"; data: Uint8Array }> {
@@ -29,7 +43,7 @@ function neverEndingStream(): ReadableStream<{ type: "data"; data: Uint8Array }>
 
 function oneShotClient(
   reader: () => ReadableStream<{ type: "data"; data: Uint8Array }>,
-  opts?: { controller?: unknown; clipboard?: ReadableStream<string> },
+  opts?: { controller?: unknown; clipboard?: ReadableStream<string>; audioStream?: unknown },
 ) {
   return {
     videoStream: Promise.resolve({
@@ -38,6 +52,7 @@ function oneShotClient(
       height: 200,
       stream: reader(),
     }),
+    audioStream: opts?.audioStream ?? Promise.resolve({ type: "disabled" }),
     output: new ReadableStream<string>({ start: (c) => c.close() }),
     controller: opts?.controller ?? {},
     clipboard: opts?.clipboard,
@@ -291,6 +306,85 @@ test("control(clipboard-paste) reads the PC clipboard and sets the device clipbo
   clipboardController.enqueue("from the pc");
   await flush();
   expect(written).toEqual([]);
+
+  await session.stop();
+});
+
+test("a successful audio stream posts audio-start with the Opus codec id and forwards packets, then audio-end when the stream closes", async () => {
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  let audioController!: ReadableStreamDefaultController<{ type: "data"; data: Uint8Array }>;
+  const audioStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({ start: (c) => { audioController = c; } });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () =>
+      oneShotClient(() => videoStream, {
+        audioStream: Promise.resolve({ type: "success", codec: { webCodecId: "opus" }, stream: audioStream }),
+      }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps));
+  const { sink, audioStarts, audioPackets, audioEnds } = fakeSink();
+  await session.start(sink);
+  await flush();
+
+  expect(audioStarts).toEqual([{ codec: "opus", sampleRate: 48000, channels: 2 }]);
+
+  audioController.enqueue({ type: "data", data: new Uint8Array([9]) });
+  audioController.close();
+  await flush();
+
+  expect(audioPackets).toEqual([{ type: "data", pts: null, data: new Uint8Array([9]) }]);
+  expect(audioEnds).toEqual([undefined]);
+
+  await session.stop();
+});
+
+test("disabled or errored audio metadata posts one audio-end('unsupported') and never audio-start", async () => {
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () =>
+      oneShotClient(() => videoStream, { audioStream: Promise.resolve({ type: "errored" }) }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps));
+  const { sink, audioStarts, audioEnds } = fakeSink();
+  await session.start(sink);
+  await flush();
+
+  expect(audioStarts).toEqual([]);
+  expect(audioEnds).toEqual(["unsupported"]);
+
+  await session.stop();
+});
+
+test("an audio stream that errors mid-stream posts audio-end('unsupported') instead of hanging or crashing", async () => {
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  const audioStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.error(new Error("audio socket closed")),
+  });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () =>
+      oneShotClient(() => videoStream, {
+        audioStream: Promise.resolve({ type: "success", codec: { webCodecId: "opus" }, stream: audioStream }),
+      }) as never,
+  };
+  const logs: string[] = [];
+  const session = new ScrcpySession(baseOpts(deps, { log: (l) => logs.push(l) }));
+  const { sink, audioEnds } = fakeSink();
+  await session.start(sink);
+  await flush();
+
+  expect(audioEnds).toEqual(["unsupported"]);
+  expect(logs.some((l) => l.includes("audio socket closed"))).toBe(true);
 
   await session.stop();
 });

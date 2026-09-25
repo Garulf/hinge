@@ -341,7 +341,7 @@ test("hover menu on the top edge, transfer toasts for a drop, and a colourway ch
     await page.screenshot({ path: "test-results/toasts.png" });
     await waitForToast(page, (t) => t === "Installed My App.apk", "for the finished install", 30_000);
 
-    await waitFor(page, "the replay to end", (s) => s.lit === null && s.settled && s.laidOut && s.brightness.inner === 0 && s.brightness.cover === 0 && s.angle === 180, 60_000);
+    await waitFor(page, "the replay to end", (s) => s.lit === null && s.settled && s.laidOut && s.brightness.inner === 0 && s.brightness.cover === 0 && s.angle === 180 && s.window.w > s.window.h, 60_000);
     await page.mouse.move(10, 300);
     await page.waitForTimeout(1000);
     const before = await rimBrightness(page, await page.screenshot({ path: "test-results/colour-before.png" }));
@@ -359,6 +359,17 @@ test("hover menu on the top edge, transfer toasts for a drop, and a colourway ch
     await page.locator('[data-button="device"]').click();
     await expect(page.getByRole("dialog", { name: "Devices" }).getByText("No devices")).toBeVisible({ timeout: 10_000 });
     await page.screenshot({ path: "test-results/device-panel.png" });
+    const devices = page.getByRole("dialog", { name: "Devices" });
+    const status = devices.locator("[data-device-status]");
+    await devices.getByPlaceholder("192.168.1.20:37099").fill("192.168.1.20:37099");
+    await devices.getByPlaceholder("123456").fill("12");
+    await devices.getByRole("button", { name: "Pair" }).click();
+    await expect(status).toHaveText(/6 digits/);
+    await devices.getByPlaceholder("123456").fill("123456");
+    await devices.getByRole("button", { name: "Pair" }).click();
+    await expect(status).toHaveText("Pairing failed: no phone connection in this mode", { timeout: 10_000 });
+    await expect(status).toHaveClass(/error/);
+    await page.screenshot({ path: "test-results/device-panel-error.png" });
     await page.keyboard.press("Escape");
     await page.mouse.move(10, s.window.h / 2);
     await page.waitForTimeout(1500);

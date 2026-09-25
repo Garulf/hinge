@@ -67,6 +67,29 @@ npm run test:e2e       # playwright, replays a synthetic recording end to end
 npm run pack:win       # unpacked Windows build in dist/win-unpacked
 npm run pack:linux     # unpacked Linux build in dist/linux-unpacked
 ```
+
+### Remote testing
+
+The dev container has no GPU, so `npm run test:e2e` here runs under Xvfb with
+SwiftShader software GL, which is slow and skips the app's lighting and
+reflections. `HINGE_REMOTE=<ssh alias> scripts/e2e-remote.sh [playwright
+args]` rsyncs the working tree to a host with a real GPU, installs
+dependencies there only when `package-lock.json` changed, builds, runs the
+suite against the real display with `HINGE_E2E_REAL_GPU=1` set (the test
+skips its SwiftShader flags when that's set), and copies `test-results/`
+back under `test-results/remote-<host>/`. On a macOS host the test step runs
+as a self-owned LaunchAgent bootstrapped into the logged-in user's GUI
+session rather than being spawned straight from the ssh shell, since a
+plain ssh session can't reach the WindowServer and fixing that with
+`launchctl asuser` needs root.
+
+`HINGE_ADB_REMOTE=<ssh alias> scripts/adb-remote.sh start|stop|status`
+forwards a local port to another host's adb server over ssh, for a phone
+that's only reachable from there (wireless debugging paired to a different
+machine). `start` opens a background tunnel from `127.0.0.1:15037` here to
+`127.0.0.1:5037` on the host, `status` runs `adb -H 127.0.0.1 -P 15037
+devices` through it, and `stop` closes it; it never starts, stops, or
+restarts an adb server anywhere.
 {% endblock %}
 
 {% block contributing %}

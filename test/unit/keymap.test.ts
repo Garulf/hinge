@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { keyIntents, type KeyEventLike } from "../../src/shared/keymap";
+import { KeyTracker, keyIntents, type KeyEventLike } from "../../src/shared/keymap";
 
 const ev = (over: Partial<KeyEventLike>): KeyEventLike => ({ type: "keydown", code: "KeyA", key: "a", repeat: false, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...over });
 
@@ -26,3 +26,40 @@ test("alt and super alone produce nothing, they are the shortcut modifier", () =
 });
 
 test("unknown codes produce nothing", () => expect(keyIntents(ev({ code: "F13", key: "F13" }))).toEqual([]));
+
+test("KeyTracker sends a matching up for a ctrl+letter down, unlike bare keyIntents (I4)", () => {
+  const t = new KeyTracker();
+  const down = t.handle(ev({ ctrlKey: true, key: "c", code: "KeyC" }));
+  expect(down).toEqual([{ type: "key", action: "down", keyCode: 31, repeat: 0, metaState: 4096 | 8192 }]);
+
+  // Ctrl is still held when the letter is released, same as bare keyIntents.
+  const up = t.handle(ev({ type: "keyup", ctrlKey: true, key: "c", code: "KeyC" }));
+  expect(up).toEqual([{ type: "key", action: "up", keyCode: 31, repeat: 0, metaState: 4096 | 8192 }]);
+});
+
+test("KeyTracker still sends the up when ctrl is released before the letter", () => {
+  const t = new KeyTracker();
+  t.handle(ev({ ctrlKey: true, key: "c", code: "KeyC" }));
+
+  // Ctrl released first: the keyup event for "c" now reports ctrlKey false
+  // and a bare, unmodified key, exactly as a browser would report it.
+  const up = t.handle(ev({ type: "keyup", ctrlKey: false, key: "c", code: "KeyC" }));
+  expect(up).toEqual([{ type: "key", action: "up", keyCode: 31, repeat: 0, metaState: 0 }]);
+});
+
+test("KeyTracker does not send an up for a key that was sent as text", () => {
+  const t = new KeyTracker();
+  t.handle(ev({ key: "a", code: "KeyA" }));
+  expect(t.handle(ev({ type: "keyup", key: "a", code: "KeyA" }))).toEqual([]);
+});
+
+test("KeyTracker.flush sends an up for every key still held, then forgets them", () => {
+  const t = new KeyTracker();
+  t.handle(ev({ ctrlKey: true, key: "c", code: "KeyC" }));
+  t.handle(ev({ code: "ArrowLeft", key: "ArrowLeft" }));
+
+  const flushed = t.flush();
+  expect(flushed).toHaveLength(2);
+  expect(flushed.map((i) => i.type === "key" && i.keyCode).sort()).toEqual([21, 31]);
+  expect(t.flush()).toEqual([]);
+});

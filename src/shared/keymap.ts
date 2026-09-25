@@ -62,3 +62,41 @@ export function keyIntents(e: KeyEventLike): ControlIntent[] {
     },
   ];
 }
+
+/**
+ * Wraps keyIntents with the held-key bookkeeping it cannot do as a pure
+ * per-event function: a ctrl+letter combo sends its down as a keyCode (not
+ * text), but the matching keyup is for a printable single-character key,
+ * which keyIntents always treats as text-only and reports as []. Remember
+ * which codes were sent as a keyCode down and always send their up,
+ * regardless of what the modifiers look like by the time the key is
+ * released (ctrl can already be gone, or the reported key can differ).
+ */
+export class KeyTracker {
+  #held = new Map<string, number>();
+
+  handle(e: KeyEventLike): ControlIntent[] {
+    if (e.type === "keyup") {
+      const keyCode = this.#held.get(e.code);
+      if (keyCode !== undefined) {
+        this.#held.delete(e.code);
+        return [{ type: "key", action: "up", keyCode, repeat: 0, metaState: metaStateOf(e) }];
+      }
+    }
+
+    const intents = keyIntents(e);
+    if (e.type === "keydown") {
+      for (const intent of intents) {
+        if (intent.type === "key" && intent.action === "down") this.#held.set(e.code, intent.keyCode);
+      }
+    }
+    return intents;
+  }
+
+  /** Sends an up for every key still held, e.g. when the window loses focus. */
+  flush(): ControlIntent[] {
+    const ups: ControlIntent[] = [...this.#held.values()].map((keyCode) => ({ type: "key", action: "up", keyCode, repeat: 0, metaState: 0 }));
+    this.#held.clear();
+    return ups;
+  }
+}

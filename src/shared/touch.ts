@@ -24,6 +24,7 @@ export class TouchTracker {
   #size: () => { w: number; h: number } | null;
   #touch: TrackedTouch | null = null;
   #rightDown = false;
+  #middleDown = false;
 
   constructor(size: () => { w: number; h: number } | null) {
     this.#size = size;
@@ -31,6 +32,9 @@ export class TouchTracker {
 
   handle(e: PointerEventLike): ControlIntent[] {
     if (e.kind === "blur" || e.kind === "leave") return this.#cancel();
+    // A real pointermove carries button === -1 (no button "caused" the
+    // event); which button is held is in the buttons bitmask instead.
+    if (e.kind === "move") return e.buttons & 1 ? this.#move(e) : [];
     if (e.button === 2) return this.#handleRight(e);
     if (e.button === 1) return this.#handleMiddle(e);
     if (e.button === 0) return this.#handleLeft(e);
@@ -39,7 +43,6 @@ export class TouchTracker {
 
   #handleLeft(e: PointerEventLike): ControlIntent[] {
     if (e.kind === "down") return this.#start(e);
-    if (e.kind === "move") return this.#move(e);
     if (e.kind === "up") return this.#end();
     return [];
   }
@@ -57,8 +60,14 @@ export class TouchTracker {
   }
 
   #handleMiddle(e: PointerEventLike): ControlIntent[] {
-    if (e.kind === "down") return [{ type: "key", action: "down", keyCode: HOME_KEYCODE, repeat: 0, metaState: 0 }];
-    if (e.kind === "up") return [{ type: "key", action: "up", keyCode: HOME_KEYCODE, repeat: 0, metaState: 0 }];
+    if (e.kind === "down" && !this.#middleDown) {
+      this.#middleDown = true;
+      return [{ type: "key", action: "down", keyCode: HOME_KEYCODE, repeat: 0, metaState: 0 }];
+    }
+    if (e.kind === "up" && this.#middleDown) {
+      this.#middleDown = false;
+      return [{ type: "key", action: "up", keyCode: HOME_KEYCODE, repeat: 0, metaState: 0 }];
+    }
     return [];
   }
 
@@ -89,6 +98,7 @@ export class TouchTracker {
 
   #cancel(): ControlIntent[] {
     this.#rightDown = false;
+    this.#middleDown = false;
     if (!this.#touch) return [];
     const size = this.#size();
     const point = this.#touch;

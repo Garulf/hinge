@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { keyIntents, type KeyEventLike } from "../../shared/keymap";
+import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
 import { TouchTracker, uvToDevice } from "../../shared/touch";
 import type { ControlIntent } from "../../shared/wire";
 import type { PhoneScene } from "../scene/phone-scene";
@@ -14,6 +14,7 @@ export class InputRouter {
   readonly #videoSize: () => { w: number; h: number } | null;
   readonly #send: (intent: ControlIntent) => void;
   readonly #touch: TouchTracker;
+  readonly #keys = new KeyTracker();
   readonly #raycaster = new THREE.Raycaster();
   #dragging = false;
 
@@ -28,21 +29,29 @@ export class InputRouter {
     canvas.addEventListener("pointermove", (e) => this.#onPointerMove(e));
     canvas.addEventListener("pointerup", (e) => this.#onPointerUp(e));
     canvas.addEventListener("pointerleave", () => this.#dispatch({ kind: "leave", button: 0, buttons: 0, hit: null }));
+    canvas.addEventListener("pointercancel", () => this.#cancelInteraction());
+    canvas.addEventListener("lostpointercapture", () => this.#cancelInteraction());
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     canvas.addEventListener("wheel", (e) => this.#onWheel(e), { passive: false });
     window.addEventListener("keydown", (e) => this.#onKey(e));
     window.addEventListener("keyup", (e) => this.#onKey(e));
-    window.addEventListener("blur", () => this.#dispatch({ kind: "blur", button: 0, buttons: 0, hit: null }));
+    window.addEventListener("blur", () => {
+      this.#cancelInteraction();
+      for (const intent of this.#keys.flush()) this.#send(intent);
+    });
   }
 
   #onPointerDown(e: PointerEvent): void {
     const hit = this.#hitOf(e);
+    // Capture on both paths: a bezel drag needs pointerup even if the
+    // cursor ends up outside the (possibly already-moved) window, and a
+    // touch needs it for the same reason when dragged off the canvas.
+    this.#canvas.setPointerCapture(e.pointerId);
     if (e.button === 0 && !hit) {
       this.#dragging = true;
       window.hinge.beginDrag();
       return;
     }
-    this.#canvas.setPointerCapture(e.pointerId);
     this.#dispatch({ kind: "down", button: e.button, buttons: e.buttons, hit });
   }
 
@@ -52,12 +61,22 @@ export class InputRouter {
   }
 
   #onPointerUp(e: PointerEvent): void {
+    if (this.#canvas.hasPointerCapture(e.pointerId)) this.#canvas.releasePointerCapture(e.pointerId);
     if (this.#dragging) {
       this.#dragging = false;
       window.hinge.endDrag();
       return;
     }
     this.#dispatch({ kind: "up", button: e.button, buttons: e.buttons, hit: this.#hitOf(e) });
+  }
+
+  /** Resets drag and touch state on blur, pointercancel and lostpointercapture. */
+  #cancelInteraction(): void {
+    if (this.#dragging) {
+      this.#dragging = false;
+      window.hinge.endDrag();
+    }
+    this.#dispatch({ kind: "blur", button: 0, buttons: 0, hit: null });
   }
 
   #onWheel(e: WheelEvent): void {
@@ -89,7 +108,7 @@ export class InputRouter {
       metaKey: e.metaKey,
       shiftKey: e.shiftKey,
     };
-    for (const intent of keyIntents(like)) this.#send(intent);
+    for (const intent of this.#keys.handle(like)) this.#send(intent);
   }
 
   #dispatch(e: { kind: "down" | "move" | "up" | "leave" | "blur"; button: number; buttons: number; hit: { u: number; v: number } | null }): void {

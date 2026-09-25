@@ -12,21 +12,23 @@ const size = () => ({ w: 100, h: 200 });
 
 test("left press on the screen starts a touch, moves follow, release ends it", () => {
   const t = new TouchTracker(size);
+  // A real pointermove carries button === -1; only buttons (the held-button
+  // bitmask) says the left button is still down. See findings C1.
   const down = t.handle({ kind: "down", button: 0, buttons: 1, hit: { u: 0.5, v: 0.5 } });
-  const move = t.handle({ kind: "move", button: 0, buttons: 1, hit: { u: 0.6, v: 0.5 } });
+  const move = t.handle({ kind: "move", button: -1, buttons: 1, hit: { u: 0.6, v: 0.5 } });
   const up = t.handle({ kind: "up", button: 0, buttons: 0, hit: { u: 0.6, v: 0.5 } });
   expect([...down, ...move, ...up].map((i) => i.type === "touch" && i.action)).toEqual(["down", "move", "up"]);
   expect(down[0]).toMatchObject({ pointerId: -1, x: 50, y: 100, videoWidth: 100, videoHeight: 200 });
 });
 
 test("moves without a pressed button are ignored", () => {
-  expect(new TouchTracker(size).handle({ kind: "move", button: 0, buttons: 0, hit: { u: 0.5, v: 0.5 } })).toEqual([]);
+  expect(new TouchTracker(size).handle({ kind: "move", button: -1, buttons: 0, hit: { u: 0.5, v: 0.5 } })).toEqual([]);
 });
 
 test("dragging off the screen keeps the touch at the edge, release outside still ends it", () => {
   const t = new TouchTracker(size);
   t.handle({ kind: "down", button: 0, buttons: 1, hit: { u: 0.9, v: 0.5 } });
-  expect(t.handle({ kind: "move", button: 0, buttons: 1, hit: null })).toEqual([]);
+  expect(t.handle({ kind: "move", button: -1, buttons: 1, hit: null })).toEqual([]);
   expect(t.handle({ kind: "up", button: 0, buttons: 0, hit: null })[0]).toMatchObject({ type: "touch", action: "up", x: 90 });
 });
 
@@ -42,6 +44,18 @@ test("right click is back-or-screen-on, middle click is HOME", () => {
   expect(t.handle({ kind: "down", button: 2, buttons: 2, hit: { u: 0.5, v: 0.5 } })).toEqual([{ type: "back-or-screen-on", action: "down" }]);
   expect(t.handle({ kind: "up", button: 2, buttons: 0, hit: { u: 0.5, v: 0.5 } })).toEqual([{ type: "back-or-screen-on", action: "up" }]);
   expect(t.handle({ kind: "down", button: 1, buttons: 4, hit: { u: 0.5, v: 0.5 } })[0]).toMatchObject({ type: "key", action: "down", keyCode: 3 });
+});
+
+test("middle click sends HOME up only when its down was sent (M12)", () => {
+  const t = new TouchTracker(size);
+  const down = t.handle({ kind: "down", button: 1, buttons: 4, hit: { u: 0.5, v: 0.5 } });
+  const up = t.handle({ kind: "up", button: 1, buttons: 0, hit: { u: 0.5, v: 0.5 } });
+  expect(down).toEqual([{ type: "key", action: "down", keyCode: 3, repeat: 0, metaState: 0 }]);
+  expect(up).toEqual([{ type: "key", action: "up", keyCode: 3, repeat: 0, metaState: 0 }]);
+
+  // A pointerup for the middle button with no matching down (e.g. the press
+  // started off canvas) must not emit a stray HOME up.
+  expect(new TouchTracker(size).handle({ kind: "up", button: 1, buttons: 0, hit: { u: 0.5, v: 0.5 } })).toEqual([]);
 });
 
 test("no stream yet means no intents", () => {

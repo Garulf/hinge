@@ -4,14 +4,14 @@ export interface ViewMemoryDeps {
   /** Shows the view: eased when the user toggles it, at once (`instant`) when it is restored for a phone or at startup. */
   apply(view: ViewMode, opts: { instant: boolean }): void;
   /** Remembers a view the user chose, for the phone on screen (null before any phone) and as the default for new ones. */
-  save(serial: string | null, view: ViewMode): void;
+  save(id: string | null, view: ViewMode): void;
 }
 
 /** MOD+d's work or showcase view, remembered per phone. */
 export class ViewMemory {
   readonly #deps: ViewMemoryDeps;
   #view: ViewMode;
-  #serial: string | null = null;
+  #device: string | null = null;
 
   constructor(deps: ViewMemoryDeps, initial: ViewMode) {
     this.#deps = deps;
@@ -25,14 +25,14 @@ export class ViewMemory {
 
   toggle(): ViewMode {
     this.#show(this.#view === "work" ? "showcase" : "work", false);
-    this.#deps.save(this.#serial, this.#view);
+    this.#deps.save(this.#device, this.#view);
     return this.#view;
   }
 
   /** A phone started streaming: a different phone gets its own saved view, or the last one chosen; the same phone keeps what is on screen. */
-  useDevice(serial: string, saved: ViewMode | undefined): void {
-    if (this.#serial === serial) return;
-    this.#serial = serial;
+  useDevice(id: string, saved: ViewMode | undefined): void {
+    if (this.#device === id) return;
+    this.#device = id;
     if (saved) this.#show(saved, true);
   }
 

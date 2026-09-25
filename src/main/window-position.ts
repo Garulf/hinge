@@ -40,10 +40,10 @@ export class DevicePlacement {
   }
 
   status(status: SessionStatus): void {
-    if (status.state !== "streaming" || status.serial === this.#serial) return;
+    if (status.state !== "streaming" || status.deviceId === this.#serial) return;
     this.#cancelSave();
-    this.#serial = status.serial;
-    const corner = this.#deps.saved(status.serial);
+    this.#serial = status.deviceId;
+    const corner = this.#deps.saved(status.deviceId);
     if (corner) this.#deps.setContentBounds(restoredBounds(this.#deps.getContentBounds(), corner, this.#deps.workAreaFor));
   }
 

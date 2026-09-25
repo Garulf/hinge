@@ -87,6 +87,8 @@ export class ScrcpySession implements MediaSource {
       adb: Adb;
       serial: string;
       model: string | null;
+      /** The phone's identity for the streaming status; the serial when not given. */
+      deviceId?: string;
       serverPath: string;
       settings: StreamSettings;
       log?: (line: string) => void;
@@ -297,7 +299,7 @@ export class ScrcpySession implements MediaSource {
         height: video.height,
         deviceName: video.metadata.deviceName ?? null,
       });
-      sink.status({ state: "streaming", serial: this.opts.serial, model: this.opts.model });
+      sink.status({ state: "streaming", serial: this.opts.serial, model: this.opts.model, deviceId: this.opts.deviceId ?? this.opts.serial });
       sink.videoPacket(toWire(first.value));
       this.#startClipboardSync(client);
       void this.#startAudio(client, sink);

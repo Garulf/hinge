@@ -103,16 +103,18 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
   await host.ensureServer();
 
   const wireless = createWirelessDeps(host.client);
-  const onConnected = (serial: string): void => {
-    settings.save({ lastDevice: serial }).catch((e) => log(`failed to save lastDevice: ${String(e)}`));
+  const onConnected = (id: string): void => {
+    settings.save({ lastDevice: id }).catch((e) => log(`failed to save lastDevice: ${String(e)}`));
   };
+  const onIdentified = (serial: string, id: string): Promise<void> => settings.adoptTransport(serial, id);
 
   const clipboardHost: ClipboardHost = { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) };
-  const createSession: SessionFactory = (device, adb) =>
+  const createSession: SessionFactory = (device, adb, deviceId) =>
     new ScrcpySession({
       adb,
       serial: device.serial,
       model: device.model,
+      deviceId,
       serverPath: paths.scrcpyServer,
       settings: toStreamSettings(settings.current),
       log,
@@ -122,12 +124,13 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
   if (!opts.record) {
     const source = new DeviceSource({
       host,
-      preferredSerial: opts.serial ?? settings.current.lastDevice,
+      preferred: opts.serial ?? settings.current.lastDevice,
       log,
       createSession,
       foldMonitor: startFoldMonitor,
       wireless,
       onConnected,
+      onIdentified,
     });
     return { source, closeRecording: async () => {} };
   }
@@ -146,13 +149,14 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
   const writer = createQueuedWriter(opened.stream);
   const source = new DeviceSource({
     host,
-    preferredSerial: opts.serial ?? settings.current.lastDevice,
+    preferred: opts.serial ?? settings.current.lastDevice,
     log,
     createSession,
     recordSink: (sink) => teeToRecording(sink, writer, Date.now, log),
     foldMonitor: startFoldMonitor,
     wireless,
     onConnected,
+    onIdentified,
   });
   return { source, closeRecording: closeRecordStream(opened.stream, writer) };
 }

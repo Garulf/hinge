@@ -43,10 +43,10 @@ test("a phone with a saved corner moves the window there when it streams, once p
   const { placement, moves } = setup({ A: { x: 1000, y: 100 } });
   placement.status({ state: "connecting", serial: "A" });
   expect(moves).toEqual([]);
-  placement.status({ state: "streaming", serial: "A", model: null });
-  placement.status({ state: "streaming", serial: "A", model: null });
+  placement.status({ state: "streaming", serial: "A", model: null, deviceId: "A" });
+  placement.status({ state: "streaming", serial: "A", model: null, deviceId: "A" });
   expect(moves).toEqual([{ x: 600, y: 100, width: 400, height: 880 }]);
-  placement.status({ state: "streaming", serial: "B", model: null });
+  placement.status({ state: "streaming", serial: "B", model: null, deviceId: "B" });
   expect(moves).toHaveLength(1);
 });
 
@@ -54,7 +54,7 @@ test("moving the window saves its corner for the phone on screen, after it settl
   const { placement, saves, timers, move } = setup();
   placement.moved();
   expect(timers).toHaveLength(0);
-  placement.status({ state: "streaming", serial: "A", model: null });
+  placement.status({ state: "streaming", serial: "A", model: null, deviceId: "A" });
   move({ x: 300, y: 40, width: 400, height: 880 });
   placement.moved();
   placement.moved();
@@ -65,9 +65,9 @@ test("moving the window saves its corner for the phone on screen, after it settl
 
 test("a save still pending when another phone starts streaming is dropped, not written to the new phone", () => {
   const { placement, saves, timers } = setup();
-  placement.status({ state: "streaming", serial: "A", model: null });
+  placement.status({ state: "streaming", serial: "A", model: null, deviceId: "A" });
   placement.moved();
-  placement.status({ state: "streaming", serial: "B", model: null });
+  placement.status({ state: "streaming", serial: "B", model: null, deviceId: "B" });
   expect(timers).toHaveLength(0);
   expect(saves).toEqual([]);
 });

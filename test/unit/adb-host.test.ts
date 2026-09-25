@@ -30,6 +30,29 @@ test("spawns the bundled adb when no server answers", async () => {
   expect(spawnedWith).toBe("/x/adb");
 });
 
+function hostWithAdb(getProp: () => Promise<string>, identifyTimeoutMs?: number) {
+  const host = new AdbHost({ adbPath: "/x/adb", probe: { isRunning: async () => true }, identifyTimeoutMs });
+  const log = { opened: [] as string[], closed: 0 };
+  host.open = async (serial: string) => {
+    log.opened.push(serial);
+    return { getProp: async (key: string) => (key === "ro.serialno" ? getProp() : ""), close: async () => { log.closed++; } } as never;
+  };
+  return { host, log };
+}
+
+test("identify reads ro.serialno over the given transport and closes it again", async () => {
+  const { host, log } = hostWithAdb(async () => "R5CY1234ABC");
+  expect(await host.identify("10.0.0.5:40111")).toBe("R5CY1234ABC");
+  expect(log).toEqual({ opened: ["10.0.0.5:40111"], closed: 1 });
+});
+
+test("identify gives null for an empty ro.serialno and for a shell that never answers", async () => {
+  expect(await hostWithAdb(async () => "").host.identify("S")).toBeNull();
+  const hung = hostWithAdb(() => new Promise<string>(() => {}), 20);
+  expect(await hung.host.identify("S")).toBeNull();
+  expect(hung.log.closed).toBe(1);
+});
+
 import { vendorPaths } from "../../src/main/vendor-paths";
 test.runIf(process.env.HINGE_ADB_IT === "1")("talks to a real adb server", async () => {
   const { adb } = vendorPaths({ packaged: false, resourcesPath: "", appRoot: process.cwd(), platform: process.platform });

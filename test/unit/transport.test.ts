@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { dedupeDevices, deviceStatus, pickDevice, transportOf } from "../../src/main/transport";
+import { dedupeDevices, deviceIdentity, deviceStatus, pickDevice, serialnoFromMdns, transportOf, type DeviceSummary } from "../../src/main/transport";
 
 test("transport from serial shape", () => {
   expect(transportOf("R5CX1234ABC")).toBe("usb");
@@ -42,4 +42,45 @@ test("dedupeDevices never merges devices missing model or device metadata, and l
 
   const result = dedupeDevices([tcp, unknownA, unknownB, otherUsb], null);
   expect(result).toEqual([unknownA, unknownB, tcp, otherUsb]);
+});
+
+function summary(serial: string, over: Partial<DeviceSummary> = {}): DeviceSummary {
+  return { serial, state: "device", model: "SM-F966B", device: "q7q", transport: transportOf(serial), ...over };
+}
+
+test("the serial number inside an mDNS service name", () => {
+  expect(serialnoFromMdns("adb-R5CY1234ABC-AbCdEf._adb-tls-connect._tcp")).toBe("R5CY1234ABC");
+  expect(serialnoFromMdns("adb-R5CY1234ABC-AbCdEf._adb._tcp")).toBe("R5CY1234ABC");
+  expect(serialnoFromMdns("10.0.0.5:5555")).toBeNull();
+  expect(serialnoFromMdns("R5CY1234ABC")).toBeNull();
+});
+
+test("a phone's identity is its ro.serialno, then the serial in its mDNS name, then its USB serial, then model+device, then the adb serial", () => {
+  expect(deviceIdentity(summary("10.0.0.5:41234"), "R5CY1234ABC\n")).toBe("R5CY1234ABC");
+  expect(deviceIdentity(summary("adb-R5CY1234ABC-AbCdEf._adb-tls-connect._tcp"), null)).toBe("R5CY1234ABC");
+  expect(deviceIdentity(summary("adb-R5CY1234ABC-AbCdEf._adb-tls-connect._tcp"), "  ")).toBe("R5CY1234ABC");
+  expect(deviceIdentity(summary("R5CY1234ABC"), null)).toBe("R5CY1234ABC");
+  expect(deviceIdentity(summary("10.0.0.5:41234"), null)).toBe("SM-F966B+q7q");
+  expect(deviceIdentity(summary("10.0.0.5:41234", { model: null }), null)).toBe("10.0.0.5:41234");
+});
+
+test("pickDevice prefers the exact remembered serial, then any transport of the remembered identity", () => {
+  const usbOther = summary("OTHERUSB", { model: "Pixel", device: "shiba" });
+  const tcp = summary("10.0.0.5:41234");
+  const mdns = summary("adb-R5CY-x._adb-tls-connect._tcp");
+  const ids: Record<string, string> = { OTHERUSB: "OTHERUSB", "10.0.0.5:41234": "R5CY", "adb-R5CY-x._adb-tls-connect._tcp": "R5CY" };
+  const idOf = (d: DeviceSummary) => ids[d.serial] ?? null;
+
+  expect(pickDevice([usbOther, mdns], "R5CY", idOf)).toBe(mdns);
+  expect(pickDevice([usbOther, mdns, tcp], "R5CY", idOf)).toBe(tcp);
+  expect(pickDevice([usbOther, mdns, tcp], "adb-R5CY-x._adb-tls-connect._tcp", idOf)).toBe(mdns);
+  expect(pickDevice([usbOther, mdns, tcp], "R5CY", idOf, mdns.serial)).toBe(mdns);
+  expect(pickDevice([usbOther, mdns], "GONE", idOf)).toBe(usbOther);
+});
+
+test("dedupeDevices groups by identity when one is known", () => {
+  const tcp = summary("10.0.0.5:41234", { model: null, device: null });
+  const mdns = summary("adb-R5CY-x._adb-tls-connect._tcp", { model: null, device: null });
+  const idOf = () => "R5CY";
+  expect(dedupeDevices([tcp, mdns], null, idOf)).toEqual([tcp]);
 });

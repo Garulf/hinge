@@ -1,5 +1,6 @@
 import type { Settings, SettingsPatch } from "../../shared/settings";
 import type { HingeAction } from "../../shared/shortcuts";
+import type { DeviceSummary } from "../../shared/wire";
 import type { DeviceCommands } from "./device-commands";
 import { el, place, svgIcon } from "./dom";
 import { MenuVisibility, panelBox, pillHeightPx, sizeForPanel, type Box, type Size } from "./hit-zone";
@@ -56,6 +57,7 @@ export class Chrome {
   readonly #queue = new ToastQueue();
   readonly #visibility = new MenuVisibility();
   readonly #panels: Record<PanelName, Panel>;
+  readonly #devicePanel: DevicePanel;
   #open: PanelName | null = null;
   #layout: ChromeLayout | null = null;
   #pointer: { x: number; y: number } | null = null;
@@ -82,8 +84,9 @@ export class Chrome {
       this.#menu.append(node);
     }
     this.#toastsNode = el("div", { className: "hinge-toasts", attrs: { "aria-live": "polite" } });
+    this.#devicePanel = new DevicePanel({ commands: deps.commands, toast: (t) => this.toast(t), currentSerial: deps.currentSerial });
     this.#panels = {
-      device: new DevicePanel({ commands: deps.commands, toast: (t) => this.toast(t), currentSerial: deps.currentSerial }),
+      device: this.#devicePanel,
       colour: new ColourPanel({ swatches: deps.swatches, save: deps.save }),
       settings: new SettingsPanel({ save: deps.save, settingsPath: deps.settingsPath }),
     };
@@ -94,6 +97,10 @@ export class Chrome {
 
   toast(input: ToastInput): void {
     this.#queue.show(input, performance.now());
+  }
+
+  devicesChanged(devices: DeviceSummary[]): void {
+    this.#devicePanel.devicesChanged(devices);
   }
 
   settingsChanged(settings: Settings): void {

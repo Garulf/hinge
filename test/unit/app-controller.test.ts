@@ -219,7 +219,7 @@ class FakeSession implements MediaSource {
 
   /** Marks this session as having reached the phone's video stream. */
   streamed(): void {
-    this.#sink?.status({ state: "streaming", serial: "unused", model: null });
+    this.#sink?.status({ state: "streaming", serial: "unused", model: null, deviceId: "unused" });
   }
 
   fail(message: string): void {
@@ -1264,7 +1264,7 @@ test("a stale lastDevice that never streamed this run does not trigger TCP recon
   const delays: number[] = [];
   const source = new DeviceSource({
     host: watcher.host,
-    preferredSerial: "10.0.0.9:5555",
+    preferred: "10.0.0.9:5555",
     createSession: () => new FakeSession(),
     wireless,
     delay: async (ms) => {
@@ -1687,6 +1687,288 @@ test("every status the source reports is also handed to onStatus, for main's own
   bindSource({ start: async (s) => { sink = s; }, control: () => {}, stop: async () => {} }, { postMessage: () => {}, onMessage: (fn) => { handler = fn; } }, { onStatus: (s) => seen.push(s) });
   handler({ kind: "ready" });
   await Promise.resolve();
-  sink.status({ state: "streaming", serial: "A", model: null });
-  expect(seen).toEqual([{ state: "streaming", serial: "A", model: null }]);
+  sink.status({ state: "streaming", serial: "A", model: null, deviceId: "A" });
+  expect(seen).toEqual([{ state: "streaming", serial: "A", model: null, deviceId: "A" }]);
+});
+
+function phone(serial: string, transport: DeviceSummary["transport"]): DeviceSummary {
+  return { serial, state: "device", model: "SM-F966B", device: "q7q", transport };
+}
+
+function identifyingWatcher(serialnos: Record<string, string | null>): FakeWatcher & { identified: string[] } {
+  const watcher = fakeWatcher() as FakeWatcher & { identified: string[] };
+  watcher.identified = [];
+  watcher.host.identify = async (serial) => {
+    watcher.identified.push(serial);
+    return serialnos[serial] ?? null;
+  };
+  return watcher;
+}
+
+test("a remembered identity picks that phone on whatever Wi-Fi port it came back on, over another phone's USB", async () => {
+  const watcher = identifyingWatcher({ OTHERUSB: "OTHERUSB", "10.0.0.5:40111": "R5CY" });
+  const opened: string[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return {} as never;
+  };
+  const created: [string, string][] = [];
+  const connected: string[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    preferred: "R5CY",
+    createSession: (device, _adb, id) => {
+      created.push([device.serial, id]);
+      return new FakeSession();
+    },
+    onConnected: (id) => connected.push(id),
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([phone("OTHERUSB", "usb"), phone("10.0.0.5:40111", "tcp")]);
+  await flush();
+  await flush();
+
+  expect(opened).toEqual(["10.0.0.5:40111"]);
+  expect(created).toEqual([["10.0.0.5:40111", "R5CY"]]);
+  expect(connected).toEqual(["R5CY"]);
+});
+
+test("ro.serialno is read once per transport, and nothing is picked until every ready transport has an identity", async () => {
+  const watcher = fakeWatcher();
+  const gates = new Map<string, (serialno: string | null) => void>();
+  const asked: string[] = [];
+  watcher.host.identify = (serial) => {
+    asked.push(serial);
+    return new Promise((resolve) => gates.set(serial, resolve));
+  };
+  const opened: string[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return {} as never;
+  };
+  const source = new DeviceSource({ host: watcher.host, preferred: "R5CY", createSession: () => new FakeSession() });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const list = [phone("OTHERUSB", "usb"), phone("10.0.0.5:40111", "tcp")];
+  watcher.emit(list);
+  watcher.emit(list);
+  await flush();
+  expect(asked).toEqual(["OTHERUSB", "10.0.0.5:40111"]);
+  expect(opened).toEqual([]);
+
+  gates.get("OTHERUSB")!("OTHERUSB");
+  await flush();
+  expect(opened).toEqual([]);
+
+  gates.get("10.0.0.5:40111")!("R5CY");
+  await flush();
+  await flush();
+  expect(opened).toEqual(["10.0.0.5:40111"]);
+
+  watcher.emit(list);
+  await flush();
+  expect(asked).toHaveLength(2);
+});
+
+test("a transport whose ro.serialno cannot be read falls back to the serial in its mDNS name", async () => {
+  const watcher = identifyingWatcher({});
+  watcher.host.identify = async () => {
+    throw new Error("shell failed");
+  };
+  const connected: string[] = [];
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), onConnected: (id) => connected.push(id) });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([phone("adb-R5CY-AbCd._adb-tls-connect._tcp", "mdns")]);
+  await flush();
+  await flush();
+  expect(connected).toEqual(["R5CY"]);
+});
+
+test("the settings adoption for a newly identified transport finishes before that phone is connected", async () => {
+  const watcher = identifyingWatcher({ "10.0.0.5:40111": "R5CY" });
+  const order: string[] = [];
+  let finishAdoption!: () => void;
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      order.push("session");
+      return new FakeSession();
+    },
+    onIdentified: (serial, id) => {
+      order.push(`identified ${serial} ${id}`);
+      return new Promise<void>((resolve) => {
+        finishAdoption = resolve;
+      });
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([phone("10.0.0.5:40111", "tcp")]);
+  await flush();
+  expect(order).toEqual(["identified 10.0.0.5:40111 R5CY"]);
+  finishAdoption();
+  await flush();
+  await flush();
+  expect(order).toEqual(["identified 10.0.0.5:40111 R5CY", "session"]);
+});
+
+test("the list command dedupes by identity and every device-list change is pushed to the sink", async () => {
+  const watcher = identifyingWatcher({ "10.0.0.5:40111": "R5CY", "adb-R5CY-AbCd._adb-tls-connect._tcp": "R5CY" });
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession() });
+  const pushed: DeviceSummary[][] = [];
+  const { sink } = fakeSink();
+  sink.devices = (list) => pushed.push(list);
+  await source.start(sink);
+
+  const tcp = { ...phone("10.0.0.5:40111", "tcp"), model: null, device: null };
+  const mdns = { ...phone("adb-R5CY-AbCd._adb-tls-connect._tcp", "mdns"), model: null, device: null };
+  watcher.emit([tcp, mdns]);
+  await flush();
+  await flush();
+
+  expect(await source.handleDeviceCommand!({ type: "list" })).toEqual({ type: "list", devices: [tcp] });
+  expect(pushed.at(-1)).toEqual([tcp]);
+  watcher.emit([]);
+  await flush();
+  expect(pushed.at(-1)).toEqual([]);
+});
+
+test("a session that ends on its own is stopped, so its adb sockets and server are released", async () => {
+  const watcher = fakeWatcher();
+  const sessions: FakeSession[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+  watcher.emit([device("USB1")]);
+  await flush();
+  sessions[0].streamed();
+  sessions[0].end();
+  await flush();
+  expect(sessions[0].stopped).toBe(true);
+});
+
+function alreadyConnectedError(): Error {
+  return Object.assign(new Error("already connected to 10.0.0.5:5555"), { name: "AlreadyConnectedError" });
+}
+
+test("the connect command counts adb's 'already connected' as success and moves to that device", async () => {
+  const watcher = fakeWatcher();
+  const opened: string[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return {} as never;
+  };
+  const { wireless } = fakeWireless();
+  wireless.connect = async () => {
+    throw alreadyConnectedError();
+  };
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  expect(await source.handleDeviceCommand!({ type: "connect", serial: "10.0.0.5:5555" })).toEqual({ type: "connect", ok: true });
+  watcher.emit([device("USB1"), device("10.0.0.5:5555", "tcp")]);
+  await flush();
+  expect(opened).toEqual(["10.0.0.5:5555"]);
+});
+
+test("the TCP reconnect loop stops at adb's 'already connected' instead of retrying forever", async () => {
+  const watcher = fakeWatcher();
+  const { wireless } = fakeWireless();
+  let attempts = 0;
+  wireless.connect = async () => {
+    attempts++;
+    throw alreadyConnectedError();
+  };
+  const sessions: FakeSession[] = [];
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+    wireless,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+  watcher.emit([device("10.0.0.5:5555", "tcp")]);
+  await flush();
+  sessions[0].streamed();
+  watcher.emit([]);
+  await flush();
+  expect(attempts).toBe(1);
+  expect(delays).toEqual([1000]);
+});
+
+test("disconnect suppresses every transport of the phone and asks adb to drop its ip:port transport", async () => {
+  const watcher = identifyingWatcher({ "10.0.0.5:40111": "R5CY", "adb-R5CY-AbCd._adb-tls-connect._tcp": "R5CY" });
+  const { wireless, calls } = fakeWireless();
+  const sessions: FakeSession[] = [];
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const s = new FakeSession();
+      sessions.push(s);
+      return s;
+    },
+    wireless,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink, statuses } = fakeSink();
+  await source.start(sink);
+
+  const tcp = phone("10.0.0.5:40111", "tcp");
+  const mdns = phone("adb-R5CY-AbCd._adb-tls-connect._tcp", "mdns");
+  watcher.emit([mdns, tcp]);
+  await flush();
+  await flush();
+  expect(sessions).toHaveLength(1);
+  sessions[0].streamed();
+
+  expect(await source.handleDeviceCommand!({ type: "disconnect", serial: mdns.serial })).toEqual({ type: "disconnect", ok: true });
+  expect(calls.disconnect).toEqual([["10.0.0.5:40111"]]);
+  expect(sessions[0].stopped).toBe(true);
+  expect(statuses.at(-1)).toEqual({ state: "no-device" });
+
+  watcher.emit([mdns]);
+  await flush();
+  expect(sessions).toHaveLength(1);
+  expect(delays).toEqual([]);
+
+  source.chooseDevice(mdns.serial);
+  await flush();
+  expect(sessions).toHaveLength(2);
+});
+
+test("disconnect falls back to the mDNS serial when the phone has no ip:port transport", async () => {
+  const watcher = fakeWatcher();
+  const { wireless, calls } = fakeWireless();
+  const source = new DeviceSource({ host: watcher.host, createSession: () => new FakeSession(), wireless });
+  const { sink } = fakeSink();
+  await source.start(sink);
+  watcher.emit([phone("adb-R5CY-AbCd._adb-tls-connect._tcp", "mdns")]);
+  await flush();
+  await source.handleDeviceCommand!({ type: "disconnect", serial: "adb-R5CY-AbCd._adb-tls-connect._tcp" });
+  expect(calls.disconnect).toEqual([["adb-R5CY-AbCd._adb-tls-connect._tcp"]]);
 });

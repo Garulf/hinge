@@ -63,6 +63,7 @@ let videoSize: { w: number; h: number } | null = null;
 let client: PortClient | null = null;
 let settings: Settings | null = null;
 let currentSerial: string | null = null;
+let currentDeviceId: string | null = null;
 let fullscreen = false;
 let sessionState: SessionStatus["state"] = "no-device";
 
@@ -168,7 +169,7 @@ const scene = new PhoneScene(stage, director, { loadModel, onTick });
 const scale = new ScaleController({
   apply: (pxPerMm) => scene.setPxPerMm(pxPerMm),
   persist: (pxPerMm) => {
-    if (currentSerial) void window.hinge.saveDeviceSettings(currentSerial, { pxPerMm });
+    if (currentDeviceId) void window.hinge.saveDeviceSettings(currentDeviceId, { pxPerMm });
   },
 });
 void window.hinge.workArea().then(({ width, height }) => scale.setWorkArea({ w: width, h: height }));
@@ -204,9 +205,9 @@ const settingsReady = window.hinge
     views = new ViewMemory(
       {
         apply: (view, { instant }) => scene.setView(view, { instant }),
-        save: (serial, view) => {
+        save: (id, view) => {
           void window.hinge.saveSettings({ view });
-          if (serial) void window.hinge.saveDeviceSettings(serial, { view });
+          if (id) void window.hinge.saveDeviceSettings(id, { view });
         },
       },
       loaded?.view ?? "work",
@@ -225,9 +226,10 @@ function onStatus(status: SessionStatus): void {
   scene.setStatus(statusText(status));
   if (status.state !== "streaming") return;
   currentSerial = status.serial;
-  const saved = settings?.devices[status.serial];
-  scale.useDevice(status.serial, saved?.pxPerMm);
-  views?.useDevice(status.serial, saved?.view);
+  currentDeviceId = status.deviceId;
+  const saved = settings?.devices[status.deviceId];
+  scale.useDevice(status.deviceId, saved?.pxPerMm);
+  views?.useDevice(status.deviceId, saved?.view);
 }
 
 function onSize(w: number, h: number): void {
@@ -351,7 +353,7 @@ window.addEventListener("drop", (e) => {
   client?.send({ kind: "drop-files", paths });
 });
 
-type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" }>;
+type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" | "devices" }>;
 
 function onStreamMessage(msg: StreamMessage): void {
   switch (msg.kind) {
@@ -389,6 +391,7 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
     if (msg.kind === "status") onStatus(msg.status);
     else if (msg.kind === "transfer-progress") chrome.toast(transferToast(msg.progress));
     else if (msg.kind === "device-command-result") commands.result(msg.id, msg.result);
+    else if (msg.kind === "devices") chrome.devicesChanged(msg.devices);
     else streamGate.push(msg);
   });
   client.send({ kind: "ready" });

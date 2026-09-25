@@ -219,7 +219,7 @@ test("a session that streams successfully posts one streaming status and the fir
   const { sink, statuses, packets } = fakeSink();
   await session.start(sink);
 
-  expect(statuses).toContainEqual({ state: "streaming", serial: "S1", model: "Pixel" });
+  expect(statuses).toContainEqual({ state: "streaming", serial: "S1", model: "Pixel", deviceId: "S1" });
   expect(packets).toHaveLength(1);
   await session.stop();
   controller.close();

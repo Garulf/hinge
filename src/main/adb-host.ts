@@ -36,6 +36,8 @@ class DefaultSpawner implements Spawner {
   }
 }
 
+const IDENTIFY_TIMEOUT_MS = 3000;
+
 function toDeviceSummary(device: AdbServerClientType.Device): DeviceSummary {
   return {
     serial: device.serial,
@@ -52,8 +54,9 @@ export class AdbHost {
   private readonly adbPath: string;
   private readonly probe: ServerProbe;
   private readonly spawner: Spawner;
+  private readonly identifyTimeoutMs: number;
 
-  constructor(opts: { adbPath: string; host?: string; port?: number; probe?: ServerProbe; spawner?: Spawner }) {
+  constructor(opts: { adbPath: string; host?: string; port?: number; probe?: ServerProbe; spawner?: Spawner; identifyTimeoutMs?: number }) {
     this.adbPath = opts.adbPath;
     const connector = new AdbServerNodeTcpConnector({
       host: opts.host ?? "127.0.0.1",
@@ -62,6 +65,7 @@ export class AdbHost {
     this.client = new AdbServerClient(connector);
     this.probe = opts.probe ?? new DefaultProbe(this.client);
     this.spawner = opts.spawner ?? new DefaultSpawner();
+    this.identifyTimeoutMs = opts.identifyTimeoutMs ?? IDENTIFY_TIMEOUT_MS;
   }
 
   async ensureServer(): Promise<"existing" | "spawned"> {
@@ -90,5 +94,21 @@ export class AdbHost {
 
   async open(serial: string): Promise<Adb> {
     return this.client.createAdb({ serial });
+  }
+
+  /** The phone's ro.serialno over this transport; null when it is empty or the shell does not answer in time. */
+  async identify(serial: string): Promise<string | null> {
+    const adb = await this.open(serial);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve(""), this.identifyTimeoutMs);
+      });
+      const serialno = (await Promise.race([adb.getProp("ro.serialno"), timeout])).trim();
+      return serialno === "" ? null : serialno;
+    } finally {
+      clearTimeout(timer);
+      await adb.close().catch(() => {});
+    }
   }
 }

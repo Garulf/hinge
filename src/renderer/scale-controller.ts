@@ -22,7 +22,7 @@ export class ScaleController {
   #workArea: { w: number; h: number } | null = null;
   #windowed: number | null = null;
   #fullscreen: number | null = null;
-  #device: { serial: string; saved: number | null } | null = null;
+  #device: { id: string; saved: number | null } | null = null;
 
   constructor(deps: ScaleDeps) {
     this.#deps = deps;
@@ -55,9 +55,9 @@ export class ScaleController {
    * whatever scale is on screen. Settings echoes of this controller's own
    * saves never come through here, so a quick run of steps cannot jitter.
    */
-  useDevice(serial: string, saved: number | undefined): void {
-    if (this.#device?.serial === serial) return;
-    this.#device = { serial, saved: saved ?? null };
+  useDevice(id: string, saved: number | undefined): void {
+    if (this.#device?.id === id) return;
+    this.#device = { id, saved: saved ?? null };
     if (this.#base !== null) this.#setWindowed(saved ?? this.#base);
   }
 

@@ -73,7 +73,7 @@ test("a stream error posts a sticky error status once, logs it, and drops furthe
   expect(logs).toEqual(["Recording failed: Error: ENOSPC"]);
 
   // A later status from the live session must not overwrite the sticky one.
-  sink.status({ state: "streaming", serial: "S1", model: null });
+  sink.status({ state: "streaming", serial: "S1", model: null, deviceId: "S1" });
   expect(statuses).toEqual([
     { state: "error", message: "Recording failed: Error: ENOSPC" },
     { state: "error", message: "Recording failed: Error: ENOSPC" },

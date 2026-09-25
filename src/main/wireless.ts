@@ -1,4 +1,4 @@
-import type { Adb, AdbServerClient } from "@yume-chan/adb";
+import { AdbServerClient, type Adb } from "@yume-chan/adb";
 
 export interface MdnsService {
   name: string;
@@ -22,6 +22,19 @@ export interface WirelessDeps {
 }
 
 const CONNECT_SERVICE = "_adb-tls-connect._tcp";
+
+/** adb answers a connect to an address it already has with an error, but the phone is reachable, which is all a caller wants. */
+export function isAlreadyConnected(e: unknown): boolean {
+  return e instanceof AdbServerClient.AlreadyConnectedError || (e instanceof Error && e.name === "AlreadyConnectedError");
+}
+
+export async function connectOrAlreadyConnected(deps: Pick<WirelessDeps, "connect">, address: string): Promise<void> {
+  try {
+    await deps.connect(address);
+  } catch (e) {
+    if (!isAlreadyConnected(e)) throw e;
+  }
+}
 
 function hostOf(hostPort: string): string {
   const lastColon = hostPort.lastIndexOf(":");
@@ -66,7 +79,7 @@ export async function pairNewDevice(
       // Pairing itself already succeeded at this point; a failed connect is
       // reported as "ask for the port" rather than failing the whole pair.
       try {
-        await deps.connect(match.address);
+        await connectOrAlreadyConnected(deps, match.address);
         return { paired: true, connectedAddress: match.address };
       } catch (e) {
         return { paired: true, connectedAddress: null, message: String(e) };
@@ -98,7 +111,7 @@ export async function switchDeviceToWifi(
   let lastError: unknown;
   for (let attempt = 0; attempt < CONNECT_RETRY_ATTEMPTS; attempt++) {
     try {
-      await deps.connect(address);
+      await connectOrAlreadyConnected(deps, address);
       return address;
     } catch (e) {
       lastError = e;

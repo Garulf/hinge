@@ -40,7 +40,7 @@ const api: HingeApi = {
   settings: () => ipcRenderer.invoke("hinge:settings-get"),
   settingsPath: () => ipcRenderer.invoke("hinge:settings-path"),
   saveSettings: (patch) => ipcRenderer.invoke("hinge:settings-save", patch),
-  saveDeviceSettings: (serial, patch) => ipcRenderer.invoke("hinge:settings-save-device", serial, patch),
+  saveDeviceSettings: (id, patch) => ipcRenderer.invoke("hinge:settings-save-device", id, patch),
   onSettings: (fn) => {
     ipcRenderer.on("hinge:settings", (_event, settings) => fn(settings));
   },

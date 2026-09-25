@@ -4,8 +4,8 @@ import type { PostureReading } from "../shared/posture";
 import type { AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
 import type { MediaSink, MediaSource } from "./media-source";
-import { dedupeDevices, deviceStatus, pickDevice, transportOf, type DeviceSummary } from "./transport";
-import { pairNewDevice, switchDeviceToWifi, type WirelessDeps } from "./wireless";
+import { dedupeDevices, deviceIdentity, deviceStatus, pickDevice, transportOf, type DeviceSummary } from "./transport";
+import { connectOrAlreadyConnected, pairNewDevice, switchDeviceToWifi, type WirelessDeps } from "./wireless";
 
 export interface PortLike {
   postMessage(msg: MainToRenderer, transfer: ArrayBuffer[]): void;
@@ -88,6 +88,7 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
       post({ kind: "audio-end", reason });
     },
     transferProgress: (progress) => post({ kind: "transfer-progress", progress }),
+    devices: (devices) => post({ kind: "devices", devices }),
   };
 
   let started = false;
@@ -133,9 +134,12 @@ export interface DeviceWatcher {
   ensureServer(): Promise<"existing" | "spawned">;
   watch(onChange: (devices: DeviceSummary[]) => void, onError?: (err: Error) => void): Promise<() => Promise<void>>;
   open(serial: string): Promise<Adb>;
+  /** The phone's `getprop ro.serialno` over this transport, null when it could not be read. Absent: identities come from the serial alone. */
+  identify?(serial: string): Promise<string | null>;
 }
 
-export type SessionFactory = (device: DeviceSummary, adb: Adb) => MediaSource;
+/** `deviceId` is the phone's identity, which per-phone settings are keyed by. */
+export type SessionFactory = (device: DeviceSummary, adb: Adb, deviceId: string) => MediaSource;
 
 /** Same shape as fold-monitor.ts's startFoldMonitor, kept as its own type here so DeviceSource stays testable without a real adb. */
 export type FoldMonitorStarter = (
@@ -153,7 +157,10 @@ export class DeviceSource implements MediaSource {
   #reconnecting = false;
   #reconnectAbort: AbortController | null = null;
   #lastDevices: DeviceSummary[] = [];
-  #preferredSerial: string | null;
+  /** An adb serial (an explicit choice, until it connects) or a phone identity (the phone last connected). */
+  #preferred: string | null;
+  #identities = new Map<string, string>();
+  #identifying = new Set<string>();
   #stopped = false;
   #sessionEverStreamed = false;
   #sessionRetryAttempt = 0;
@@ -161,16 +168,17 @@ export class DeviceSource implements MediaSource {
   #lastSessionError: string | null = null;
   #runToken = 0;
   #tcpReconnectAbort: AbortController | null = null;
-  /** Set by an explicit "disconnect" command; excluded from auto-pick and TCP reconnect until chooseDevice() clears it. */
-  #suppressedSerial: string | null = null;
-  /** The last serial that actually reached "streaming" this run; TCP reconnect only arms for it, not for a stale lastDevice that has never once connected. */
-  #reconnectEligibleSerial: string | null = null;
+  /** The identity of a phone the user disconnected; every transport of it is excluded from auto-pick and TCP reconnect until chooseDevice() clears it. */
+  #suppressedId: string | null = null;
+  /** The last transport that actually reached "streaming" this run; TCP reconnect only arms for it, not for a stale lastDevice that has never once connected. */
+  #reconnectEligible: { serial: string; id: string } | null = null;
 
   constructor(
     private readonly opts: {
       host: DeviceWatcher;
       createSession: SessionFactory;
-      preferredSerial?: string | null;
+      /** An adb serial or a phone identity to prefer over the USB-first default. */
+      preferred?: string | null;
       log?: (line: string) => void;
       delay?: (ms: number, signal: AbortSignal) => Promise<void>;
       /** Wraps the sink once at start(), e.g. to tee video and posture events into a recording. */
@@ -179,11 +187,13 @@ export class DeviceSource implements MediaSource {
       foldMonitor?: FoldMonitorStarter;
       /** Absent in contexts with no adb server access (e.g. replay): TCP reconnect and device-panel commands are then both unavailable. */
       wireless?: WirelessDeps;
-      /** Fired whenever a device is chosen to connect to (automatic pick or chooseDevice()), so the caller can remember it as the last device. */
-      onConnected?: (serial: string) => void;
+      /** Fired with the phone's identity whenever a device is chosen to connect to (automatic pick or chooseDevice()), so the caller can remember it as the last device. */
+      onConnected?: (id: string) => void;
+      /** Fired the first time a transport's identity is known; connecting waits for it, so settings saved under the old serial can move over first. */
+      onIdentified?: (serial: string, id: string) => Promise<void> | void;
     },
   ) {
-    this.#preferredSerial = opts.preferredSerial ?? null;
+    this.#preferred = opts.preferred ?? null;
   }
 
   async start(sink: MediaSink): Promise<void> {
@@ -204,10 +214,14 @@ export class DeviceSource implements MediaSource {
   chooseDevice(serial: string): void {
     if (this.#stopped) return;
     this.#cancelTcpReconnect();
-    this.#suppressedSerial = null;
-    this.#preferredSerial = serial;
+    this.#suppressedId = null;
+    this.#preferred = serial;
     const device = this.#lastDevices.find((d) => d.serial === serial);
     if (!device) return;
+    if (this.#identityOf(device) === null) {
+      this.#identify(device);
+      return;
+    }
     const status = deviceStatus(device);
     if (status) {
       this.#teardownSession();
@@ -222,7 +236,7 @@ export class DeviceSource implements MediaSource {
   async handleDeviceCommand(command: DeviceCommand): Promise<DeviceCommandResult> {
     switch (command.type) {
       case "list":
-        return { type: "list", devices: dedupeDevices(this.#lastDevices, this.#sessionSerial) };
+        return { type: "list", devices: this.#deviceList() };
       case "pair": {
         if (!this.opts.wireless) return { type: "pair", ok: false, connectedAddress: null, message: "wireless is unavailable" };
         try {
@@ -240,7 +254,7 @@ export class DeviceSource implements MediaSource {
         // adb needs an explicit connect before the serial will ever appear.
         if (!this.#lastDevices.some((d) => d.serial === command.serial)) {
           try {
-            await this.opts.wireless.connect(command.serial);
+            await connectOrAlreadyConnected(this.opts.wireless, command.serial);
           } catch (e) {
             return { type: "connect", ok: false, message: String(e) };
           }
@@ -267,20 +281,69 @@ export class DeviceSource implements MediaSource {
       case "disconnect": {
         if (!this.opts.wireless) return { type: "disconnect", ok: false, message: "wireless is unavailable" };
         if (transportOf(command.serial) === "usb") return { type: "disconnect", ok: false, message: "cannot disconnect a USB-connected device this way" };
-        // Suppress the TCP reconnect loop for this serial before the async
-        // disconnect resolves: otherwise a device-list update racing the
-        // disconnect can arm a reconnect the user just explicitly asked to end.
+        // Suppress the phone before the async disconnect resolves: otherwise
+        // a device-list update racing the disconnect can arm a reconnect, or
+        // pick its other transport, just after the user asked to end it.
         this.#cancelTcpReconnect();
-        this.#suppressedSerial = command.serial;
-        if (this.#preferredSerial === command.serial) this.#preferredSerial = null;
+        const listed = this.#lastDevices.find((d) => d.serial === command.serial);
+        const id = listed ? this.#settledIdentity(listed) : command.serial;
+        this.#suppressedId = id;
+        if (this.#preferred === id || this.#preferred === command.serial) this.#preferred = null;
+        this.#onDevices(this.#lastDevices);
         try {
-          await this.opts.wireless.disconnect(command.serial);
+          for (const address of this.#disconnectTargets(command.serial, id)) await this.opts.wireless.disconnect(address);
           return { type: "disconnect", ok: true };
         } catch (e) {
           return { type: "disconnect", ok: false, message: String(e) };
         }
       }
     }
+  }
+
+  /** adb can only drop a wireless transport by its ip:port; an mDNS-only phone gets its mDNS serial as a best effort. */
+  #disconnectTargets(serial: string, id: string): string[] {
+    const tcp = this.#lastDevices.filter((d) => d.transport === "tcp" && (d.serial === serial || this.#identityOf(d) === id)).map((d) => d.serial);
+    return tcp.length > 0 ? tcp : [serial];
+  }
+
+  #deviceList(): DeviceSummary[] {
+    return dedupeDevices(this.#lastDevices, this.#sessionSerial, (d) => this.#identityOf(d));
+  }
+
+  /** null while a ready transport's ro.serialno is still being read; one that cannot run a shell (unauthorized, offline) goes by its serial. */
+  #identityOf(device: DeviceSummary): string | null {
+    const known = this.#identities.get(device.serial);
+    if (known !== undefined) return known;
+    if (this.opts.host.identify && device.state === "device") return null;
+    return deviceIdentity(device, null);
+  }
+
+  #settledIdentity(device: DeviceSummary): string {
+    return this.#identityOf(device) ?? deviceIdentity(device, null);
+  }
+
+  #identify(device: DeviceSummary): void {
+    const identify = this.opts.host.identify;
+    if (!identify || this.#identifying.has(device.serial)) return;
+    this.#identifying.add(device.serial);
+    void (async () => {
+      let serialno: string | null = null;
+      try {
+        serialno = await identify.call(this.opts.host, device.serial);
+      } catch (e) {
+        this.opts.log?.(`reading ro.serialno over ${device.serial} failed: ${String(e)}`);
+      }
+      const id = deviceIdentity(device, serialno);
+      try {
+        await this.opts.onIdentified?.(device.serial, id);
+      } catch (e) {
+        this.opts.log?.(`adopting settings for ${device.serial} failed: ${String(e)}`);
+      }
+      this.#identifying.delete(device.serial);
+      if (this.#stopped) return;
+      this.#identities.set(device.serial, id);
+      this.#onDevices(this.#lastDevices);
+    })();
   }
 
   async stop(): Promise<void> {
@@ -363,16 +426,25 @@ export class DeviceSource implements MediaSource {
   /** The watcher's own onChange callback: a real device-list change always cancels and resets a pending session-start retry. */
   #onWatcherDevices(devices: DeviceSummary[]): void {
     this.#cancelSessionRetry();
+    const listed = new Set(devices.map((d) => d.serial));
+    for (const serial of this.#identities.keys()) if (!listed.has(serial)) this.#identities.delete(serial);
     this.#onDevices(devices);
   }
 
   #onDevices(devices: DeviceSummary[]): void {
     this.#lastDevices = devices;
     if (this.#stopped || !this.#sink) return;
-    // An explicitly disconnected serial must not be auto-picked back up by
+    const unidentified = devices.filter((d) => this.#identityOf(d) === null);
+    if (unidentified.length > 0) {
+      for (const d of unidentified) this.#identify(d);
+      return;
+    }
+    this.#sink.devices?.(this.#deviceList());
+    // An explicitly disconnected phone must not be auto-picked back up by
     // a race between the device list updating and the disconnect resolving.
-    const candidates = this.#suppressedSerial ? devices.filter((d) => d.serial !== this.#suppressedSerial) : devices;
-    const device = pickDevice(candidates, this.#preferredSerial);
+    const suppressed = this.#suppressedId;
+    const candidates = suppressed ? devices.filter((d) => d.serial !== suppressed && this.#identityOf(d) !== suppressed) : devices;
+    const device = pickDevice(candidates, this.#preferred, (d) => this.#identityOf(d), this.#sessionSerial);
     const status = deviceStatus(device);
     if (status) {
       this.#teardownSession();
@@ -384,7 +456,6 @@ export class DeviceSource implements MediaSource {
     if (!device) return;
     if (this.#sessionSerial === device.serial) return;
     this.#teardownSession();
-    this.#preferredSerial = device.serial;
     this.#connect(device);
   }
 
@@ -398,12 +469,13 @@ export class DeviceSource implements MediaSource {
    */
   #maybeBeginTcpReconnect(): void {
     if (this.#stopped || this.#tcpReconnectAbort || !this.opts.wireless) return;
-    const serial = this.#preferredSerial;
-    if (!serial || transportOf(serial) === "usb") return;
-    if (serial !== this.#reconnectEligibleSerial) return;
+    const target = this.#reconnectEligible;
+    if (!target || transportOf(target.serial) === "usb") return;
+    if (this.#preferred !== target.id && this.#preferred !== target.serial) return;
+    if (this.#suppressedId === target.id) return;
     const controller = new AbortController();
     this.#tcpReconnectAbort = controller;
-    void this.#tcpReconnectLoop(serial, controller);
+    void this.#tcpReconnectLoop(target.serial, controller);
   }
 
   async #tcpReconnectLoop(address: string, controller: AbortController): Promise<void> {
@@ -413,7 +485,7 @@ export class DeviceSource implements MediaSource {
       await delay(SESSION_RETRY_DELAYS_MS[Math.min(attempt, SESSION_RETRY_DELAYS_MS.length - 1)], controller.signal);
       if (this.#stopped || controller.signal.aborted) break;
       try {
-        await this.opts.wireless!.connect(address);
+        await connectOrAlreadyConnected(this.opts.wireless!, address);
         break; // adb's own device tracking picks the reconnected device up from here
       } catch (e) {
         this.opts.log?.(`wireless reconnect attempt failed: ${String(e)}`);
@@ -444,11 +516,13 @@ export class DeviceSource implements MediaSource {
   }
 
   #connect(device: DeviceSummary): void {
+    const id = this.#settledIdentity(device);
     this.#sessionSerial = device.serial;
     this.#sessionEverStreamed = false;
-    this.opts.onConnected?.(device.serial);
+    this.#preferred = id;
+    this.opts.onConnected?.(id);
     const run = ++this.#runToken;
-    void this.#run(device, run);
+    void this.#run(device, id, run);
   }
 
   /**
@@ -463,7 +537,7 @@ export class DeviceSource implements MediaSource {
    * run is confirmed still current, otherwise it is stopped immediately
    * instead of being discarded (which would leak it).
    */
-  async #run(device: DeviceSummary, run: number): Promise<void> {
+  async #run(device: DeviceSummary, id: string, run: number): Promise<void> {
     const sink = this.#sink;
     if (!sink) return;
     const observedSink: MediaSink = {
@@ -472,7 +546,7 @@ export class DeviceSource implements MediaSource {
         if (status.state === "streaming") {
           this.#sessionEverStreamed = true;
           this.#sessionRetryAttempt = 0;
-          this.#reconnectEligibleSerial = device.serial;
+          this.#reconnectEligible = { serial: device.serial, id };
         }
         if (status.state === "error") this.#lastSessionError = status.message;
         sink.status(status);
@@ -484,7 +558,7 @@ export class DeviceSource implements MediaSource {
 
       if (this.opts.foldMonitor) void this.#startFoldMonitor(run, adb, sink);
 
-      const session = this.opts.createSession(device, adb);
+      const session = this.opts.createSession(device, adb, id);
       this.#session = session;
       session.ended?.then(() => this.#onSessionEnded(session));
       await session.start(observedSink);
@@ -526,6 +600,7 @@ export class DeviceSource implements MediaSource {
     this.#session = null;
     this.#sessionSerial = null;
     void this.#stopPostureSampler();
+    void session.stop();
     if (streamed) {
       this.#sessionRetryAttempt = 0;
       this.#onDevices(this.#lastDevices);

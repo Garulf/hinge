@@ -11,7 +11,8 @@ export interface HingeApi {
   settings(): Promise<Settings>;
   settingsPath(): Promise<string>;
   saveSettings(patch: SettingsPatch): Promise<void>;
-  saveDeviceSettings(serial: string, patch: DeviceSettings): Promise<void>;
+  /** id is the phone identity from the streaming status. */
+  saveDeviceSettings(id: string, patch: DeviceSettings): Promise<void>;
   /** Called with the whole settings object after every save, whoever made it. */
   onSettings(fn: (settings: Settings) => void): void;
   toggleFullscreen(): void;

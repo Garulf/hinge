@@ -12,11 +12,14 @@ export type WireAudioPacket = { type: "configuration"; data: Uint8Array } | { ty
 /** codec is the WebCodecs AudioDecoder codec string (e.g. "opus"), not a numeric id like VideoStreamInfo's. */
 export interface AudioStreamInfo { codec: string; sampleRate: number; channels: number }
 
+export type AudioEndReason = "unsupported" | "error" | "disabled";
+
 export type SessionStatus =
   | { state: "no-device" }
   | { state: "unauthorized"; serial: string }
   | { state: "connecting"; serial: string }
-  | { state: "streaming"; serial: string; model: string | null }
+  /** deviceId is the phone's identity (its ro.serialno), the same across USB and Wi-Fi; serial is the adb transport it streams over. */
+  | { state: "streaming"; serial: string; model: string | null; deviceId: string }
   | { state: "replay"; file: string }
   | { state: "error"; message: string };
 
@@ -90,14 +93,17 @@ export type MainToRenderer =
   /**
    * reason "unsupported" covers both the device metadata reporting
    * "disabled"/"errored" and the audio stream failing before it produced
-   * anything (both toast-worthy); "disabled" is audio turned off by the
-   * user's own settings, not a failure; absent for a clean end (e.g.
-   * session stop).
+   * anything; "error" is a stream that failed partway while the video
+   * went on; "disabled" is audio turned off by the user's own settings,
+   * not a failure; absent for a clean end (session stop, or the whole
+   * stream closing).
    */
-  | { kind: "audio-end"; reason?: "unsupported" | "disabled" }
+  | { kind: "audio-end"; reason?: AudioEndReason }
   | { kind: "status"; status: SessionStatus }
   | { kind: "transfer-progress"; progress: TransferProgress }
   | { kind: "device-command-result"; id: string; result: DeviceCommandResult }
+  /** The deduped device list, pushed on every change so an open device panel stays current. */
+  | { kind: "devices"; devices: DeviceSummary[] }
   | PostureMessage;
 
 export type RendererToMain =

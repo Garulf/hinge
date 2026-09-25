@@ -1,5 +1,5 @@
 import type { PostureReading } from "../shared/posture";
-import type { AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, SessionStatus, TransferProgress, VideoStreamInfo, WireAudioPacket, WireMediaPacket } from "../shared/wire";
+import type { AudioEndReason, AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, DeviceSummary, SessionStatus, TransferProgress, VideoStreamInfo, WireAudioPacket, WireMediaPacket } from "../shared/wire";
 
 export interface MediaSink {
   videoStart(info: VideoStreamInfo): void;
@@ -11,8 +11,9 @@ export interface MediaSink {
   /** Absent in contexts that never forward audio (e.g. the probe mode); a source must skip starting audio entirely rather than calling these unguarded. */
   audioStart?(info: AudioStreamInfo): void;
   audioPacket?(packet: WireAudioPacket): void;
-  audioEnd?(reason?: "unsupported" | "disabled"): void;
+  audioEnd?(reason?: AudioEndReason): void;
   transferProgress?(progress: TransferProgress): void;
+  devices?(devices: DeviceSummary[]): void;
 }
 
 export interface MediaSource {

@@ -80,6 +80,12 @@ export class DevicePanel implements Panel {
 
   settingsChanged(): void {}
 
+  /** main pushes every device-list change; an open panel shows it at once, unless a command is running and will refresh the list itself. */
+  devicesChanged(devices: DeviceSummary[]): void {
+    if (!this.node.isConnected || this.#busy) return;
+    this.#renderList(devices);
+  }
+
   #renderList(devices: DeviceSummary[]): void {
     if (devices.length === 0) {
       this.#list.replaceChildren(el("div", { className: "empty", text: "No devices. Plug the phone in over USB or pair it below." }));

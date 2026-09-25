@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { pairNewDevice, parseWlanIp, switchDeviceToWifi, type WirelessDeps } from "../../src/main/wireless";
+import { AdbServerClient } from "@yume-chan/adb";
+import { connectOrAlreadyConnected, pairNewDevice, parseWlanIp, switchDeviceToWifi, type WirelessDeps } from "../../src/main/wireless";
 
 function fakeDeps(overrides?: Partial<WirelessDeps>): { deps: WirelessDeps; calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = { pair: [], connect: [], disconnect: [], mdnsServices: [], setTcpIpPort: [], wlanIp: [] };
@@ -173,4 +174,37 @@ test("pairNewDevice reports paired ok with connectedAddress null and a message w
   expect(result.paired).toBe(true);
   expect(result.connectedAddress).toBeNull();
   expect(result.message).toContain("connection refused");
+});
+
+function alreadyConnected(address: string): Error {
+  return new AdbServerClient.AlreadyConnectedError(`already connected to ${address}`);
+}
+
+test("connectOrAlreadyConnected treats adb's 'already connected' as success and still rejects anything else", async () => {
+  const { deps } = fakeDeps({ connect: async (address) => { throw alreadyConnected(address); } });
+  await expect(connectOrAlreadyConnected(deps, "10.0.0.5:5555")).resolves.toBeUndefined();
+
+  const failing = fakeDeps({ connect: async () => { throw new AdbServerClient.NetworkError("failed"); } });
+  await expect(connectOrAlreadyConnected(failing.deps, "10.0.0.5:5555")).rejects.toThrow("failed");
+});
+
+test("pairNewDevice counts an already-connected connect service as connected", async () => {
+  const { deps } = fakeDeps({
+    mdnsServices: async () => [{ name: "adb-R3-abc", service: "_adb-tls-connect._tcp", address: "192.168.1.42:41231" }],
+    connect: async (address) => { throw alreadyConnected(address); },
+  });
+  expect(await pairNewDevice(deps, "192.168.1.42:37251", "123456")).toEqual({ paired: true, connectedAddress: "192.168.1.42:41231" });
+});
+
+test("switchDeviceToWifi counts an already-connected address as connected instead of retrying it", async () => {
+  let attempts = 0;
+  const { deps } = fakeDeps({
+    wlanIp: async () => "192.168.1.42",
+    connect: async (address) => {
+      attempts++;
+      throw alreadyConnected(address);
+    },
+  });
+  expect(await switchDeviceToWifi(deps, {} as never, { delay: async () => {} })).toBe("192.168.1.42:5555");
+  expect(attempts).toBe(1);
 });

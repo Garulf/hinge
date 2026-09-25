@@ -2,7 +2,7 @@ import { classifyScreen, type ScreenClass } from "../shared/fold7";
 import { defaultScale, workLayout } from "../shared/layout";
 import type { SessionStatus } from "../shared/wire";
 import { InputRouter } from "./input/input-router";
-import { PortClient } from "./port-client";
+import { PortClient, receivePort } from "./port-client";
 import { PhoneScene } from "./scene/phone-scene";
 import { VideoPipe } from "./video-pipe";
 
@@ -43,7 +43,7 @@ const canvas = document.body.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
 new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }));
 
-window.hinge.onPort((port) => {
+void receivePort().then((port) => {
   client = new PortClient(port);
   client.on((msg) => {
     if (msg.kind === "video-start") pipe.start(msg.info);

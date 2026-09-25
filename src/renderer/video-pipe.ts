@@ -50,6 +50,7 @@ export class VideoPipe {
   #unsubscribeSize: (() => void) | null = null;
   #lastSize = { width: 0, height: 0 };
   #fellBackToSoftware = false;
+  #waitingForConfig = false;
 
   constructor(target: FrameTarget, onSize: (w: number, h: number) => void, deps?: { createDecoder?: DecoderFactory }) {
     this.#target = target;
@@ -61,12 +62,18 @@ export class VideoPipe {
     this.#teardown();
     this.#info = info;
     this.#fellBackToSoftware = false;
+    this.#waitingForConfig = false;
     this.#lastSize = { width: info.width, height: info.height };
     this.#onSize(info.width, info.height);
     this.#openStream("prefer-hardware");
   }
 
   push(packet: WireMediaPacket): void {
+    // After the decoder is recreated mid-stream (software fallback), the
+    // codec transform throws on a data chunk that arrives before its own
+    // configuration chunk; drop such chunks instead of killing the pipe.
+    if (this.#waitingForConfig && packet.type === "data") return;
+    if (packet.type === "configuration") this.#waitingForConfig = false;
     this.#controller?.enqueue(reconstruct(packet));
   }
 
@@ -102,8 +109,12 @@ export class VideoPipe {
   }
 
   #onPipeError(e: unknown, previousMode: HardwarePreference): void {
-    if (!(e instanceof DOMException) || this.#fellBackToSoftware || previousMode === "prefer-software") return;
+    if (!(e instanceof DOMException) || this.#fellBackToSoftware || previousMode === "prefer-software") {
+      console.error("video decode pipe stopped", e);
+      return;
+    }
     this.#fellBackToSoftware = true;
+    this.#waitingForConfig = true;
     this.#disposeDecoder();
     this.#openStream("prefer-software");
   }
@@ -121,7 +132,12 @@ export class VideoPipe {
   #disposeDecoder(): void {
     this.#unsubscribeSize?.();
     this.#unsubscribeSize = null;
-    this.#decoder?.dispose?.();
+    try {
+      this.#decoder?.dispose?.();
+    } catch {
+      // the underlying transform stream may already be fully terminated
+      // (e.g. the decoder's own pipe finished tearing itself down first)
+    }
     this.#decoder = null;
   }
 }

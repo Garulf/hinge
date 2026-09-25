@@ -72,8 +72,12 @@ export class FoldDirector {
   #classAtMs = 0;
   #leadAtMs: number | null = null;
   #lastFrameAtMs: number | null = null;
+  #probedLeadAtMs: number | null = null;
+  readonly #requestFrames: () => void;
 
-  constructor(opts?: { view?: ViewMode; settleMs?: number }) {
+  /** `requestFrames` asks the stream to resend its screen (scrcpy's reset-video), for a lead whose screen has sent nothing. */
+  constructor(opts?: { view?: ViewMode; settleMs?: number; requestFrames?: () => void }) {
+    this.#requestFrames = opts?.requestFrames ?? (() => {});
     this.#blend = opts?.view === "showcase" ? 1 : 0;
     const settleMs = opts?.settleMs ?? DEFAULT_SETTLE_MS;
     this.#workAngle = new Spring({ value: 0, settleMs });
@@ -177,13 +181,22 @@ export class FoldDirector {
   /**
    * A screen that goes dark on a fold sends no frames, so the stream only
    * disputes a lead by still sending frames of its class well after the
-   * posture changed; without that the lead stands.
+   * posture changed; without that the lead stands. scrcpy also sends
+   * nothing while a lit screen does not change, so a lead that runs out in
+   * silence asks for the screen once: a lit one answers with frames, a dark
+   * one stays silent and the lead holds.
    */
   #expireLead(): void {
     const cls = this.#announcedClass;
     const leadAt = this.#leadAtMs;
     if (leadAt === null || !cls || this.#nowMs - leadAt < POSTURE_LEAD_MS) return;
-    if (this.#lastFrameAtMs === null || this.#lastFrameAtMs < leadAt + LEAD_DISPUTE_FRAME_MS) return;
+    if (this.#lastFrameAtMs === null || this.#lastFrameAtMs < leadAt + LEAD_DISPUTE_FRAME_MS) {
+      if (this.#probedLeadAtMs !== leadAt) {
+        this.#probedLeadAtMs = leadAt;
+        this.#requestFrames();
+      }
+      return;
+    }
     this.#leadAtMs = null;
     this.#workTarget = classTarget(cls);
   }

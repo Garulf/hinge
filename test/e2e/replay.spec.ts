@@ -1,7 +1,7 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { FOLD7_BODY, showcaseSizePx } from "../../src/shared/layout";
+import { defaultPxPerMm, FOLD7_BODY, showcaseSizePx } from "../../src/shared/layout";
 
 type Lit = "cover" | "inner" | null;
 
@@ -229,8 +229,9 @@ test("replays the synthetic fold: closed, opening led by posture, open, landscap
     const openShot = await page.screenshot({ path: "test-results/open.png" });
 
     await toggleView(page);
-    const pxPerMmOpen = open.window.h / FOLD7_BODY.heightMm;
-    const showcaseWidth = showcaseSizePx(FOLD7_BODY, 0, pxPerMmOpen).w;
+    const area = await app.evaluate(({ BrowserWindow, screen }) => screen.getDisplayMatching(BrowserWindow.getAllWindows()[0].getBounds()).workArea);
+    const dpr = await page.evaluate(() => devicePixelRatio);
+    const showcaseWidth = showcaseSizePx(FOLD7_BODY, 0, defaultPxPerMm(FOLD7_BODY, area.height), { w: area.width, h: area.height }, dpr).w;
     const showcase = await waitFor(
       page,
       "the showcase view",

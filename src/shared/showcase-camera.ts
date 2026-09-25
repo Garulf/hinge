@@ -17,7 +17,7 @@ export const SHOWCASE_LIMITS: { yaw: [number, number]; pitch: [number, number] }
 
 const SHOWCASE_FOV_DEG = 30;
 const NEAR_ORTHO_FOV_DEG = 1;
-const SPHERE_FILL = 0.7;
+const SPHERE_FILL = 0.88;
 const DEPTH_MARGIN_M = 0.5;
 
 const rad = (deg: number) => (deg * Math.PI) / 180;

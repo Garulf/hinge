@@ -22,12 +22,32 @@ export function bodySizePx(body: BodyDims, open: boolean, rotation: 0 | 1 | 2 | 
 
 const SHOWCASE_WIDTH_FACTOR = 1.35;
 
-/** The work view's height and room across for the angled open phone and its shadow: 1.35 times the open body's width. */
-export function showcaseSizePx(body: BodyDims, rotation: 0 | 1 | 2 | 3, pxPerMm: number): { w: number; h: number } {
-  const w = Math.round(SHOWCASE_WIDTH_FACTOR * body.openWidthMm * pxPerMm);
-  const h = Math.round(body.heightMm * pxPerMm);
+/**
+ * The work view's height and room across for the angled open phone and its
+ * shadow: 1.35 times the open body's width, device-aligned like the work
+ * view, but never wider (or, turned, taller) than the work area.
+ */
+export function showcaseSizePx(
+  body: BodyDims,
+  rotation: 0 | 1 | 2 | 3,
+  pxPerMm: number,
+  workArea: { w: number; h: number },
+  devicePixelRatio = 1,
+): { w: number; h: number } {
+  const along = Math.round(body.heightMm * pxPerMm);
+  const across = Math.round(SHOWCASE_WIDTH_FACTOR * body.openWidthMm * pxPerMm);
   const rotated = rotation === 1 || rotation === 3;
-  return rotated ? { w: h, h: w } : { w, h };
+  const aligned = deviceAlignedSize(rotated ? { w: along, h: across } : { w: across, h: along }, devicePixelRatio);
+  if (rotated) return { w: aligned.w, h: fitSide(aligned.h, workArea.h, devicePixelRatio) };
+  return { w: fitSide(aligned.w, workArea.w, devicePixelRatio), h: aligned.h };
+}
+
+function fitSide(cssPx: number, limit: number, devicePixelRatio: number): number {
+  if (cssPx <= limit) return cssPx;
+  for (let step = 0; step <= MAX_ALIGN_STEP_PX; step++) {
+    if (coversWholeDevicePixels(limit - step, devicePixelRatio)) return limit - step;
+  }
+  return limit;
 }
 
 export function lerpSize(a: { w: number; h: number }, b: { w: number; h: number }, t: number): { w: number; h: number } {

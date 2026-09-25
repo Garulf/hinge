@@ -33,6 +33,8 @@ export class InputRouter {
   readonly #modifiers = new ModifierTracker();
   readonly #raycaster = new THREE.Raycaster();
   #press: PressMode | null = null;
+  /** A drag or orbit press held still while the view transition runs. */
+  #paused = false;
   #lastPointer = { x: 0, y: 0 };
 
   constructor(
@@ -73,6 +75,7 @@ export class InputRouter {
     // canvas.
     this.#canvas.setPointerCapture(e.pointerId);
     this.#lastPointer = { x: e.clientX, y: e.clientY };
+    this.#paused = false;
     const view = this.#scene.view();
     if (view.active) {
       this.#press = "ignored";
@@ -96,9 +99,14 @@ export class InputRouter {
     const dx = e.clientX - this.#lastPointer.x;
     const dy = e.clientY - this.#lastPointer.y;
     this.#lastPointer = { x: e.clientX, y: e.clientY };
-    if (this.#press === "drag" || this.#press === "ignored") return;
-    if (this.#press === "orbit") {
-      this.#scene.orbitBy(dx, dy);
+    if (this.#press === "ignored") return;
+    if (this.#press === "drag" || this.#press === "orbit") {
+      if (this.#scene.view().active) {
+        this.#pauseForTransition();
+        return;
+      }
+      if (this.#paused) this.#resumeAfterTransition();
+      if (this.#press === "orbit") this.#scene.orbitBy(dx, dy);
       return;
     }
     if (this.#scene.view().active) return;
@@ -109,8 +117,7 @@ export class InputRouter {
     if (this.#canvas.hasPointerCapture(e.pointerId)) this.#canvas.releasePointerCapture(e.pointerId);
     const press = this.#press;
     this.#press = null;
-    if (press === "drag") window.hinge.endDrag();
-    else if (press === "orbit") this.#scene.releaseOrbit();
+    this.#endPress(press);
     if (press === "drag" || press === "orbit" || press === "ignored") return;
     this.#dispatch({ kind: "up", button: e.button, buttons: e.buttons, hit: this.#scene.view().active ? null : this.#hitOf(e) });
   }
@@ -119,9 +126,26 @@ export class InputRouter {
   #cancelInteraction(): void {
     const press = this.#press;
     this.#press = null;
-    if (press === "drag") window.hinge.endDrag();
-    else if (press === "orbit") this.#scene.releaseOrbit();
+    this.#endPress(press);
     this.#dispatch({ kind: "blur", button: 0, buttons: 0, hit: null });
+  }
+
+  #endPress(press: PressMode | null): void {
+    if (press === "drag" && !this.#paused) window.hinge.endDrag();
+    else if (press === "orbit") this.#scene.releaseOrbit();
+    this.#paused = false;
+  }
+
+  /** Main moves a dragged window on its own timer, so the drag ends outright rather than just ignoring moves. */
+  #pauseForTransition(): void {
+    if (this.#paused || (this.#press !== "drag" && this.#press !== "orbit")) return;
+    this.#paused = true;
+    if (this.#press === "drag") window.hinge.endDrag();
+  }
+
+  #resumeAfterTransition(): void {
+    this.#paused = false;
+    if (this.#press === "drag") window.hinge.beginDrag();
   }
 
   #onWheel(e: WheelEvent): void {
@@ -158,6 +182,7 @@ export class InputRouter {
     const action = hingeShortcut(like, this.#modifiers);
     if (action) {
       e.preventDefault();
+      if (action === "toggle-view") this.#pauseForTransition();
       this.#onAction(action);
       return;
     }
@@ -183,7 +208,7 @@ export class InputRouter {
     if (!screen) return null;
     const rect = this.#canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
-    this.#raycaster.setFromCamera(ndc, this.#scene.camera());
+    this.#raycaster.setFromCamera(ndc, this.#scene.activeCamera());
     const [hit] = this.#raycaster.intersectObject(screen.mesh);
     if (!hit?.uv) return null;
     if (!insideScreenMask(hit.uv.x, hit.uv.y, screen.extras.cornerRadiusUv, screen.extras.pixelSize)) return null;

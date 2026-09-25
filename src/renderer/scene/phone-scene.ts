@@ -186,6 +186,7 @@ export class PhoneScene implements FrameTarget {
   #orbitPose = { ...SHOWCASE_REST };
   #rendered = { t: 0, yaw: SHOWCASE_REST.yaw, pitch: SHOWCASE_REST.pitch };
   #shadowPose: string | null = null;
+  #shadowSkippedLast = false;
   #frameDirty = true;
   #layoutDirty = true;
   #renderedSettled = false;
@@ -282,13 +283,23 @@ export class PhoneScene implements FrameTarget {
     this.#layoutDirty = true;
   }
 
+  /** The work view's orthographic camera. */
+  camera(): THREE.OrthographicCamera {
+    return this.#camera;
+  }
+
   /** The camera the last frame was drawn with: orthographic in the work view, perspective from the first step toward the showcase. */
-  camera(): THREE.Camera {
+  activeCamera(): THREE.Camera {
     return this.#view.t > 0 ? this.#showcaseCamera : this.#camera;
   }
 
+  /** The one way to change views: eases over 600 ms from wherever the blend stands, or with `instant` switches at once. */
+  setView(view: "work" | "showcase", opts?: { instant?: boolean }): void {
+    this.#transition.setTarget(view, opts);
+  }
+
   toggleView(): void {
-    this.#transition.toggle();
+    this.setView(this.#transition.target === "work" ? "showcase" : "work");
   }
 
   view(): ViewState {
@@ -327,6 +338,7 @@ export class PhoneScene implements FrameTarget {
     model.cover.mesh.material = this.#materials.cover;
     model.inner.mesh.material = this.#materials.inner;
     for (const screen of SCREENS) this.#materials[screen].setEnvironment(this.#scene.environment);
+    this.#materials.inner.setCreaseBand(model.creaseBand());
     const videoScreen = this.#routing.videoScreen;
     if (videoScreen) this.#materials[videoScreen].setVideo(this.#live);
 
@@ -491,7 +503,10 @@ export class PhoneScene implements FrameTarget {
       this.#badge.material.rotation = (rotation * Math.PI) / 2;
       this.#badge.material.opacity = 1 - this.#view.t;
     }
-    for (const screen of SCREENS) materials[screen].setGlass(this.#view.t);
+    for (const screen of SCREENS) {
+      materials[screen].setGlass(this.#view.t);
+      materials[screen].setCrease(this.#view.t);
+    }
     this.#shadow.setStrength(this.#view.t);
   }
 
@@ -544,7 +559,7 @@ export class PhoneScene implements FrameTarget {
       box = new THREE.Box3().setFromObject(mesh);
     }
     const projected = new THREE.Box2();
-    const camera = this.camera();
+    const camera = this.activeCamera();
     for (const x of [box.min.x, box.max.x]) {
       for (const y of [box.min.y, box.max.y]) {
         for (const z of [box.min.z, box.max.z]) {
@@ -588,7 +603,15 @@ export class PhoneScene implements FrameTarget {
     camera.updateMatrixWorld();
 
     this.#shadow.place(centre.x, box.min.y, centre.z);
-    if (this.#shadowPoseKey() !== this.#shadowPose) this.#captureShadow();
+    if (this.#shadowPoseKey() === this.#shadowPose) return;
+    // A software GL pays for the shadow's depth and blur passes on the CPU,
+    // so while a fold moves the pose it is redrawn on every other frame.
+    if (this.#software && !this.#shadowSkippedLast && this.#shadowPose !== null) {
+      this.#shadowSkippedLast = true;
+      return;
+    }
+    this.#shadowSkippedLast = false;
+    this.#captureShadow();
   }
 
   #shadowPoseKey(): string {
@@ -605,7 +628,7 @@ export class PhoneScene implements FrameTarget {
     if (this.#view.t > 0 && this.#model) this.#placeShowcase(this.#model);
     this.#rendered = { t: this.#view.t, yaw: this.#orbitPose.yaw, pitch: this.#orbitPose.pitch };
     this.#renderer.clear();
-    this.#renderer.render(this.#scene, this.camera());
+    this.#renderer.render(this.#scene, this.activeCamera());
     this.#frames.onRendered();
     if (this.#overlay.mesh.visible) {
       this.#placeOverlay();

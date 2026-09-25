@@ -2,15 +2,7 @@ import { clampToWorkArea, type Rect } from "../shared/clamp-bounds";
 import { anchoredRect, centredRect } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
 
-/**
- * Places the window's content bounds for a new size, then clamps them to the
- * work area: a fold (same rotation) keeps the fixed half's edge in place, a
- * turn (or the first placement) keeps the window centred.
- */
-export function anchoredWindowBounds(current: Rect, next: { w: number; h: number }, rotation: Rotation, previousRotation: Rotation | null, area: Rect): Rect {
-  return clampToWorkArea(unclampedBounds(current, next, rotation, previousRotation), area);
-}
-
+/** A fold (same rotation) keeps the fixed half's edge in place; a turn, or the first placement, keeps the window centred. */
 function unclampedBounds(current: Rect, next: { w: number; h: number }, rotation: Rotation, previousRotation: Rotation | null): Rect {
   const from = { x: current.x, y: current.y, w: current.width, h: current.height };
   const placed = rotation === previousRotation ? anchoredRect(from, next, rotation) : centredRect(from, next);
@@ -29,7 +21,8 @@ function near(a: Rect, b: Rect): boolean {
 }
 
 /**
- * Places the window across a sequence of size requests. A clamp against the
+ * Places the window's content bounds across a sequence of size requests,
+ * clamped to the work area. A clamp against the
  * work area gives up the anchor for that one placement only: while the
  * window still sits where it was put, the next size is anchored from where
  * it would have been without the clamp, so growing past a screen edge and

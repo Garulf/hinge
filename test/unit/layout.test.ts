@@ -100,14 +100,33 @@ test("deviceAlignedSize: a scale with no whole-pixel CSS size nearby keeps the s
   expect(deviceAlignedSize({ w: 431, h: 945 }, 1.0123)).toEqual({ w: 431, h: 945 });
 });
 
+const ROOMY = { w: 5000, h: 5000 };
+
 test("showcaseSizePx: the work view's height and 1.35 times the open body's width, turned with the phone", () => {
   const pxPerMm = 5;
   const open = bodySizePx(FOLD7_BODY, true, 0, pxPerMm);
-  expect(showcaseSizePx(FOLD7_BODY, 0, pxPerMm)).toEqual({ w: Math.round(1.35 * FOLD7_BODY.openWidthMm * pxPerMm), h: open.h });
-  expect(showcaseSizePx(FOLD7_BODY, 2, pxPerMm)).toEqual(showcaseSizePx(FOLD7_BODY, 0, pxPerMm));
-  const portrait = showcaseSizePx(FOLD7_BODY, 0, pxPerMm);
-  expect(showcaseSizePx(FOLD7_BODY, 1, pxPerMm)).toEqual({ w: portrait.h, h: portrait.w });
-  expect(showcaseSizePx(FOLD7_BODY, 3, pxPerMm)).toEqual({ w: portrait.h, h: portrait.w });
+  expect(showcaseSizePx(FOLD7_BODY, 0, pxPerMm, ROOMY)).toEqual({ w: Math.round(1.35 * FOLD7_BODY.openWidthMm * pxPerMm), h: open.h });
+  expect(showcaseSizePx(FOLD7_BODY, 2, pxPerMm, ROOMY)).toEqual(showcaseSizePx(FOLD7_BODY, 0, pxPerMm, ROOMY));
+  const portrait = showcaseSizePx(FOLD7_BODY, 0, pxPerMm, ROOMY);
+  expect(showcaseSizePx(FOLD7_BODY, 1, pxPerMm, ROOMY)).toEqual({ w: portrait.h, h: portrait.w });
+  expect(showcaseSizePx(FOLD7_BODY, 3, pxPerMm, ROOMY)).toEqual({ w: portrait.h, h: portrait.w });
+});
+
+test("showcaseSizePx: device-aligned like the work view, growing when there is room", () => {
+  const size = showcaseSizePx(FOLD7_BODY, 0, 5, ROOMY, 1.25);
+  expect(size).toEqual(deviceAlignedSize({ w: Math.round(1.35 * FOLD7_BODY.openWidthMm * 5), h: Math.round(FOLD7_BODY.heightMm * 5) }, 1.25));
+});
+
+test("showcaseSizePx: the widened axis is capped to the work area, aligned downward to whole device pixels", () => {
+  const pxPerMm = (0.85 * 1112) / FOLD7_BODY.heightMm;
+  const landscape = showcaseSizePx(FOLD7_BODY, 1, pxPerMm, { w: 2048, h: 1112 }, 1.25);
+  expect(landscape.h).toBeLessThanOrEqual(1112);
+  expect(landscape.h).toBeGreaterThan(1112 - 4);
+  expect((landscape.h * 1.25) % 1).toBe(0);
+  expect(landscape.w).toBe(deviceAlignedSize({ w: Math.round(FOLD7_BODY.heightMm * pxPerMm), h: 1 }, 1.25).w);
+
+  const narrow = showcaseSizePx(FOLD7_BODY, 0, 5, { w: 900, h: 5000 });
+  expect(narrow.w).toBe(900);
 });
 
 test("lerpSize: whole pixels from a at 0 to b at 1", () => {

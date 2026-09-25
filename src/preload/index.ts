@@ -35,7 +35,7 @@ const api: HingeApi = {
   setWindowSize: (w, h, rotation) => ipcRenderer.send("hinge:set-window-size", w, h, rotation),
   beginDrag: () => ipcRenderer.send("hinge:begin-drag"),
   endDrag: () => ipcRenderer.send("hinge:end-drag"),
-  workAreaHeight: () => ipcRenderer.invoke("hinge:work-area-height"),
+  workArea: () => ipcRenderer.invoke("hinge:work-area"),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   platform: process.platform,
 };

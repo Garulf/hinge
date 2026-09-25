@@ -53,7 +53,7 @@ function fakeScene(rotation: 0 | 1 | 2 | 3 = 0) {
   const orbits: [number, number][] = [];
   let releases = 0;
   return {
-    camera: () => camera,
+    activeCamera: () => camera,
     litScreen: (): typeof screen | null => screen,
     rotation: () => rotation,
     view: () => state.view,
@@ -420,4 +420,43 @@ test("work view: Shift and a press off the screen still drags, and a plain one n
   canvas.fire("pointerup", { pointerId: 29, button: 0, buttons: 0, clientX: 520, clientY: 500 });
   expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledOnce();
   expect(scene.orbits).toEqual([]);
+});
+
+test("a window drag that runs into the transition stops there and picks up again after it", () => {
+  const onAction = vi.fn();
+  const { canvas, scene } = setup({ onAction });
+  canvas.fire("pointerdown", { pointerId: 30, button: 0, buttons: 1, ...OFF_PHONE });
+  expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledTimes(1);
+
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fireKey("keydown", "KeyD", { altKey: true });
+  expect(onAction).toHaveBeenCalledWith("toggle-view");
+  expect(fakeWindow.hinge.endDrag).toHaveBeenCalledTimes(1);
+
+  scene.state.view = { target: "showcase", t: 0.5, active: true };
+  canvas.fire("pointermove", { pointerId: 30, button: -1, buttons: 1, clientX: 520, clientY: 500 });
+  expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledTimes(1);
+
+  scene.state.view = SHOWCASE;
+  canvas.fire("pointermove", { pointerId: 30, button: -1, buttons: 1, clientX: 530, clientY: 500 });
+  expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledTimes(2);
+  canvas.fire("pointerup", { pointerId: 30, button: 0, buttons: 0, clientX: 530, clientY: 500 });
+  expect(fakeWindow.hinge.endDrag).toHaveBeenCalledTimes(2);
+  expect(scene.orbits).toEqual([]);
+});
+
+test("an orbit does not turn the phone while a transition runs, and resumes without a jump after it", () => {
+  const { canvas, scene } = setup({ view: SHOWCASE });
+  canvas.fire("pointerdown", { pointerId: 31, button: 0, buttons: 1, ...OFF_PHONE });
+  canvas.fire("pointermove", { pointerId: 31, button: -1, buttons: 1, clientX: 510, clientY: 500 });
+  scene.state.view = { target: "work", t: 0.6, active: true };
+  canvas.fire("pointermove", { pointerId: 31, button: -1, buttons: 1, clientX: 560, clientY: 500 });
+  scene.state.view = SHOWCASE;
+  canvas.fire("pointermove", { pointerId: 31, button: -1, buttons: 1, clientX: 565, clientY: 500 });
+  canvas.fire("pointerup", { pointerId: 31, button: 0, buttons: 0, clientX: 565, clientY: 500 });
+  expect(scene.orbits).toEqual([
+    [10, 0],
+    [5, 0],
+  ]);
+  expect(scene.releases()).toBe(1);
 });

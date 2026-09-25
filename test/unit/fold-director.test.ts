@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { bodyIsOpen, FoldDirector } from "../../src/shared/fold-director";
 import { Spring } from "../../src/shared/spring";
 import type { PostureReading } from "../../src/shared/posture";
@@ -529,4 +529,56 @@ test("setView without a blend shows the whole view it names", () => {
   expect(director.tick(16).angle).toBe(100);
   director.setView("work");
   expect(director.tick(16).angle).toBe(180);
+});
+
+test("a lead that runs out with no frames at all asks the stream for frames once, then holds while none come", () => {
+  const requestFrames = vi.fn();
+  const director = new FoldDirector({ requestFrames });
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  director.posture(reading({ posture: "closed" }));
+  ticks(director, 90); // 1440 ms: not yet
+  expect(requestFrames).not.toHaveBeenCalled();
+  const held = ticks(director, 160);
+  expect(requestFrames).toHaveBeenCalledOnce();
+  expect(held.angle).toBe(0);
+});
+
+test("frames that answer the probe let the stream have its word", () => {
+  const requestFrames = vi.fn();
+  const director = new FoldDirector({ requestFrames });
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  director.posture(reading({ posture: "closed" }));
+  ticks(director, 100);
+  expect(requestFrames).toHaveBeenCalledOnce();
+  const out = ticksWithFrames(director, 60);
+  expect(out.angle).toBe(180);
+  expect(requestFrames).toHaveBeenCalledOnce();
+});
+
+test("each new lead may probe once; a class change ends a lead without a probe", () => {
+  const requestFrames = vi.fn();
+  const director = new FoldDirector({ requestFrames });
+  director.streamClass(COVER);
+  director.firstFrame();
+  ticksWithFrames(director, 70);
+
+  director.posture(reading({ posture: "open" }));
+  ticks(director, 20);
+  director.streamClass(INNER);
+  director.firstFrame();
+  ticks(director, 150);
+  expect(requestFrames).not.toHaveBeenCalled();
+
+  director.posture(reading({ posture: "closed" }));
+  ticks(director, 150);
+  director.posture(reading({ posture: "open" }));
+  director.posture(reading({ posture: "closed" }));
+  ticks(director, 150);
+  expect(requestFrames).toHaveBeenCalledTimes(2);
 });

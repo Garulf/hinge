@@ -84,9 +84,10 @@ function registerWindowIpc(win: BrowserWindow): void {
     if (dragSize) dragSize = sizeOf(win.getBounds());
   });
 
-  ipcMain.handle("hinge:work-area-height", (event) => {
-    if (event.sender !== win.webContents) return 0;
-    return screen.getDisplayMatching(win.getBounds()).workArea.height;
+  ipcMain.handle("hinge:work-area", (event) => {
+    if (event.sender !== win.webContents) return { width: 0, height: 0 };
+    const { width, height } = screen.getDisplayMatching(win.getBounds()).workArea;
+    return { width, height };
   });
 
   // setPosition() at a fractional scale factor recomputes the size from

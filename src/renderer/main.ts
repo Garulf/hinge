@@ -1,8 +1,9 @@
 import { DecodeRecovery } from "../shared/decode-recovery";
 import { bodyIsOpen, FoldDirector, type DirectorOutput } from "../shared/fold-director";
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
-import { bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY, lerpSize, showcaseSizePx } from "../shared/layout";
+import { bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY, showcaseSizePx } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
+import { viewWindowSize } from "../shared/view-window";
 import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
 import { AudioPipe } from "./audio-pipe";
@@ -37,12 +38,16 @@ async function loadModel(): Promise<ArrayBuffer> {
   return response.arrayBuffer();
 }
 
-const director = new FoldDirector({ view: "work" });
+const director = new FoldDirector({
+  view: "work",
+  requestFrames: () => client?.send({ kind: "control", intent: { type: "reset-video" } }),
+});
 const windowSizer = new WindowSizer((size, rotation) => window.hinge.setWindowSize(size.w, size.h, rotation), {
   nudgeLostResizes: window.hinge.platform === "linux",
 });
 const decodeRecovery = new DecodeRecovery();
 let pxPerMm: number | null = null;
+let workArea = { w: 0, h: 0 };
 let cls: ScreenClass | null = null;
 let videoSize: { w: number; h: number } | null = null;
 let client: PortClient | null = null;
@@ -69,13 +74,14 @@ function logPhase(out: DirectorOutput, rotation: Rotation): void {
 
 function sizeWindow(out: DirectorOutput, rotation: Rotation, view: ViewState): void {
   if (pxPerMm === null) return;
-  const work = bodySizePx(FOLD7_BODY, bodyIsOpen(out), rotation, pxPerMm);
+  const dpr = window.devicePixelRatio;
+  const work = deviceAlignedSize(bodySizePx(FOLD7_BODY, bodyIsOpen(out), rotation, pxPerMm), dpr);
   if (view.t === 0 && !view.active) {
-    windowSizer.update(deviceAlignedSize(work, window.devicePixelRatio), rotation, out.settled);
+    windowSizer.update(work, rotation, out.settled);
     return;
   }
-  const size = lerpSize(work, showcaseSizePx(FOLD7_BODY, rotation, pxPerMm), view.t);
-  windowSizer.follow(deviceAlignedSize(size, window.devicePixelRatio), rotation);
+  const showcase = showcaseSizePx(FOLD7_BODY, rotation, pxPerMm, workArea, dpr);
+  windowSizer.follow(viewWindowSize(work, showcase, view.t, dpr), rotation);
 }
 
 // Checked on a timer rather than per animation frame, which a busy GPU can
@@ -89,7 +95,8 @@ function onTick(out: DirectorOutput, rotation: Rotation, view: ViewState): void 
 
 const scene = new PhoneScene(document.body, director, { loadModel, onTick });
 
-void window.hinge.workAreaHeight().then((height) => {
+void window.hinge.workArea().then(({ width, height }) => {
+  workArea = { w: width, h: height };
   pxPerMm = defaultPxPerMm(FOLD7_BODY, height);
   scene.setPxPerMm(pxPerMm);
 });

@@ -66,3 +66,14 @@ test("a full round trip returns exactly to t 0, inactive", () => {
   const back = run(vt, 616, 16);
   expect(back).toEqual({ t: 0, active: false });
 });
+
+test("setTarget eases to a view, and instant lands on it at once", () => {
+  const vt = new ViewTransition();
+  vt.setTarget("showcase");
+  expect(vt.tick(300)).toMatchObject({ active: true });
+  vt.setTarget("work", { instant: true });
+  expect(vt.target).toBe("work");
+  expect(vt.tick(0)).toEqual({ t: 0, active: false });
+  vt.setTarget("showcase", { instant: true });
+  expect(vt.tick(16)).toEqual({ t: 1, active: false });
+});

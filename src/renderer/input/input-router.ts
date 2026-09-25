@@ -12,6 +12,11 @@ function clamp(n: number, min: number, max: number): number {
   return Math.min(Math.max(n, min), max);
 }
 
+/** Keys typed into the window's own panels (the pairing form, say) are not the phone's. */
+function typedIntoChrome(target: EventTarget | null): boolean {
+  return Boolean((target as { closest?: (selector: string) => unknown } | null)?.closest?.("[data-chrome]"));
+}
+
 export interface InputRouterOptions {
   onAction?: (action: HingeAction) => void;
   /** The configured shortcut modifiers, read on every key event so a settings change applies at once. */
@@ -147,6 +152,7 @@ export class InputRouter {
       shiftKey: e.shiftKey,
     };
     this.#modifiers.handle(like);
+    if (typedIntoChrome(e.target)) return;
     const shortcut = this.#shortcuts.handle(like, this.#paused());
     if (shortcut) {
       if (shortcut.claimed) e.preventDefault();

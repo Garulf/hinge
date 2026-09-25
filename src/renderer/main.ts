@@ -1,7 +1,9 @@
+import colourwayFile from "../../model/colorways.json";
+import { colourwayFor, colourwaySwatches, type ColourwayFile } from "../shared/colourways";
 import { DecodeRecovery } from "../shared/decode-recovery";
 import { bodyIsOpen, FoldDirector, type DirectorOutput } from "../shared/fold-director";
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
-import { bodySizePx, defaultPxPerMm, deviceAlignedSize, FOLD7_BODY } from "../shared/layout";
+import { bodySizePx, deviceAlignedSize, FOLD7_BODY, unionSize } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
 import type { Settings } from "../shared/settings";
 import { normaliseModifiers, type HingeAction } from "../shared/shortcuts";
@@ -9,10 +11,15 @@ import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
 import { AudioPipe } from "./audio-pipe";
 import { createWorkletPlayer } from "./audio/worklet-player";
+import { Chrome } from "./chrome/chrome";
+import { DeviceCommands } from "./chrome/device-commands";
+import { bodyRectIn, type Box } from "./chrome/hit-zone";
+import { transferToast } from "./chrome/toast-text";
 import { InputRouter } from "./input/input-router";
 import { MediaGate } from "./media-gate";
 import { PausableTarget } from "./pausable-target";
 import { PortClient, receivePort } from "./port-client";
+import { ScaleController } from "./scale-controller";
 import { PhoneScene } from "./scene/phone-scene";
 import { VideoPipe } from "./video-pipe";
 
@@ -45,10 +52,14 @@ const windowSizer = new WindowSizer((size, rotation) => window.hinge.setWindowSi
   nudgeLostResizes: window.hinge.platform === "linux",
 });
 const decodeRecovery = new DecodeRecovery();
-let pxPerMm: number | null = null;
+const colourways = colourwayFile as ColourwayFile;
 let cls: ScreenClass | null = null;
 let videoSize: { w: number; h: number } | null = null;
 let client: PortClient | null = null;
+let settings: Settings | null = null;
+let currentSerial: string | null = null;
+let fullscreen = false;
+let sessionState: SessionStatus["state"] = "no-device";
 
 interface PosePhase {
   atMs: number;
@@ -70,10 +81,36 @@ function logPhase(out: DirectorOutput, rotation: Rotation): void {
   if (phases.length > MAX_PHASES) phases.shift();
 }
 
+/**
+ * In fullscreen the window is the whole screen, so the canvas (still anchored
+ * to the fixed half's edge) is placed within a stage the size of the body,
+ * centred on the screen; a transformed stage is what position: fixed inside
+ * it resolves against.
+ */
+const stage = document.createElement("div");
+document.body.append(stage);
+let stageBox = "";
+
+function placeStage(box: Box | null): void {
+  const next = box ? `left: ${box.x}px; top: ${box.y}px; width: ${box.w}px; height: ${box.h}px;` : "inset: 0;";
+  if (next === stageBox) return;
+  stageBox = next;
+  stage.style.cssText = `position: fixed; transform: translateZ(0); ${next}`;
+}
+placeStage(null);
+
 function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
+  if (fullscreen) scale.fitFullscreen(rotation, { w: innerWidth, h: innerHeight });
+  const pxPerMm = scale.pxPerMm;
   if (pxPerMm === null) return;
   const size = bodySizePx(FOLD7_BODY, bodyIsOpen(out), rotation, pxPerMm);
-  windowSizer.update(deviceAlignedSize(size, window.devicePixelRatio), rotation, out.settled);
+  const viewport = { w: innerWidth, h: innerHeight };
+  const body = bodyRectIn(viewport, size, rotation, fullscreen);
+  placeStage(fullscreen ? body : null);
+  chrome.update({ window: viewport, body, pxPerMm }, performance.now());
+  if (fullscreen) return;
+  const panel = chrome.neededWindow();
+  windowSizer.update(deviceAlignedSize(panel ? unionSize(size, panel) : size, window.devicePixelRatio), rotation, out.settled);
 }
 
 // Checked on a timer rather than per animation frame, which a busy GPU can
@@ -85,12 +122,50 @@ function onTick(out: DirectorOutput, rotation: Rotation): void {
   sizeWindow(out, rotation);
 }
 
-const scene = new PhoneScene(document.body, director, { loadModel, onTick });
+const scene = new PhoneScene(stage, director, { loadModel, onTick });
 
-void window.hinge.workAreaHeight().then((height) => {
-  pxPerMm = defaultPxPerMm(FOLD7_BODY, height);
-  scene.setPxPerMm(pxPerMm);
+const scale = new ScaleController({
+  apply: (pxPerMm) => scene.setPxPerMm(pxPerMm),
+  persist: (pxPerMm) => {
+    if (currentSerial) void window.hinge.saveDeviceSettings(currentSerial, { pxPerMm });
+  },
 });
+void window.hinge.workAreaHeight().then((height) => scale.setWorkArea(height));
+
+const commands = new DeviceCommands((msg) => client?.send(msg));
+const chrome = new Chrome(document.body, {
+  commands,
+  swatches: colourwaySwatches(colourways),
+  save: (patch) => void window.hinge.saveSettings(patch),
+  settingsPath: () => window.hinge.settingsPath(),
+  onAction: (action) => onAction(action),
+  currentSerial: () => currentSerial,
+});
+
+function applySettings(next: Settings): void {
+  settings = next;
+  scene.setColourway(colourwayFor(colourways, next.colourway).materials);
+  chrome.settingsChanged(next);
+  if (currentSerial) scale.useSaved(next.devices[currentSerial]?.pxPerMm);
+}
+void window.hinge.settings().then((loaded) => {
+  if (!settings) applySettings(loaded);
+});
+window.hinge.onSettings(applySettings);
+
+window.hinge.onFullscreen((on) => {
+  fullscreen = on;
+  document.body.style.background = on ? "#000" : "";
+  if (!on) scale.leaveFullscreen();
+});
+
+function onStatus(status: SessionStatus): void {
+  sessionState = status.state;
+  scene.setStatus(statusText(status));
+  if (status.state !== "streaming") return;
+  currentSerial = status.serial;
+  scale.useSaved(settings?.devices[status.serial]?.pxPerMm);
+}
 
 function onSize(w: number, h: number): void {
   videoSize = { w, h };
@@ -111,15 +186,47 @@ function onDecodeError(message: string): void {
 
 const display = new PausableTarget(scene);
 const pipe = new VideoPipe(display, onSize, { onError: onDecodeError, onFirstFrame });
-// audioPipe has no UI surface to report failures through; logged only.
-const audioPipe = new AudioPipe({ createPlayer: createWorkletPlayer, onError: (message) => console.error("audio:", message) });
+const audioPipe = new AudioPipe({
+  createPlayer: createWorkletPlayer,
+  onError: (message) => {
+    console.error("audio:", message);
+    chrome.toast({ id: "audio", text: `Phone audio stopped: ${message}`, tone: "error" });
+  },
+});
 
-const canvas = document.body.querySelector("canvas");
+const canvas = stage.querySelector("canvas");
 if (!canvas) throw new Error("PhoneScene did not create a canvas");
-let settings: Settings | null = null;
 let view: "work" | "showcase" = "work";
-void window.hinge.settings().then((loaded) => (settings ??= loaded));
-window.hinge.onSettings((changed) => (settings = changed));
+let fpsTimer: ReturnType<typeof setInterval> | null = null;
+
+/** scrcpy prints its FPS counter to stdout; hinge draws it on the bottom bezel. */
+function toggleFps(): void {
+  if (fpsTimer !== null) {
+    clearInterval(fpsTimer);
+    fpsTimer = null;
+    chrome.setFps(null);
+    return;
+  }
+  let lastFrames = pipe.stats().framesDecoded;
+  let lastAt = performance.now();
+  chrome.setFps("-- fps");
+  fpsTimer = setInterval(() => {
+    const frames = pipe.stats().framesDecoded;
+    const now = performance.now();
+    chrome.setFps(`${Math.max(0, Math.round(((frames - lastFrames) * 1000) / (now - lastAt)))} fps`);
+    lastFrames = frames;
+    lastAt = now;
+  }, 1000);
+}
+
+function scaleBy(direction: 1 | -1): void {
+  if (scale.step(direction)) chrome.toast({ id: "scale", text: `Scale ${scale.percent()}%` });
+}
+
+function pixelPerfect(): void {
+  const lit = scene.output()?.lit ?? null;
+  if (scale.pixelPerfect(videoSize, lit ? scene.screenSizeMm(lit) : null, window.devicePixelRatio)) chrome.toast({ id: "scale", text: "Scale 1:1" });
+}
 
 function onAction(action: HingeAction): void {
   switch (action) {
@@ -132,9 +239,30 @@ function onAction(action: HingeAction): void {
       break;
     case "pause":
       display.paused = true;
+      chrome.toast({ id: "pause", text: "Display paused. MOD+Shift+z resumes.", sticky: true });
       break;
     case "unpause":
+      if (!display.paused) break;
       display.paused = false;
+      chrome.toast({ id: "pause", text: "Display resumed" });
+      break;
+    case "fullscreen":
+      window.hinge.toggleFullscreen();
+      break;
+    case "pixel-perfect":
+      pixelPerfect();
+      break;
+    case "fit":
+      chrome.closePanel();
+      break;
+    case "toggle-fps":
+      toggleFps();
+      break;
+    case "scale-up":
+      scaleBy(1);
+      break;
+    case "scale-down":
+      scaleBy(-1);
       break;
   }
 }
@@ -145,7 +273,7 @@ new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind:
   paused: () => display.paused,
 });
 
-// Deliberately minimal: only resolves dropped files to real paths and hands them to main.
+// Resolves dropped files to real paths and hands them to main, which picks install or push.
 window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("drop", (e) => {
   e.preventDefault();
@@ -155,6 +283,10 @@ window.addEventListener("drop", (e) => {
     .map((file) => window.hinge.getPathForFile(file))
     .filter((path) => path !== "");
   if (paths.length === 0) return;
+  if (sessionState !== "streaming" && sessionState !== "replay") {
+    chrome.toast({ text: "Connect the phone to send it files", tone: "error" });
+    return;
+  }
   client?.send({ kind: "drop-files", paths });
 });
 
@@ -183,6 +315,7 @@ function onStreamMessage(msg: StreamMessage): void {
       break;
     case "audio-end":
       audioPipe.end();
+      if (msg.reason === "unsupported") chrome.toast({ id: "audio", text: "This phone cannot share its audio; mirroring without sound" });
       break;
   }
 }
@@ -192,8 +325,10 @@ const streamGate = new MediaGate(onStreamMessage, scene.ready, SCENE_READY_CAP_M
 void receivePort().then((port) => {
   client = new PortClient(port);
   client.on((msg) => {
-    if (msg.kind === "status") scene.setStatus(statusText(msg.status));
-    else if (msg.kind !== "transfer-progress" && msg.kind !== "device-command-result") streamGate.push(msg);
+    if (msg.kind === "status") onStatus(msg.status);
+    else if (msg.kind === "transfer-progress") chrome.toast(transferToast(msg.progress));
+    else if (msg.kind === "device-command-result") commands.result(msg.id, msg.result);
+    else streamGate.push(msg);
   });
   client.send({ kind: "ready" });
 });
@@ -211,7 +346,10 @@ void receivePort().then((port) => {
       badge: out?.badge ?? null,
       settled: out?.settled ?? false,
       brightness: { cover: out?.coverBrightness ?? 0, inner: out?.innerBrightness ?? 0 },
+      pxPerMm: scale.pxPerMm,
+      paused: display.paused,
     };
   },
   phases: () => [...phases],
+  drop: (paths: string[]) => client?.send({ kind: "drop-files", paths }),
 };

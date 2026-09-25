@@ -371,3 +371,14 @@ test("MOD+z releases a touch in progress before pausing", () => {
   expect(sent.map((i) => i.type === "touch" && i.action)).toEqual(["down", "cancel"]);
   expect(onAction).toHaveBeenCalledWith("pause");
 });
+
+test("keys typed into the window's own panels never reach the phone", () => {
+  const onAction = vi.fn();
+  const { sent } = setup({ onAction });
+  const target = { closest: (selector: string) => (selector === "[data-chrome]" ? {} : null) };
+  fireKey("keydown", "Digit1", { key: "1", target });
+  fireKey("keydown", "AltLeft", { altKey: true, target });
+  fireKey("keydown", "KeyQ", { altKey: true, target });
+  expect(sent).toEqual([]);
+  expect(onAction).not.toHaveBeenCalled();
+});

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import type { MaterialLook } from "../../shared/colourways";
 import type { ScreenClass, ScreenKind } from "../../shared/fold7";
 import type { DirectorOutput, FoldDirector } from "../../shared/fold-director";
 import type { Rotation } from "../../shared/screen-uv";
@@ -167,6 +168,7 @@ export class PhoneScene implements FrameTarget {
   #layoutDirty = true;
   #renderedSettled = false;
   #fatalStatus: string | null = null;
+  #colourway: Record<string, MaterialLook> | null = null;
   readonly #software: boolean;
 
   constructor(canvasParent: HTMLElement, director: FoldDirector, options: PhoneSceneOptions) {
@@ -257,6 +259,18 @@ export class PhoneScene implements FrameTarget {
     this.#layoutDirty = true;
   }
 
+  /** Applied now if the model is loaded, otherwise as soon as it is. */
+  setColourway(looks: Record<string, MaterialLook>): void {
+    this.#colourway = looks;
+    this.#model?.applyColourway(looks);
+    this.#frameDirty = true;
+  }
+
+  /** The active area of a screen in millimetres, or null before the model loads. */
+  screenSizeMm(screen: ScreenKind): { w: number; h: number } | null {
+    return this.#model?.screenSizeMm(screen) ?? null;
+  }
+
   camera(): THREE.OrthographicCamera {
     return this.#camera;
   }
@@ -280,6 +294,7 @@ export class PhoneScene implements FrameTarget {
 
   async #attach(model: FoldModel): Promise<void> {
     this.#model = model;
+    if (this.#colourway) model.applyColourway(this.#colourway);
     this.#materials = { cover: new ScreenMaterial(model.cover.extras), inner: new ScreenMaterial(model.inner.extras) };
     model.cover.mesh.material = this.#materials.cover;
     model.inner.mesh.material = this.#materials.inner;

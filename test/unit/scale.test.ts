@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { FOLD7_BODY } from "../../src/shared/layout";
-import { fitPxPerMm, MAX_SCALE, MIN_SCALE, pixelPerfectPxPerMm, stepScale, WheelSteps } from "../../src/shared/scale";
+import { fitPxPerMm, MAX_SCALE, MIN_SCALE, nextPxPerMm, pixelPerfectPxPerMm, stepScale, WheelSteps } from "../../src/shared/scale";
 
 test("stepScale moves in 10 percent steps from the default", () => {
   expect(stepScale(1, 1)).toBeCloseTo(1.1);
@@ -51,4 +51,14 @@ test("pixelPerfectPxPerMm maps one video pixel onto one device pixel", () => {
   expect(pxPerMm * 153.8 * 1.5).toBeCloseTo(2520);
   const rotated = pixelPerfectPxPerMm({ w: 2520, h: 1080 }, { w: 65.9, h: 153.8 }, 1);
   expect(rotated * 153.8).toBeCloseTo(2520);
+});
+
+test("nextPxPerMm steps the default size and stops where the body fills the work area", () => {
+  expect(nextPxPerMm(5, 5, 1, 10)).toBeCloseTo(5.5);
+  expect(nextPxPerMm(5, 5, -1, 10)).toBeCloseTo(4.5);
+  expect(nextPxPerMm(5.5, 5, 1, 5.8)).toBeCloseTo(5.8);
+  expect(nextPxPerMm(5.8, 5, 1, 5.8)).toBeCloseTo(5.8);
+  expect(nextPxPerMm(9, 5, 1, 5.8)).toBe(9);
+  expect(nextPxPerMm(9, 5, -1, 5.8)).toBeCloseTo(5.8);
+  expect(nextPxPerMm(5 * MIN_SCALE, 5, -1, 10)).toBeCloseTo(5 * MIN_SCALE);
 });

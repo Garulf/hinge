@@ -94,7 +94,7 @@ function registerWindowIpc(win: BrowserWindow): void {
   // rounded device pixels on every call, which can grow the window a pixel
   // at a time during a drag; setBounds() with a size read once does not.
   ipcMain.on("hinge:begin-drag", (event) => {
-    if (event.sender !== win.webContents) return;
+    if (event.sender !== win.webContents || win.isFullScreen()) return;
     stopDrag();
     const cursor = screen.getCursorScreenPoint();
     const bounds = win.getBounds();

@@ -107,7 +107,10 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
       return;
     }
     if (msg.kind === "device-command") {
-      if (!source.handleDeviceCommand) return;
+      if (!source.handleDeviceCommand) {
+        post({ kind: "device-command-result", id: msg.id, result: errorResult(msg.command.type, "no phone connection in this mode") });
+        return;
+      }
       source
         .handleDeviceCommand(msg.command)
         .then((result) => post({ kind: "device-command-result", id: msg.id, result }))

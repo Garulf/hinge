@@ -44,3 +44,13 @@ export function pixelPerfectPxPerMm(video: { w: number; h: number }, screenMm: {
   const screenLong = Math.max(screenMm.w, screenMm.h);
   return videoLong / devicePixelRatio / screenLong;
 }
+
+/**
+ * MOD+wheel's next scale in px per mm: a 10 percent step of the default,
+ * capped so the body still fits the work area, and never shrinking on a
+ * step up (after a 1:1 that already overshot the cap, say).
+ */
+export function nextPxPerMm(current: number, base: number, direction: 1 | -1, maxPxPerMm: number): number {
+  const stepped = Math.min(base * stepScale(current / base, direction), Math.max(maxPxPerMm, base * MIN_SCALE));
+  return direction > 0 ? Math.max(stepped, current) : Math.min(stepped, current);
+}

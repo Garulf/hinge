@@ -398,7 +398,7 @@ test("disabled or errored audio metadata posts one audio-end('unsupported') and 
   await session.stop();
 });
 
-test("an audio stream that errors mid-stream posts audio-end('unsupported') instead of hanging or crashing", async () => {
+test("an audio stream that errors before its first packet posts audio-end('unsupported') instead of hanging or crashing", async () => {
   const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
     start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
   });
@@ -422,6 +422,61 @@ test("an audio stream that errors mid-stream posts audio-end('unsupported') inst
   expect(audioEnds).toEqual(["unsupported"]);
   expect(logs.some((l) => l.includes("audio socket closed"))).toBe(true);
 
+  await session.stop();
+});
+
+function audioClient(videoStream: ReadableStream<{ type: "data"; data: Uint8Array }>) {
+  let audioController!: ReadableStreamDefaultController<{ type: "data"; data: Uint8Array }>;
+  const audioStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({ start: (c) => { audioController = c; } });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () =>
+      oneShotClient(() => videoStream, {
+        audioStream: Promise.resolve({ type: "success", codec: { webCodecId: "opus" }, stream: audioStream }),
+      }) as never,
+  };
+  return { deps, audio: () => audioController };
+}
+
+test("an audio stream that fails after its first packet while the video goes on ends with 'error', not 'unsupported'", async () => {
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  const { deps, audio } = audioClient(videoStream);
+  const session = new ScrcpySession(baseOpts(deps));
+  const { sink, audioEnds } = fakeSink();
+  await session.start(sink);
+  await flush();
+  audio().enqueue({ type: "data", data: new Uint8Array([9]) });
+  await flush();
+  audio().error(new Error("audio socket reset"));
+  await flush();
+
+  expect(audioEnds).toEqual(["error"]);
+  await session.stop();
+});
+
+test("an audio read error after the video stream has ended ends audio with no reason, so no toast follows a disconnect", async () => {
+  let videoController!: ReadableStreamDefaultController<{ type: "data"; data: Uint8Array }>;
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => {
+      videoController = c;
+      c.enqueue({ type: "data", data: new Uint8Array([1]) });
+    },
+  });
+  const { deps, audio } = audioClient(videoStream);
+  const session = new ScrcpySession(baseOpts(deps));
+  const { sink, audioEnds, endCalls } = fakeSink();
+  await session.start(sink);
+  await flush();
+  videoController.close();
+  await flush();
+  expect(endCalls()).toBe(1);
+  audio().error(new Error("connection closed"));
+  await flush();
+
+  expect(audioEnds).toEqual([undefined]);
   await session.stop();
 });
 

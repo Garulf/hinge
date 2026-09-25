@@ -379,6 +379,7 @@ function onStreamMessage(msg: StreamMessage): void {
     case "audio-end":
       audioPipe.end();
       if (msg.reason === "unsupported") chrome.toast({ id: "audio", text: "This phone cannot share its audio; mirroring without sound" });
+      else if (msg.reason === "error") chrome.toast({ id: "audio", text: "Phone audio stopped", tone: "error" });
       break;
   }
 }

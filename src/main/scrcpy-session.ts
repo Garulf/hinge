@@ -72,6 +72,7 @@ const defaultDeps: ScrcpyServerDeps = {
 export class ScrcpySession implements MediaSource {
   #client: Client | undefined;
   #stopped = false;
+  #videoEnded = false;
   #endedFired = false;
   #resolveEnded!: () => void;
   readonly ended: Promise<void>;
@@ -196,7 +197,10 @@ export class ScrcpySession implements MediaSource {
    * Disabled/errored metadata and a stream that fails before producing
    * anything both surface as one "unsupported" audio-end: whichever it is,
    * the outcome for the session is the same (audio off, one toast), and
-   * there is no separate device message to tell them apart.
+   * there is no separate device message to tell them apart. A stream that
+   * fails later is "error" while the video goes on, and ends with no
+   * reason once the video has ended too (the phone went away, which the
+   * status already says).
    */
   async #startAudio(client: Client, sink: MediaSink): Promise<void> {
     if (!this.opts.settings.audio) {
@@ -230,18 +234,21 @@ export class ScrcpySession implements MediaSource {
 
     sink.audioStart({ codec: metadata.codec.webCodecId, sampleRate: 48000, channels: 2 });
     const reader = metadata.stream.getReader();
+    let packets = 0;
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (this.#stopped) return;
         if (done) break;
+        packets++;
         sink.audioPacket?.(toWireAudio(value));
       }
       if (!this.#stopped) sink.audioEnd?.();
     } catch (e) {
       if (this.#stopped) return;
       this.opts.log?.(`audio stream error: ${String(e)}`);
-      sink.audioEnd?.("unsupported");
+      if (this.#videoEnded) sink.audioEnd?.();
+      else sink.audioEnd?.(packets === 0 ? "unsupported" : "error");
     }
   }
 
@@ -359,6 +366,7 @@ export class ScrcpySession implements MediaSource {
     } catch (e) {
       if (!this.#stopped) this.opts.log?.(`video stream error: ${String(e)}`);
     } finally {
+      this.#videoEnded = true;
       if (!this.#stopped) {
         sink.videoEnd();
         this.#markEnded();

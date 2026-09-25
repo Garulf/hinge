@@ -57,8 +57,8 @@ export interface BodyDims {
   heightMm: number;
 }
 
-/** Open 143.7 mm (incl. volume rocker), closed 71.6 mm, height 158.4 mm; measured from fold7.glb. */
-export const FOLD7_BODY: BodyDims = { openWidthMm: 143.7, closedWidthMm: 71.6, heightMm: 158.4 };
+/** Open 143.7 mm and closed 72.1 mm (both incl. the volume rocker), height 158.4 mm; measured from fold7.glb. */
+export const FOLD7_BODY: BodyDims = { openWidthMm: 143.7, closedWidthMm: 72.1, heightMm: 158.4 };
 
 /** CSS px per mm that fills 85 percent of the display work area height with the body's (fold-invariant) height. */
 export function defaultPxPerMm(body: BodyDims, workAreaHeight: number): number {

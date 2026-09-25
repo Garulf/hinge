@@ -27,7 +27,7 @@ test("window sizes are whole pixels", () => {
 });
 
 test("FOLD7_BODY matches the measured dimensions", () => {
-  expect(FOLD7_BODY).toEqual({ openWidthMm: 143.7, closedWidthMm: 71.6, heightMm: 158.4 });
+  expect(FOLD7_BODY).toEqual({ openWidthMm: 143.7, closedWidthMm: 72.1, heightMm: 158.4 });
 });
 
 test("defaultPxPerMm fills 85 percent of the work area height", () => {

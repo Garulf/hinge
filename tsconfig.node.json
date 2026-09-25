@@ -4,5 +4,5 @@
     "strict": true, "noEmit": false, "emitDeclarationOnly": true, "outDir": "out/tsc-node",
     "types": ["node"], "lib": ["ES2023", "DOM"], "skipLibCheck": true
   },
-  "include": ["src/main", "src/preload", "src/shared", "test", "electron.vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
+  "include": ["src/main", "src/preload", "src/renderer", "src/shared", "test", "electron.vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
 }

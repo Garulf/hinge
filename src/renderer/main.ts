@@ -1,11 +1,51 @@
-import * as THREE from "three";
+import { classifyScreen, type ScreenClass } from "../shared/fold7";
+import { defaultScale, workLayout } from "../shared/layout";
+import type { SessionStatus } from "../shared/wire";
+import { PortClient } from "./port-client";
+import { PhoneScene } from "./scene/phone-scene";
+import { VideoPipe } from "./video-pipe";
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
-const scene = new THREE.Scene();
-const camera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0.1, 10);
-camera.position.z = 5;
-scene.add(new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), new THREE.MeshBasicMaterial({ color: 0x202124 })));
-renderer.setAnimationLoop(() => renderer.render(scene, camera));
+function statusText(status: SessionStatus): string | null {
+  switch (status.state) {
+    case "no-device":
+      return "Connect your phone";
+    case "unauthorized":
+      return "Allow USB debugging on your phone";
+    case "connecting":
+      return "Connecting...";
+    case "error":
+      return status.message;
+    case "streaming":
+    case "replay":
+      return null;
+  }
+}
+
+const scene = new PhoneScene(document.body);
+let cls: ScreenClass | null = null;
+let scale: number | null = null;
+
+async function onSize(w: number, h: number): Promise<void> {
+  cls = classifyScreen(w, h, cls);
+  scale ??= defaultScale(w, h, cls, await window.hinge.workAreaHeight());
+  const layout = workLayout(w, h, cls, scale);
+  scene.applyLayout(layout);
+  window.hinge.setContentSize(layout.window.w, layout.window.h);
+}
+
+const pipe = new VideoPipe(scene, (w, h) => void onSize(w, h));
+
+window.hinge.onPort((port) => {
+  const client = new PortClient(port);
+  client.on((msg) => {
+    if (msg.kind === "video-start") pipe.start(msg.info);
+    else if (msg.kind === "video-packet") pipe.push(msg.packet);
+    else if (msg.kind === "video-end") pipe.end();
+    else if (msg.kind === "status") scene.setStatus(statusText(msg.status));
+  });
+  client.send({ kind: "ready" });
+});
+
+(window as unknown as { __hinge: unknown }).__hinge = {
+  stats: () => ({ ...pipe.stats(), cls, window: { w: innerWidth, h: innerHeight } }),
+};

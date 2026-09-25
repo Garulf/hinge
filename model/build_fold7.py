@@ -79,7 +79,7 @@ FIXED_MATERIALS = {
     "screen_cover": {"baseColor": "#000000", "metallic": 0.0, "roughness": 0.1},
     "screen_inner": {"baseColor": "#000000", "metallic": 0.0, "roughness": 0.1},
     "port": {"baseColor": "#0a0a0b", "metallic": 0.0, "roughness": 0.6},
-    "lens_ring": {"baseColor": "#3a3a3d", "metallic": 1.0, "roughness": 0.25},
+    "lens_ring": {"baseColor": "#505054", "metallic": 1.0, "roughness": 0.35},
     "flash": {"baseColor": "#efe6cc", "metallic": 0.0, "roughness": 0.35},
 }
 
@@ -233,7 +233,7 @@ def frame_profiles(side):
     if side > 0:
         back_rim, back_inner = e.frame_back_rim_width_mm, e.back_glass_thickness_mm
     else:
-        back_rim, back_inner = e.frame_front_rim_width_mm, e.cover_screen_recess_mm + 0.17
+        back_rim, back_inner = e.cover_frame_rim_width_mm, e.cover_screen_recess_mm + 0.17
     normal = frame_profile(back_rim, back_inner, top, e.frame_front_rim_width_mm, lip,
                            e.frame_edge_round_mm, e.frame_edge_round_mm)
     hinge = frame_profile(back_rim, back_inner, e.hinge_wall_top_mm, e.frame_front_rim_width_mm,
@@ -409,7 +409,7 @@ def build_hinge_fill(phone):
 
 def build_cover_screen(phone):
     s, e = P.spec, P.est
-    inset = e.frame_front_rim_width_mm
+    inset = e.cover_frame_rim_width_mm
     u0, u1 = half_bounds(-1)
     half_h = P.half_height_mm - inset
     centre_u = -P.half_width_mm / 2
@@ -461,17 +461,16 @@ def lens_profile(outer_radius, base, top):
     ]
     radial += [(r, h, "ring") for r, h, _ in arc(outer_radius - rounding, top - rounding, rounding, 0, 90, 4, "ring")[1:]]
     radial += [
-        (outer_radius - 0.9, top, "ring"),
-        (outer_radius - 1.15, top - 0.08, "ring"),
-        (outer_radius - 1.3, top - 0.2, "ring"),
-        (outer_radius - 1.3, top - 0.28, "bezel"),
-        (outer_radius - 1.5, top - 0.3, "bezel"),
-        (outer_radius - 2.8, top - 0.3, "bezel"),
-        (outer_radius - 3.0, top - 0.36, "glass"),
-        (3.2, top - 0.36, "glass"),
-        (2.2, top - 0.33, "glass"),
-        (1.1, top - 0.31, "glass"),
-        (0.0, top - 0.3, "glass"),
+        (outer_radius - 0.55, top, "ring"),
+        (outer_radius - 0.75, top - 0.12, "ring"),
+        (outer_radius - 0.8, top - 0.25, "bezel"),
+        (outer_radius - 1.0, top - 0.3, "bezel"),
+        (outer_radius - 2.6, top - 0.32, "bezel"),
+        (outer_radius - 2.8, top - 0.4, "glass"),
+        (3.2, top - 0.4, "glass"),
+        (2.2, top - 0.37, "glass"),
+        (1.1, top - 0.35, "glass"),
+        (0.0, top - 0.34, "glass"),
     ]
     return [(outer_radius - r, h, kind) for r, h, kind in radial]
 
@@ -480,7 +479,7 @@ def build_camera_island(phone):
     e = P.est
     cu, cv = camera_island_centre()
     slots = Slots(phone.materials, "camera_island", "lens_ring", "lens_glass")
-    kind_material = {"island": "camera_island", "ring": "lens_ring", "bezel": "lens_ring", "glass": "lens_glass"}
+    kind_material = {"island": "camera_island", "ring": "lens_ring", "bezel": "lens_glass", "glass": "lens_glass"}
     bm = bmesh.new()
     rounding = e.camera_plate_edge_round_mm
     plate_top = e.camera_plate_height_mm

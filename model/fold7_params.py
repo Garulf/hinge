@@ -32,8 +32,9 @@ class SpecDimensions:
 @dataclass(frozen=True)
 class ImageEstimates:
     outer_corner_radius_mm: float = 3.0
-    frame_front_rim_width_mm: float = 0.85
+    frame_front_rim_width_mm: float = 0.9
     frame_back_rim_width_mm: float = 0.7
+    cover_frame_rim_width_mm: float = 1.25
     frame_edge_round_mm: float = 0.3
     hinge_wall_round_mm: float = 0.6
     hinge_wall_top_mm: float = 3.7
@@ -49,15 +50,15 @@ class ImageEstimates:
     cover_punch_hole_center_from_top_mm: float = 6.85
     cover_punch_hole_radius_mm: float = 1.85
 
-    camera_island_width_mm: float = 18.0
-    camera_island_height_mm: float = 53.0
+    camera_island_width_mm: float = 20.5
+    camera_island_height_mm: float = 53.1
     camera_island_from_top_mm: float = 5.4
-    camera_island_center_from_outer_edge_mm: float = 16.5
-    camera_plate_height_mm: float = 0.9
-    camera_plate_edge_round_mm: float = 0.35
-    lens_ring_outer_radius_mm: float = 7.4
-    lens_pitch_mm: float = 16.2
-    lens_ring_height_mm: float = 0.9
+    camera_island_center_from_outer_edge_mm: float = 17.0
+    camera_plate_height_mm: float = 2.8
+    camera_plate_edge_round_mm: float = 0.5
+    lens_ring_outer_radius_mm: float = 7.55
+    lens_pitch_mm: float = 16.1
+    lens_ring_height_mm: float = 2.4
     flash_center_from_outer_edge_mm: float = 33.7
     flash_center_from_top_mm: float = 23.7
     flash_radius_mm: float = 1.3

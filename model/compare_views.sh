@@ -15,6 +15,7 @@ declare -A reference=(
     [back-open]="samsung-galaxy-z-fold7-2.jpg|crop=iw:ih:0:0"
     [front-closed]="samsung-galaxy-z-fold7-2.jpg|crop=294:650:296:0"
     [side-closed]="samsung-galaxy-z-fold7-5.jpg|crop=710:80:0:0"
+    [side-bump]="samsung-galaxy-z-fold7-5.jpg|crop=300:75:0:0"
     [half-open-100]="samsung-galaxy-z-fold7-3.jpg|crop=300:556:0:0"
     [crease-zoom]="samsung-galaxy-z-fold7-1.jpg|crop=153:160:217:0"
 )

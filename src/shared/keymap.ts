@@ -93,6 +93,11 @@ export class KeyTracker {
       }
     }
 
+    const heldKeyCode = this.#held.get(e.code);
+    if (e.type === "keydown" && e.repeat && heldKeyCode !== undefined) {
+      return [{ type: "key", action: "down", keyCode: heldKeyCode, repeat: 1, metaState: metaStateOf(e) }];
+    }
+
     const intents = keyIntents(e);
     if (e.type === "keydown") {
       for (const intent of intents) {
@@ -100,6 +105,10 @@ export class KeyTracker {
       }
     }
     return intents;
+  }
+
+  holds(code: string): boolean {
+    return this.#held.has(code);
   }
 
   /** Sends an up for every key still held, e.g. when the window loses focus. */

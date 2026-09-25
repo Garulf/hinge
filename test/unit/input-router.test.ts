@@ -372,13 +372,43 @@ test("MOD+z releases a touch in progress before pausing", () => {
   expect(onAction).toHaveBeenCalledWith("pause");
 });
 
-test("keys typed into the window's own panels never reach the phone", () => {
+test("keys typed into the window's own form fields never reach the phone", () => {
   const onAction = vi.fn();
   const { sent } = setup({ onAction });
-  const target = { closest: (selector: string) => (selector === "[data-chrome]" ? {} : null) };
+  const target = { closest: (selector: string) => (selector.includes("[data-chrome] input") ? {} : null) };
   fireKey("keydown", "Digit1", { key: "1", target });
   fireKey("keydown", "AltLeft", { altKey: true, target });
   fireKey("keydown", "KeyQ", { altKey: true, target });
   expect(sent).toEqual([]);
   expect(onAction).not.toHaveBeenCalled();
+});
+
+test("a focused menu button does not swallow keys: only form fields in the chrome do", () => {
+  const { sent } = setup();
+  const button = { closest: (selector: string) => (selector === "[data-chrome]" ? {} : null) };
+  fireKey("keydown", "KeyA", { key: "a", target: button });
+  expect(sent).toEqual([{ type: "text", text: "a" }]);
+});
+
+test("an arrow held on the phone before MOD keeps repeating as an arrow and its up still arrives", () => {
+  const { sent } = setup();
+  fireKey("keydown", "ArrowUp", { key: "ArrowUp" });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fireKey("keydown", "ArrowUp", { key: "ArrowUp", altKey: true, repeat: true });
+  fireKey("keyup", "ArrowUp", { key: "ArrowUp", altKey: true });
+  expect(sent.map((i) => i.type === "key" && [i.action, i.keyCode, i.repeat])).toEqual([
+    ["down", 19, 0],
+    ["down", 19, 1],
+    ["up", 19, 0],
+  ]);
+});
+
+test("a press made while paused sends nothing after resuming, not a move or an up without its down", () => {
+  let paused = true;
+  const { canvas, sent } = setupWith({ paused: () => paused });
+  canvas.fire("pointerdown", { pointerId: 15, button: 0, buttons: 1, ...CENTER });
+  paused = false;
+  canvas.fire("pointermove", { pointerId: 15, button: -1, buttons: 1, clientX: 60, clientY: 50 });
+  canvas.fire("pointerup", { pointerId: 15, button: 0, buttons: 0, clientX: 60, clientY: 50 });
+  expect(sent).toEqual([]);
 });

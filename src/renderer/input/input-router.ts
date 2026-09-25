@@ -12,9 +12,11 @@ function clamp(n: number, min: number, max: number): number {
   return Math.min(Math.max(n, min), max);
 }
 
-/** Keys typed into the window's own panels (the pairing form, say) are not the phone's. */
+const CHROME_FIELDS = "[data-chrome] input, [data-chrome] select, [data-chrome] textarea";
+
+/** Keys typed into the window's own form fields (the pairing form, say) are not the phone's. */
 function typedIntoChrome(target: EventTarget | null): boolean {
-  return Boolean((target as { closest?: (selector: string) => unknown } | null)?.closest?.("[data-chrome]"));
+  return Boolean((target as { closest?: (selector: string) => unknown } | null)?.closest?.(CHROME_FIELDS));
 }
 
 export interface InputRouterOptions {
@@ -153,7 +155,10 @@ export class InputRouter {
     };
     this.#modifiers.handle(like);
     if (typedIntoChrome(e.target)) return;
-    const shortcut = this.#shortcuts.handle(like, this.#paused());
+    // A key already held down on the phone stays the phone's until released,
+    // even if MOD is pressed meanwhile: its repeats and its up go to it.
+    const heldOnPhone = this.#keys.holds(like.code) && (like.type === "keyup" || like.repeat);
+    const shortcut = heldOnPhone ? null : this.#shortcuts.handle(like, this.#paused());
     if (shortcut) {
       if (shortcut.claimed) e.preventDefault();
       for (const intent of shortcut.intents) this.#send(intent);
@@ -170,10 +175,10 @@ export class InputRouter {
     for (const intent of intents) this.#send(intent);
   }
 
+  /** While paused the tracker never sees a press, so none can end or move after resuming without its down. */
   #dispatch(e: PointerEventLike): void {
-    const intents = this.#touch.handle(e);
     if (this.#paused()) return;
-    for (const intent of intents) this.#send(intent);
+    for (const intent of this.#touch.handle(e)) this.#send(intent);
   }
 
   /**

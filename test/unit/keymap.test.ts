@@ -76,3 +76,12 @@ test("Ctrl+V pastes the PC clipboard instead of sending the key", () => {
   expect(keyIntents(ev({ type: "keyup", code: "KeyV", key: "v", ctrlKey: true }))).toEqual([]);
   expect(keyIntents(ev({ code: "KeyV", key: "V", ctrlKey: true, shiftKey: true }))[0]).toMatchObject({ type: "key", keyCode: 50 });
 });
+
+test("KeyTracker keeps repeating a held key as itself whatever modifiers are pressed meanwhile", () => {
+  const t = new KeyTracker();
+  t.handle(ev({ code: "ArrowUp", key: "ArrowUp" }));
+  expect(t.holds("ArrowUp")).toBe(true);
+  expect(t.handle(ev({ code: "ArrowUp", key: "ArrowUp", altKey: true, repeat: true }))).toEqual([{ type: "key", action: "down", keyCode: 19, repeat: 1, metaState: 0 }]);
+  t.handle(ev({ type: "keyup", code: "ArrowUp", key: "ArrowUp", altKey: true }));
+  expect(t.holds("ArrowUp")).toBe(false);
+});

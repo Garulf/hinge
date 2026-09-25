@@ -9,9 +9,9 @@ project:
   license: MIT
 vars:
   status: >-
-    Early development, M3 (fold reaction). The app connects to a phone over
+    Early development, M4 (showcase view). The app connects to a phone over
     adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the
     Fold 7 that folds, unfolds and turns with the real phone, with touch and
-    keyboard input routed back to the device. The 3D showcase view, audio and
-    packaged releases are later milestones.
+    keyboard input routed back to the device, in a flat work view or a 3D
+    showcase view. Audio and packaged releases are later milestones.
 badges: []

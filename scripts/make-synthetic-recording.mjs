@@ -21,21 +21,24 @@ const SEGMENTS = [
 
 const STATES_LINE = "@states 0=CLOSED,1=TENT,2=HALF_OPENED,3=OPENED,4=CONCURRENT_INNER_DEFAULT,5=CONCURRENT_OUTER_DEFAULT";
 
-// Posture lines emitted just before each segment starts, matching the M0
-// probe timeline (opening walks 0 -> 1 -> 2 -> 3 within about a second, the
-// stream switching to the inner panel size at HALF_OPENED). offsetMs is
-// relative to the segment's own start time.
+// Posture lines emitted around each segment's first packet, matching the M0
+// probe timeline (opening walks 0 -> 1 -> 2 -> 3 within about a second).
+// offsetMs is relative to the segment's own start time and is negative for
+// every line that must lead the stream restart: on real hardware posture
+// changes before the stream restarts at the new size, so HALF_OPENED (and
+// the matching 1968x2184 size) arrives before the inner stream's first
+// packet, not after it, and the same for the landscape rotation.
 const POSTURE_BEFORE_SEGMENT = [
   [
     { offsetMs: 0, line: STATES_LINE },
     { offsetMs: 0, line: "0 | mRotation=0 | Physical size: 1080x2520" },
   ],
   [
-    { offsetMs: 0, line: "1 | mRotation=0 | Physical size: 1080x2520" },
-    { offsetMs: 150, line: "2 | mRotation=0 | Physical size: 1968x2184" },
-    { offsetMs: 300, line: "3 | mRotation=0 | Physical size: 1968x2184" },
+    { offsetMs: -450, line: "1 | mRotation=0 | Physical size: 1080x2520" },
+    { offsetMs: -300, line: "2 | mRotation=0 | Physical size: 1968x2184" },
+    { offsetMs: -150, line: "3 | mRotation=0 | Physical size: 1968x2184" },
   ],
-  [{ offsetMs: 0, line: "3 | mRotation=1 | Physical size: 1968x2184" }],
+  [{ offsetMs: -150, line: "3 | mRotation=1 | Physical size: 1968x2184" }],
 ];
 
 function drawtextIsAvailable() {
@@ -113,6 +116,12 @@ function buildEvents() {
       t += FRAME_MS;
     }
   }
+
+  // Posture lines can now lead a segment's own events (negative offsets),
+  // so the push order above is no longer chronological; sort so the
+  // replay's own "last array element is the final frame" end-of-stream
+  // check still lines up with the actual last thing that happens in time.
+  events.sort((a, b) => a.t - b.t);
 
   return events;
 }

@@ -25,12 +25,10 @@ class HingePcmProcessor extends AudioWorkletProcessor {
   process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
     const output = outputs[0];
     if (!output || output.length === 0) return true;
-    const frameCount = output[0]!.length;
-    const planes = this.#ring.pull(frameCount);
-    for (let channel = 0; channel < output.length; channel++) {
-      const plane = planes[Math.min(channel, planes.length - 1)];
-      if (plane) output[channel]!.set(plane);
-    }
+    // Writes straight into the browser's own render buffers: no allocation
+    // on this callback, which fires roughly every 128 frames (~2.7ms at
+    // 48kHz, ~375 times/sec).
+    this.#ring.pullInto(output);
     return true;
   }
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
@@ -27,8 +27,8 @@ test("save() persists a patch atomically and it survives a reload", async () => 
   await store.save({ colourway: "Silver", videoCodec: "h265", audio: false });
   expect(store.current).toMatchObject({ colourway: "Silver", videoCodec: "h265", audio: false });
   expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ colourway: "Silver", videoCodec: "h265" });
-  // no leftover temp file from the atomic write
-  expect(existsSync(`${path}.tmp`)).toBe(false);
+  // no leftover temp file of any kind from the atomic write
+  expect(readdirSync(dir).filter((f) => f.includes(".tmp"))).toEqual([]);
 
   const reloaded = await loadSettings(path);
   expect(reloaded.current).toMatchObject({ colourway: "Silver", videoCodec: "h265", audio: false });
@@ -85,6 +85,31 @@ test("the migration hook runs on a settings file from an older version before it
   });
   expect((store.current as unknown as { migrated: boolean }).migrated).toBe(true);
   expect(store.current.version).toBe(2);
+});
+
+test("two overlapping save() calls are serialised: neither is lost to the other reading a stale current", async () => {
+  const store = await loadSettings(path);
+  await Promise.all([store.save({ colourway: "Silver" }), store.save({ videoCodec: "h265" })]);
+
+  expect(store.current).toMatchObject({ colourway: "Silver", videoCodec: "h265" });
+  const onDisk = JSON.parse(readFileSync(path, "utf8"));
+  expect(onDisk).toMatchObject({ colourway: "Silver", videoCodec: "h265" });
+  expect(readdirSync(dir).filter((f) => f.includes(".tmp"))).toEqual([]);
+});
+
+test("overlapping save() and saveDevice() calls interleaved many times all land, none silently dropped", async () => {
+  const store = await loadSettings(path);
+  const writes: Promise<void>[] = [];
+  for (let i = 0; i < 20; i++) {
+    writes.push(store.saveDevice(`S${i}`, { pxPerMm: i }));
+  }
+  await Promise.all(writes);
+
+  for (let i = 0; i < 20; i++) {
+    expect(store.current.devices[`S${i}`]).toEqual({ pxPerMm: i });
+  }
+  const reloaded = await loadSettings(path);
+  expect(Object.keys(reloaded.current.devices)).toHaveLength(20);
 });
 
 test("onChange fires with the new settings after save() and saveDevice(), not before", async () => {

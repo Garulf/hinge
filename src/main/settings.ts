@@ -119,8 +119,11 @@ async function readSettingsFile(
   return mergeWithDefaults(migrated);
 }
 
+let tmpCounter = 0;
+
 async function atomicWrite(path: string, contents: string): Promise<void> {
-  const tmpPath = `${path}.tmp`;
+  tmpCounter += 1;
+  const tmpPath = `${path}.tmp.${process.pid}.${tmpCounter}`;
   await writeFile(tmpPath, contents, "utf8");
   await rename(tmpPath, path);
 }
@@ -133,6 +136,11 @@ export async function loadSettings(
   const currentVersion = opts?.currentVersion ?? SETTINGS_VERSION;
   let current = await readSettingsFile(path, migrations, currentVersion);
   const listeners = new Set<(settings: Settings) => void>();
+  // Chained so two overlapping save()/saveDevice() calls never write to the
+  // same temp path at once or read a stale `current` at the time they
+  // actually run: each mutator only computes its patch once its turn in the
+  // queue arrives, against whatever the previous write just committed.
+  let queue: Promise<void> = Promise.resolve();
 
   function notify(): void {
     for (const fn of listeners) fn(current);
@@ -144,18 +152,26 @@ export async function loadSettings(
     notify();
   }
 
+  function enqueue(mutate: () => Settings): Promise<void> {
+    const task = queue.then(() => persist(mutate()));
+    // The chain must survive a failed write so later calls still run in
+    // order, but each call's own caller still sees that write's rejection.
+    queue = task.catch(() => {});
+    return task;
+  }
+
   return {
     get current() {
       return current;
     },
-    async save(patch) {
-      await persist({ ...current, ...patch });
+    save(patch) {
+      return enqueue(() => ({ ...current, ...patch }));
     },
-    async saveDevice(serial, patch) {
-      await persist({
+    saveDevice(serial, patch) {
+      return enqueue(() => ({
         ...current,
         devices: { ...current.devices, [serial]: { ...current.devices[serial], ...patch } },
-      });
+      }));
     },
     onChange(fn) {
       listeners.add(fn);

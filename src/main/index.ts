@@ -15,7 +15,7 @@ import { recordProgressHtml, recordResultHtml } from "./probe-window";
 import { teeToRecording } from "./recorder";
 import { ReplaySource } from "./replay-source";
 import { ScrcpySession } from "./scrcpy-session";
-import { DEFAULT_STREAM_SETTINGS } from "./scrcpy-init";
+import { toStreamSettings } from "./scrcpy-init";
 import { loadSettings } from "./settings";
 import { vendorPaths } from "./vendor-paths";
 import { createPhoneWindow } from "./window";
@@ -97,7 +97,7 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
   const settings = await loadSettings(join(app.getPath("userData"), "settings.json"));
   const wireless = createWirelessDeps(host.client);
   const onConnected = (serial: string): void => {
-    void settings.save({ lastDevice: serial });
+    settings.save({ lastDevice: serial }).catch((e) => log(`failed to save lastDevice: ${String(e)}`));
   };
 
   const clipboardHost: ClipboardHost = { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) };
@@ -107,7 +107,7 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
       serial: device.serial,
       model: device.model,
       serverPath: paths.scrcpyServer,
-      settings: DEFAULT_STREAM_SETTINGS,
+      settings: toStreamSettings(settings.current),
       log,
       clipboardHost,
     });

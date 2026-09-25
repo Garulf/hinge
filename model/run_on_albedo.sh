@@ -6,10 +6,13 @@
 set -euo pipefail
 
 model_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ssh_run="ssh"
 host="${HINGE_BLENDER_HOST:-albedo}"
 blender_exe='"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"'
 remote_dir="hinge-model"
+
+ssh_run() {
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$@"
+}
 
 if [[ $# -lt 1 ]]; then
     echo "usage: $0 <script.py> [args...]" >&2
@@ -42,7 +45,7 @@ while (($#)); do
     esac
 done
 
-"$ssh_run" "$host" "cd /d %USERPROFILE% && (if not exist $remote_dir mkdir $remote_dir) && cd $remote_dir && (if not exist out mkdir out) && (if not exist in mkdir in)" >/dev/null
+ssh_run "$host" "cd /d %USERPROFILE% && (if not exist $remote_dir mkdir $remote_dir) && cd $remote_dir && (if not exist out mkdir out) && (if not exist in mkdir in)" >/dev/null
 scp -q "$model_dir"/*.py "$model_dir"/colorways.json "$host:$remote_dir/"
 for local_file in "${uploads[@]}"; do
     scp -q "$local_file" "$host:$remote_dir/in/"
@@ -59,7 +62,7 @@ for entry in "${fetches[@]}"; do
 done
 
 set +e
-"$ssh_run" "$host" "cd /d %USERPROFILE%\\$remote_dir && ${clear_outputs}$blender_exe -b --factory-startup --python-exit-code 1 --python $script -- ${remote_args[*]}"
+ssh_run "$host" "cd /d %USERPROFILE%\\$remote_dir && ${clear_outputs}$blender_exe -b --factory-startup --python-exit-code 1 --python $script -- ${remote_args[*]}"
 status=$?
 set -e
 

@@ -8,8 +8,8 @@
 #   HINGE_ADB_REMOTE=<ssh alias> scripts/adb-remote.sh stop
 #
 # start: opens a background `ssh -L 127.0.0.1:15037:127.0.0.1:5037` to the
-#   remote host, tracked by a control socket and pid file under the
-#   worktree's .cache/hinge/ dir (or /tmp if that isn't writable).
+#   remote host, tracked by a control socket and pid file under
+#   ${XDG_RUNTIME_DIR:-/tmp}/hinge-<user>/.
 # status: runs `adb -H 127.0.0.1 -P 15037 devices` through the tunnel. An
 #   empty device list is a healthy result if nothing is plugged into the
 #   remote host right now; it only means the tunnel and the remote adb
@@ -39,13 +39,9 @@ case "$remote" in
     ;;
 esac
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-state_dir="$repo_root/.cache/hinge"
-if ! mkdir -p "$state_dir" 2>/dev/null || [[ ! -w "$state_dir" ]]; then
-  state_dir="/tmp/hinge-adb-remote-$(id -u)"
-  mkdir -p "$state_dir"
-fi
+state_dir="${XDG_RUNTIME_DIR:-/tmp}/hinge-$(id -un)"
+mkdir -p "$state_dir"
+chmod 700 "$state_dir"
 
 safe_remote="${remote//[^A-Za-z0-9_.-]/_}"
 ctrl_socket="$state_dir/adb-tunnel-${safe_remote}.sock"

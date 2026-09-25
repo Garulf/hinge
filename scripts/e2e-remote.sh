@@ -4,10 +4,10 @@
 #
 #   HINGE_REMOTE=<ssh alias> scripts/e2e-remote.sh [playwright args]
 #
-# The remote host must be reachable over the alias's ssh config (see
-# the ssh config). Node is expected either on the
-# remote PATH already, or installed at ~/.local/share/node-v22 (that path is
-# prepended to PATH automatically when present).
+# The remote host must be reachable non-interactively through its ssh config
+# alias (key auth, no prompts). Node is expected either on the remote PATH
+# already, or installed at ~/.local/share/node-v22 (that path is prepended to
+# PATH automatically when present).
 #
 # This script only syncs the tree and kicks off scripts/remote/e2e-runner.sh
 # over there, with the remaining behaviour (build, LaunchAgent handling on
@@ -56,6 +56,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Hidden directories at the top of the tree (.git, worktrees, editor and
+# tool state) are local only; the runner's own state files are kept remotely.
 echo "==> syncing $repo_root to $remote:$remote_dir/" >&2
 rsync -az --delete \
   --exclude 'node_modules' \
@@ -63,9 +65,7 @@ rsync -az --delete \
   --exclude 'dist' \
   --exclude 'out' \
   --exclude 'test-results' \
-  --exclude '.git' \
-  --exclude '.cache/hinge' \
-  --exclude '.worktrees' \
+  --exclude '/.*/' \
   --exclude '.npm-ci-lockhash' \
   --exclude '.e2e-run.*' \
   -- "$repo_root/" "$remote:$remote_dir/"

@@ -18,7 +18,7 @@ r37.0.1) and `scrcpy-server-v4.1` into `vendor/` (gitignored). Pass `--only win`
 
 ## Status
 
-Early development, M4 (showcase view). The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, with touch and keyboard input routed back to the device, in a flat work view or a 3D showcase view. Audio and packaged releases are later milestones.
+Early development, M5 (daily use) on top of the M4 showcase view. The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, in a flat work view or a 3D showcase view, with touch, keyboard, scrcpy's shortcuts, clipboard sync, phone audio, file drop and Wi-Fi pairing. Packaged releases are a later milestone.
 
 ## Running
 
@@ -37,6 +37,9 @@ connects to whatever device `adb` sees. Relevant flags:
   `device_state`/rotation while you fold and rotate the phone. Writes a JSON
   report to the desktop, or to the path given with `--out <file>`
 - `--seconds <n>` how long `--probe` samples for (default 90)
+- `--user-data <dir>` keep settings in another folder, as the e2e tests do
+- `--dry-run-transfers` with `--replay`, run dropped files through the
+  transfer queue without a phone, so the progress notices can be tested
 
 A bare file name given to `--record` or `--out` (no directory in the path)
 lands on the desktop; a path with a directory is used as given.
@@ -65,9 +68,10 @@ percent of the screen's height) and follows the phone as you fold it:
 
 ### Showcase view
 
-Left Alt+D (or left Super+D) switches between the flat work view and a 3D
+MOD+d (or the View button) switches between the flat work view and a 3D
 showcase view, easing the camera and the window size over 600 ms; press it
-again mid-way to turn back from where it is.
+again mid-way to turn back from where it is. Each phone comes back in the
+view it was last in.
 
 - The showcase looks at the phone from a three-quarter angle, slightly from
   above, lit by a studio environment, with a soft shadow under it and a
@@ -78,8 +82,16 @@ again mid-way to turn back from where it is.
   else turns the phone around; two seconds after you let go it eases back.
 - Shift+drag off the screen moves the window, since a plain drag turns the
   phone there.
-- Pointer input on the screen is paused for the 600 ms of the switch; keys
-  still reach the phone.
+- Pointer input on the screen and MOD+wheel scaling are paused for the
+  600 ms of the switch; keys and shortcuts still work.
+- With the display paused (MOD+z) touches stay off, but dragging off the
+  screen still turns the phone, since that never reaches it.
+- The window controls anchor to the window rather than the bezel while the
+  phone is tilted: from the first step of the switch the menu shows when
+  you hover the window's top edge and sits at its top centre, with panels
+  and notices under it. Back in the work view they return to the bezel.
+- In fullscreen the phone moves to the middle of the screen for the
+  showcase.
 - Back in the work view the camera and window are exactly as before.
 
 ### Windows
@@ -91,7 +103,111 @@ hinge.exe --serial 10.0.0.23:5555
 hinge.exe --probe --seconds 60
 ```
 
-The window is frameless; close it with Alt+F4 or from the taskbar.
+The window is frameless. Move the pointer to the phone's top edge for its
+controls, quit with MOD+q, or close it with Alt+F4 or from the taskbar.
+
+### Window controls
+
+Hovering the bezel along the phone's top edge shows a small bar of buttons
+(the screen below it stays the phone's, so pulling down the notification
+shade from the top still works):
+
+- **Devices** lists the phones adb can see (USB, Wi-Fi and mDNS), lets you
+  switch to another one, switch a USB phone to Wi-Fi, disconnect a Wi-Fi
+  phone, or pair a new one.
+- **View** switches between the flat work view and the 3D view (MOD+d).
+- **Colour** picks the model's colourway: Jet Black, Blue Shadow, Silver
+  Shadow or Mint.
+- **Pin** keeps the window above other windows.
+- **Settings** has the shortcut modifier, phone audio, and the video codec,
+  bit rate, size and frame rate limits. Stream settings apply the next time
+  the phone connects.
+- **Close** quits.
+
+Panels open inside the window (it grows while one needs the room) and close
+with Escape or a click elsewhere. Short notices appear under the phone's top
+bezel for three seconds; the Devices panel also shows pairing and connection
+errors in its own status line.
+
+### Shortcuts
+
+MOD is left Alt or left Super by default, and can be any mix of left or
+right Alt, Super and Ctrl in Settings. The table follows
+[scrcpy's](https://github.com/Genymobile/scrcpy/blob/master/doc/shortcuts.md).
+
+| Action | Shortcut |
+| --- | --- |
+| Quit | MOD+q |
+| Fullscreen | MOD+f or F11 |
+| Screen at 1:1 (one video pixel per display pixel) | MOD+g |
+| Shrink the window back after a panel | MOD+w |
+| Bigger or smaller, 10 percent steps | MOD+wheel |
+| Work view or 3D view | MOD+d |
+| Pause display, or resume | MOD+z, MOD+Shift+z |
+| Reset video capture | MOD+Shift+r |
+| HOME | MOD+h or middle click |
+| BACK | MOD+b, MOD+Backspace or right click |
+| APP_SWITCH | MOD+s or 4th mouse button |
+| MENU | MOD+m |
+| Volume up, down | MOD+Up, MOD+Down |
+| POWER | MOD+p |
+| Phone screen off, keep mirroring | MOD+o |
+| Phone screen on | MOD+Shift+o |
+| Rotate the phone's screen | MOD+r |
+| Notification panel | MOD+n or 5th mouse button |
+| Quick settings panel | MOD+n pressed twice |
+| Collapse the panels | MOD+Shift+n |
+| Copy, cut on the phone | MOD+c, MOD+x |
+| Paste the PC clipboard | Ctrl+v or MOD+v |
+| Type the PC clipboard as keystrokes | MOD+Shift+v |
+| Frame rate on the bottom bezel | MOD+i |
+| Pinch to zoom or rotate | Ctrl+drag |
+| Two-finger vertical slide | Shift+drag |
+| Two-finger horizontal slide | Ctrl+Shift+drag |
+
+Other Ctrl shortcuts go to the phone, unless Ctrl is set as MOD. AltGr
+(Ctrl+Alt on Windows) types its character. The clipboard syncs both ways on its own: copy on the
+phone and paste on the PC.
+
+### Phone audio
+
+Phones on Android 11 or newer play their audio through the PC. If the phone
+can't share audio, hinge says so once and carries on without it. Turn it
+off in Settings.
+
+### Files
+
+Drop files on the window. An `.apk` is installed, replacing an older version
+of the same app; anything else is copied to the phone's `Download` folder
+under its own name. Files go one at a time, each with a progress notice.
+
+### Wi-Fi
+
+To go wireless with the phone plugged in, open Devices and press Wi-Fi next
+to it; hinge restarts adb on the phone in TCP mode and connects to its Wi-Fi
+address. Unplug the cable once the new entry shows as current.
+
+To pair without a cable, on the phone open Developer options, Wireless
+debugging, Pair device with pairing code. Enter the IP address and port and
+the six-digit code shown there under Pair new device. If the phone isn't
+found on the network afterwards, enter the port shown on the Wireless
+debugging screen itself (it differs from the pairing port) and press
+Connect.
+
+A Wi-Fi phone that drops off (Wi-Fi toggled, phone asleep) is reconnected
+with a growing delay, up to 15 seconds between tries, until it comes back
+or you pick another device. The last phone used connects on its own at the
+next launch.
+
+### Settings file
+
+Settings are saved as `settings.json` in the app's data folder:
+`%APPDATA%\hinge\settings.json` on Windows and
+`~/.config/hinge/settings.json` on Linux. The Settings panel shows the full
+path. A file that can't be read is kept as `settings.json.bad` and defaults
+are used. Besides the panel's options it holds the colourway, the last
+device, and for each phone the window's position, the size you picked and
+the view (work or 3D) it was last in.
 
 ## Development commands
 

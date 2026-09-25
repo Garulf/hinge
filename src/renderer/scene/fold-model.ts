@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import type { MaterialLook } from "../../shared/colourways";
 
 export interface ScreenExtras {
   punchHole: [number, number, number];
@@ -175,6 +176,31 @@ export class FoldModel {
       bounds.boundingBox = null;
       bounds.boundingSphere = null;
     }
+  }
+
+  /** Restyles every material named in `looks`; the loader shares one material per glTF material, so each is set once. */
+  applyColourway(looks: Record<string, MaterialLook>): void {
+    const seen = new Set<THREE.Material>();
+    this.root.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        const look = looks[material.name];
+        if (!look || seen.has(material) || !(material instanceof THREE.MeshStandardMaterial)) continue;
+        seen.add(material);
+        material.color.set(look.baseColor);
+        material.metalness = look.metallic;
+        material.roughness = look.roughness;
+      }
+    });
+  }
+
+  /** The active area of a screen in millimetres, flat (the inner screen's rest pose is open). */
+  screenSizeMm(screen: "cover" | "inner"): { w: number; h: number } {
+    const geometry = this[screen].mesh.geometry;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    const size = geometry.boundingBox!.getSize(new THREE.Vector3());
+    return { w: size.x * 1000, h: size.y * 1000 };
   }
 
   setInnerVisible(visible: boolean): void {

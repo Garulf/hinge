@@ -6,7 +6,8 @@ import type { MainToRenderer, RendererToMain } from "../shared/wire";
 import type { Rotation } from "../shared/screen-uv";
 import { WindowPlacer } from "./window-resize";
 
-export function createPhoneWindow(): { win: BrowserWindow; port: PortLike } {
+/** onMoved fires when a drag ends or the window system reports a finished move. */
+export function createPhoneWindow(opts?: { onMoved?: () => void }): { win: BrowserWindow; port: PortLike } {
   const win = new BrowserWindow({
     width: 360,
     height: 760,
@@ -27,7 +28,7 @@ export function createPhoneWindow(): { win: BrowserWindow; port: PortLike } {
 
   const port = trackedPort(win);
 
-  registerWindowIpc(win);
+  registerWindowIpc(win, opts?.onMoved ?? (() => {}));
 
   return { win, port };
 }
@@ -63,7 +64,7 @@ function trackedPort(win: BrowserWindow): PortLike {
   };
 }
 
-function registerWindowIpc(win: BrowserWindow): void {
+function registerWindowIpc(win: BrowserWindow, onMoved: () => void): void {
   let dragTimer: ReturnType<typeof setInterval> | null = null;
   let dragSize: { width: number; height: number } | null = null;
   const placer = new WindowPlacer();
@@ -77,7 +78,7 @@ function registerWindowIpc(win: BrowserWindow): void {
   };
 
   ipcMain.on("hinge:set-window-size", (event, width: number, height: number, rotation: Rotation) => {
-    if (event.sender !== win.webContents) return;
+    if (event.sender !== win.webContents || win.isFullScreen()) return;
     const current = win.getContentBounds();
     const area = screen.getDisplayMatching(win.getBounds()).workArea;
     win.setContentBounds(placer.place(current, { w: width, h: height }, rotation, area));
@@ -94,7 +95,7 @@ function registerWindowIpc(win: BrowserWindow): void {
   // rounded device pixels on every call, which can grow the window a pixel
   // at a time during a drag; setBounds() with a size read once does not.
   ipcMain.on("hinge:begin-drag", (event) => {
-    if (event.sender !== win.webContents) return;
+    if (event.sender !== win.webContents || win.isFullScreen()) return;
     stopDrag();
     const cursor = screen.getCursorScreenPoint();
     const bounds = win.getBounds();
@@ -109,11 +110,26 @@ function registerWindowIpc(win: BrowserWindow): void {
 
   ipcMain.on("hinge:end-drag", (event) => {
     if (event.sender !== win.webContents) return;
+    const wasDragging = dragTimer !== null;
     stopDrag();
+    if (wasDragging) onMoved();
   });
+  win.on("moved", onMoved);
 
   win.on("blur", stopDrag);
   win.on("closed", stopDrag);
+
+  ipcMain.on("hinge:toggle-fullscreen", (event) => {
+    if (event.sender !== win.webContents) return;
+    stopDrag();
+    win.setFullScreen(!win.isFullScreen());
+  });
+  win.on("enter-full-screen", () => win.webContents.send("hinge:fullscreen", true));
+  win.on("leave-full-screen", () => win.webContents.send("hinge:fullscreen", false));
+
+  ipcMain.on("hinge:quit", (event) => {
+    if (event.sender === win.webContents) win.close();
+  });
 }
 
 function sizeOf(bounds: { width: number; height: number }): { width: number; height: number } {

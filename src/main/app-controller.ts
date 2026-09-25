@@ -41,7 +41,7 @@ function errorResult(type: DeviceCommand["type"], message: string): DeviceComman
  * followed by the last posture reading so the fold pose comes back too, and
  * the live audio stream's start and configuration packet.
  */
-export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath?: string }): MediaSink {
+export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath?: string; onStatus?: (status: SessionStatus) => void }): MediaSink {
   const logHint = opts?.logPath ? `(log: ${basename(opts.logPath)})` : "";
 
   function post(msg: MainToRenderer): void {
@@ -65,7 +65,10 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
       post({ kind: "video-packet", packet });
     },
     videoEnd: () => post({ kind: "video-end" }),
-    status: (status) => post({ kind: "status", status: withLogHint(status, logHint) }),
+    status: (status) => {
+      opts?.onStatus?.(status);
+      post({ kind: "status", status: withLogHint(status, logHint) });
+    },
     posture: (reading) => {
       lastPosture = reading;
       post({ kind: "posture", reading });
@@ -107,7 +110,10 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
       return;
     }
     if (msg.kind === "device-command") {
-      if (!source.handleDeviceCommand) return;
+      if (!source.handleDeviceCommand) {
+        post({ kind: "device-command-result", id: msg.id, result: errorResult(msg.command.type, "no phone connection in this mode") });
+        return;
+      }
       source
         .handleDeviceCommand(msg.command)
         .then((result) => post({ kind: "device-command-result", id: msg.id, result }))

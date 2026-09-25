@@ -11,6 +11,11 @@ function fake() {
     backOrScreenOn: async (a) => { calls.push(["back", a]); },
     resetVideo: async () => { calls.push(["reset-video", undefined]); },
     setClipboard: async (m) => { calls.push(["set-clipboard", m]); },
+    setDisplayPower: async (on) => { calls.push(["display-power", on]); },
+    expandNotificationPanel: async () => { calls.push(["expand-notifications", undefined]); },
+    expandSettingPanel: async () => { calls.push(["expand-settings", undefined]); },
+    collapseNotificationPanel: async () => { calls.push(["collapse-panels", undefined]); },
+    rotateDevice: async () => { calls.push(["rotate-device", undefined]); },
   };
   return { c, calls };
 }
@@ -66,4 +71,22 @@ test("clipboard-paste is a no-op when no PC clipboard reader is wired", async ()
   const { c, calls } = fake();
   await applyIntent(c, { type: "clipboard-paste", asText: false });
   expect(calls).toEqual([]);
+});
+
+test("shortcut intents map to their controller calls", async () => {
+  const { c, calls } = fake();
+  await applyIntent(c, { type: "display-power", on: false });
+  await applyIntent(c, { type: "display-power", on: true });
+  await applyIntent(c, { type: "expand-notifications" });
+  await applyIntent(c, { type: "expand-settings" });
+  await applyIntent(c, { type: "collapse-panels" });
+  await applyIntent(c, { type: "rotate-device" });
+  expect(calls).toEqual([
+    ["display-power", false],
+    ["display-power", true],
+    ["expand-notifications", undefined],
+    ["expand-settings", undefined],
+    ["collapse-panels", undefined],
+    ["rotate-device", undefined],
+  ]);
 });

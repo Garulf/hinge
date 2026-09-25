@@ -158,3 +158,29 @@ test("ScreenMaterial's crease follows the view blend on a screen with a band, an
   inner.setCrease(0.5);
   expect(inner.uniforms.crease.value).toBeCloseTo(0.5 * CREASE_STRENGTH, 12);
 });
+
+test("a colourway restyles the frame and back materials by name, leaving the screens alone", async () => {
+  const bytes = readFileSync(resolve("src/renderer/public/fold7.glb"));
+  const fresh = await FoldModel.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  fresh.applyColourway({ frame: { baseColor: "#b8b6b2", metallic: 1, roughness: 0.35 }, back_glass: { baseColor: "#c8c6c2", metallic: 0, roughness: 0.45 } });
+  const byName = new Map<string, THREE.MeshStandardMaterial>();
+  fresh.root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (mesh.isMesh && !Array.isArray(mesh.material)) byName.set(mesh.material.name, mesh.material as THREE.MeshStandardMaterial);
+  });
+  expect(byName.get("frame")!.color.getHexString(THREE.SRGBColorSpace)).toBe("b8b6b2");
+  expect(byName.get("back_glass")!.metalness).toBe(0);
+  expect(byName.get("hinge_spine")!.color.getHexString(THREE.SRGBColorSpace)).toBe("141414");
+  expect(byName.get("screen_cover")!.color.getHex()).toBe(0);
+});
+
+test("the screens' active areas are the size and shape of the real panels", () => {
+  const cover = model.screenSizeMm("cover");
+  const inner = model.screenSizeMm("inner");
+  expect(cover.h).toBeGreaterThan(148);
+  expect(cover.h).toBeLessThan(158);
+  expect(inner.w).toBeGreaterThan(130);
+  expect(inner.w).toBeLessThan(146);
+  expect(cover.h / cover.w).toBeCloseTo(2520 / 1080, 2);
+  expect(inner.h / inner.w).toBeCloseTo(2184 / 1968, 2);
+});

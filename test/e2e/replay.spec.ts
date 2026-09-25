@@ -1,6 +1,7 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
-import { writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { defaultPxPerMm, FOLD7_BODY, showcaseSizePx } from "../../src/shared/layout";
 
 type Lit = "cover" | "inner" | null;
@@ -41,8 +42,10 @@ const OPEN_ASPECT = FOLD7_BODY.openWidthMm / FOLD7_BODY.heightMm;
 // host's actual GPU instead of software GL; scripts/e2e-remote.sh sets it.
 const softwareGl = process.env.HINGE_E2E_REAL_GPU !== "1";
 
-async function launch(recording: string): Promise<{ app: ElectronApplication; page: Page }> {
-  const args = ["--replay", recording, ...(softwareGl ? ["--use-gl=angle", "--use-angle=swiftshader"] : []), "--no-sandbox"];
+async function launch(recording: string, extra: string[] = []): Promise<{ app: ElectronApplication; page: Page }> {
+  // A fresh settings folder per run, so a colourway picked here never leaks into the next run or the user's own settings.
+  const userData = await mkdtemp(join(tmpdir(), "hinge-e2e-"));
+  const args = ["--replay", recording, "--user-data", userData, ...extra, ...(softwareGl ? ["--use-gl=angle", "--use-angle=swiftshader"] : []), "--no-sandbox"];
   // Defaults to running the unpacked main entry through the electron npm binary;
   // set HINGE_E2E_EXECUTABLE to a packaged build's executable to run against it instead.
   const executablePath = process.env.HINGE_E2E_EXECUTABLE;
@@ -312,6 +315,150 @@ test("replays a real recording through at least one open and one close", async (
     }
     expect(settledTransition(history, "cover", "inner")).toBe(true);
     expect(settledTransition(history, "inner", "cover")).toBe(true);
+  } finally {
+    await app.close();
+  }
+});
+
+/**
+ * Mean sRGB brightness (0..255) of the phone's outer rim: the first few
+ * opaque pixels in from the left and right edges on the middle rows, which
+ * is the frame, whatever the screen is showing.
+ */
+async function rimBrightness(page: Page, png: Buffer): Promise<number> {
+  return page.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    ctx.drawImage(bitmap, 0, 0);
+    const { data, width, height } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+    const depth = Math.max(2, Math.round(width / 300));
+    let sum = 0;
+    let count = 0;
+    for (let y = Math.round(height * 0.2); y < Math.round(height * 0.8); y++) {
+      for (const direction of [1, -1]) {
+        let x = direction > 0 ? 0 : width - 1;
+        while (x >= 0 && x < width && data[(y * width + x) * 4 + 3] < 200) x += direction;
+        for (let d = 0; d < depth && x >= 0 && x < width; d++, x += direction) {
+          const i = (y * width + x) * 4;
+          sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+          count++;
+        }
+      }
+    }
+    return count > 0 ? sum / count : 0;
+  }, png.toString("base64"));
+}
+
+/**
+ * Every toast text shown since this was called: a toast lives three seconds
+ * from when it arrives, which on a software GL can pass in a few animation
+ * frames, so polling for it could miss it.
+ */
+async function watchToasts(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const seen = new Set<string>();
+    (window as unknown as { __toasts: Set<string> }).__toasts = seen;
+    const record = () => document.querySelectorAll(".hinge-toast").forEach((n) => seen.add(n.textContent ?? ""));
+    new MutationObserver(record).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+}
+
+async function waitForToast(page: Page, matches: (text: string) => boolean, what: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let seen: string[] = [];
+  while (Date.now() < deadline) {
+    seen = await page.evaluate(() => [...(window as unknown as { __toasts: Set<string> }).__toasts]);
+    if (seen.some(matches)) return;
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`no toast ${what}; saw ${JSON.stringify(seen)}`);
+}
+
+test("hover menu on the top edge, transfer toasts for a drop, and a colourway change", async () => {
+  test.setTimeout(150_000);
+  const dir = await mkdtemp(join(tmpdir(), "hinge-drop-"));
+  const apk = join(dir, "My App.apk");
+  const photo = join(dir, "café photo.jpg");
+  await writeFile(apk, new Uint8Array(24 * 1024 * 1024));
+  await writeFile(photo, new Uint8Array(50_000));
+
+  const { app, page } = await launch(resolve("test/fixtures/synthetic-fold.hrec"), ["--dry-run-transfers"]);
+  try {
+    const closed = await waitFor(page, "the closed phone", (s) => restingOn("cover", s) && s.framesDecoded > 10, 30_000);
+    const menu = page.locator("[data-menu]");
+    await expect(menu).not.toHaveClass(/shown/);
+    await page.mouse.move(closed.window.w / 2, 8);
+    await expect(menu).toHaveClass(/shown/, { timeout: 5000 });
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: "test-results/hover-menu.png" });
+    await page.mouse.move(closed.window.w / 2, closed.window.h / 2);
+    await expect(menu).not.toHaveClass(/shown/, { timeout: 5000 });
+
+    await watchToasts(page);
+    await page.evaluate((paths) => (window as unknown as { __hinge: { drop(p: string[]): void } }).__hinge.drop(paths), [photo, apk]);
+    await waitForToast(page, (t) => t === "Sent café photo.jpg to Download", "for the pushed photo", 15_000);
+    await waitForToast(page, (t) => /^Installing My App\.apk \d+%$/.test(t), "with the install's progress", 15_000);
+    await page.screenshot({ path: "test-results/toasts.png" });
+    await waitForToast(page, (t) => t === "Installed My App.apk", "for the finished install", 30_000);
+
+    await waitFor(page, "the replay to end", (s) => s.lit === null && s.settled && s.laidOut && s.brightness.inner === 0 && s.brightness.cover === 0 && s.angle === 180 && s.window.w > s.window.h, 60_000);
+    await page.mouse.move(10, 300);
+    await page.waitForTimeout(1000);
+    const before = await rimBrightness(page, await page.screenshot({ path: "test-results/colour-before.png" }));
+
+    const s = await stats(page);
+    await page.mouse.move(s.window.w / 2, 8);
+    await expect(menu).toHaveClass(/shown/, { timeout: 5000 });
+    await page.locator('[data-button="colour"]').click();
+    await page.locator('[data-colourway="silver-shadow"]').click();
+    await expect(page.locator('[data-colourway="silver-shadow"]')).toHaveAttribute("aria-pressed", "true");
+    await page.screenshot({ path: "test-results/colour-panel.png" });
+    await page.locator('[data-button="settings"]').click();
+    await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+    await page.screenshot({ path: "test-results/settings-panel.png" });
+    await page.locator('[data-button="device"]').click();
+    await expect(page.getByRole("dialog", { name: "Devices" }).getByText("No devices")).toBeVisible({ timeout: 10_000 });
+    await page.screenshot({ path: "test-results/device-panel.png" });
+    const devices = page.getByRole("dialog", { name: "Devices" });
+    const status = devices.locator("[data-device-status]");
+    await devices.getByPlaceholder("192.168.1.20:37099").fill("192.168.1.20:37099");
+    await devices.getByPlaceholder("123456").fill("12");
+    await devices.getByRole("button", { name: "Pair" }).click();
+    await expect(status).toHaveText(/6 digits/);
+    await devices.getByPlaceholder("123456").fill("123456");
+    await devices.getByRole("button", { name: "Pair" }).click();
+    await expect(status).toHaveText("Pairing failed: no phone connection in this mode", { timeout: 10_000 });
+    await expect(status).toHaveClass(/error/);
+    await page.screenshot({ path: "test-results/device-panel-error.png" });
+    await page.keyboard.press("Escape");
+    await page.mouse.move(10, s.window.h / 2);
+    await page.waitForTimeout(1500);
+    const after = await rimBrightness(page, await page.screenshot({ path: "test-results/colour-after.png" }));
+    await writeFile("test-results/colour-rim.json", JSON.stringify({ before, after }, null, 2));
+    expect(after - before).toBeGreaterThan(40);
+
+    const unscaled = await stats(page);
+    await page.mouse.move(unscaled.window.w / 2, unscaled.window.h / 2);
+    await page.keyboard.down("Alt");
+    await page.mouse.wheel(0, 100);
+    await page.keyboard.up("Alt");
+    const smaller = await waitFor(page, "the phone to shrink a step", (s) => s.settled && s.laidOut && s.window.w < unscaled.window.w, 20_000);
+    expect((smaller as Stats & { pxPerMm: number }).pxPerMm / (unscaled as Stats & { pxPerMm: number }).pxPerMm).toBeCloseTo(0.9, 2);
+    expect(smaller.window.w / unscaled.window.w).toBeCloseTo(0.9, 1);
+
+    await page.mouse.move(10, smaller.window.h / 2);
+    await expect(menu).not.toHaveClass(/shown/, { timeout: 5000 });
+    await toggleView(page);
+    const showcase = await waitFor(page, "the showcase view", (s) => s.view.t === 1 && !s.view.active && s.laidOut && s.window.w * s.window.h > smaller.window.w * smaller.window.h, 20_000);
+    await page.mouse.move(showcase.window.w / 2, 8);
+    await expect(menu).toHaveClass(/shown/, { timeout: 5000 });
+    const box = (await menu.boundingBox())!;
+    expect(Math.abs(box.x + box.width / 2 - showcase.window.w / 2)).toBeLessThanOrEqual(2);
+    expect(box.y).toBeLessThan(24);
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: "test-results/showcase-menu.png" });
   } finally {
     await app.close();
   }

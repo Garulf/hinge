@@ -1,13 +1,22 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, readdirSync, renameSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import extract from "extract-zip";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  renameSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const vendorDir = join(repoRoot, "vendor");
 
-const TARGETS = [
+export const TARGETS = [
   {
     file: "scrcpy-server-v4.1",
     url: "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-server-v4.1",
@@ -20,6 +29,7 @@ const TARGETS = [
     algo: "sha1",
     sum: "477254aa5f903c15cf51001717bdf347fb6b53e0",
     extractTo: "platform-tools-linux",
+    keep: ["adb", "NOTICE.txt"],
   },
   {
     file: "platform-tools_r37.0.1-win.zip",
@@ -27,10 +37,18 @@ const TARGETS = [
     algo: "sha1",
     sum: "e03e78b1d80b396f1c3358e31251cb31740e1110",
     extractTo: "platform-tools-win",
+    keep: ["adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "NOTICE.txt"],
   },
 ];
 
-const PLATFORM_TOOLS_KEEP = new Set(["adb", "adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "NOTICE.txt"]);
+export function selectTargets(targets, only) {
+  if (!only) return targets;
+  return targets.filter((t) => !t.extractTo || only.has(t.extractTo.replace("platform-tools-", "")));
+}
+
+export function keptFilesFor(target) {
+  return target.extractTo ? target.keep : [target.file];
+}
 
 function parseOnly(argv) {
   const idx = argv.indexOf("--only");
@@ -58,29 +76,46 @@ function verify(target, bytes) {
   }
 }
 
-function extractZip(target, zipBytes) {
+async function extractZip(target, zipBytes) {
   const destDir = join(vendorDir, target.extractTo);
-  if (existsSync(destDir)) rmSync(destDir, { recursive: true, force: true });
-
+  const partialDestDir = `${destDir}.partial`;
   mkdirSync(vendorDir, { recursive: true });
   const tempDir = mkdtempSync(join(vendorDir, ".tmp-"));
-  const zipPath = join(tempDir, target.file);
-  writeFileSync(zipPath, zipBytes);
-  execFileSync("unzip", ["-q", zipPath, "-d", tempDir]);
 
-  const innerDir = join(tempDir, "platform-tools");
-  mkdirSync(destDir, { recursive: true });
-  for (const entry of readdirSync(innerDir)) {
-    if (PLATFORM_TOOLS_KEEP.has(entry)) renameSync(join(innerDir, entry), join(destDir, entry));
+  try {
+    const zipPath = join(tempDir, target.file);
+    writeFileSync(zipPath, zipBytes);
+    const extractedDir = join(tempDir, "extracted");
+    await extract(zipPath, { dir: extractedDir });
+
+    const innerDir = join(extractedDir, "platform-tools");
+    if (existsSync(partialDestDir)) rmSync(partialDestDir, { recursive: true, force: true });
+    mkdirSync(partialDestDir, { recursive: true });
+    for (const entry of target.keep) {
+      const from = join(innerDir, entry);
+      if (!existsSync(from)) throw new Error(`${target.file} did not contain expected entry ${entry}`);
+      renameSync(from, join(partialDestDir, entry));
+    }
+
+    if (existsSync(destDir)) rmSync(destDir, { recursive: true, force: true });
+    renameSync(partialDestDir, destDir);
+  } catch (err) {
+    rmSync(partialDestDir, { recursive: true, force: true });
+    throw err;
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
   }
-  rmSync(tempDir, { recursive: true, force: true });
+
+  for (const entry of target.keep) {
+    if (entry.endsWith(".dll") || entry.endsWith(".txt")) continue;
+    chmodSync(join(destDir, entry), 0o755);
+  }
 }
 
-function alreadyPresent(target) {
+function isTargetPresent(target) {
   if (target.extractTo) {
     const destDir = join(vendorDir, target.extractTo);
-    const binName = target.extractTo === "platform-tools-win" ? "adb.exe" : "adb";
-    return existsSync(join(destDir, binName));
+    return keptFilesFor(target).every((entry) => existsSync(join(destDir, entry)));
   }
   const destPath = join(vendorDir, target.file);
   if (!existsSync(destPath)) return false;
@@ -88,7 +123,7 @@ function alreadyPresent(target) {
 }
 
 async function fetchTarget(target) {
-  if (alreadyPresent(target)) {
+  if (isTargetPresent(target)) {
     console.log(`up to date: ${target.file}`);
     return;
   }
@@ -98,11 +133,12 @@ async function fetchTarget(target) {
   verify(target, bytes);
 
   if (target.extractTo) {
-    extractZip(target, bytes);
+    await extractZip(target, bytes);
   } else {
     mkdirSync(vendorDir, { recursive: true });
-    writeFileSync(join(vendorDir, target.file), bytes);
-    execFileSync("chmod", ["+x", join(vendorDir, target.file)]);
+    const destPath = join(vendorDir, target.file);
+    writeFileSync(destPath, bytes);
+    chmodSync(destPath, 0o755);
   }
   console.log(`ready: ${target.file}`);
 }
@@ -111,16 +147,15 @@ async function main() {
   const only = parseOnly(process.argv.slice(2));
   mkdirSync(vendorDir, { recursive: true });
 
-  const targets = only
-    ? TARGETS.filter((t) => !t.extractTo || only.has(t.extractTo.replace("platform-tools-", "")))
-    : TARGETS;
-
-  for (const target of targets) {
+  for (const target of selectTargets(TARGETS, only)) {
     await fetchTarget(target);
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

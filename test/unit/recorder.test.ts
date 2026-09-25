@@ -4,7 +4,7 @@ import { createQueuedWriter, type WritableLike } from "../../src/main/queued-wri
 import { decodeRecording, RECORDING_MAGIC } from "../../src/shared/recording";
 import type { MediaSink } from "../../src/main/media-source";
 import type { PostureReading } from "../../src/shared/posture";
-import type { SessionStatus } from "../../src/shared/wire";
+import type { AudioStreamInfo, SessionStatus, TransferProgress, WireAudioPacket } from "../../src/shared/wire";
 
 function fakeStream(): WritableLike & { chunks: Uint8Array[]; error: (e: Error) => void } {
   const chunks: Uint8Array[] = [];
@@ -105,5 +105,40 @@ test("forwards posture readings to the inner sink without recording them (only t
   sink.posture!(reading);
 
   expect(postures).toEqual([reading]);
+  expect(stream.chunks).toEqual([]);
+});
+
+test("forwards audio (start/packet/end) and transfer progress to the inner sink without recording them: --record must not lose live audio or transfer feedback", () => {
+  const stream = fakeStream();
+  const writer = createQueuedWriter(stream);
+  const audioStarts: AudioStreamInfo[] = [];
+  const audioPackets: WireAudioPacket[] = [];
+  const audioEnds: (string | undefined)[] = [];
+  const transfers: TransferProgress[] = [];
+  const inner: MediaSink = {
+    videoStart() {},
+    videoPacket() {},
+    videoEnd() {},
+    status() {},
+    audioStart: (info) => audioStarts.push(info),
+    audioPacket: (p) => audioPackets.push(p),
+    audioEnd: (reason) => audioEnds.push(reason),
+    transferProgress: (p) => transfers.push(p),
+  };
+  const sink = teeToRecording(inner, writer, () => 0);
+
+  const info: AudioStreamInfo = { codec: "opus", sampleRate: 48000, channels: 2 };
+  sink.audioStart!(info);
+  const packet: WireAudioPacket = { type: "data", pts: 1, data: new Uint8Array([1]) };
+  sink.audioPacket!(packet);
+  sink.audioEnd!("unsupported");
+  const progress: TransferProgress = { id: "t1", name: "a.txt", kind: "push", state: "running", bytesWritten: 1, totalBytes: 2 };
+  sink.transferProgress!(progress);
+
+  expect(audioStarts).toEqual([info]);
+  expect(audioPackets).toEqual([packet]);
+  expect(audioEnds).toEqual(["unsupported"]);
+  expect(transfers).toEqual([progress]);
+  // none of this went into the .hrec stream
   expect(stream.chunks).toEqual([]);
 });

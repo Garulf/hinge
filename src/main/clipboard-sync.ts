@@ -21,12 +21,7 @@ export interface ClipboardSync {
   /** Drains the device clipboard stream until it ends or stop() is called; resolves when draining stops. Safe to call once. */
   start(): Promise<void>;
   stop(): void;
-  /**
-   * Registers content about to be pushed to the device (setClipboard) and
-   * returns the sequence number to send with it. The next device-clipboard
-   * value that matches it is treated as the resulting echo and is not
-   * written back to the PC clipboard, which would otherwise loop.
-   */
+  /** A fresh sequence number for a setClipboard control message (the content parameter is accepted for call-site compatibility but not otherwise used: see the echo check in start()). */
   beginPush(content: string): bigint;
 }
 
@@ -36,16 +31,12 @@ export function createClipboardSync(opts: {
   log?: (line: string) => void;
 }): ClipboardSync {
   let sequence = 0n;
-  // Counts, not a single value: two pushes in flight before either echo
-  // arrives must each be caught, not just the most recent one.
-  const pending = new Map<string, number>();
   let stopped = false;
   let reader: ReturnType<ClipboardStreamLike["getReader"]> | null = null;
 
   return {
-    beginPush(content) {
+    beginPush() {
       sequence += 1n;
-      pending.set(content, (pending.get(content) ?? 0) + 1);
       return sequence;
     },
 
@@ -58,12 +49,22 @@ export function createClipboardSync(opts: {
           const { done, value } = await reader.read();
           if (stopped) return;
           if (done || value === undefined) return;
-          const count = pending.get(value);
-          if (count) {
-            if (count === 1) pending.delete(value);
-            else pending.set(value, count - 1);
-            continue;
+
+          // scrcpy's own approach: skip the write whenever the incoming
+          // value already matches what's on the PC clipboard right now.
+          // This catches our own echo (we just set the device clipboard to
+          // this value, so it's already here) without remembering
+          // anything about past pushes, so it can never grow unbounded or
+          // swallow a genuine later copy of the same text.
+          let current: string;
+          try {
+            current = await opts.host.readText();
+          } catch (e) {
+            opts.log?.(`clipboard read failed: ${String(e)}`);
+            current = "";
           }
+          if (value === current) continue;
+
           try {
             await opts.host.writeText(value);
           } catch (e) {

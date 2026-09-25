@@ -62,5 +62,20 @@ export function teeToRecording(sink: MediaSink, writer: QueuedWriter, now: () =>
       // and a replay reparses it back into the same readings.
       sink.posture?.(reading);
     },
+    // Audio and transfer progress are not part of the .hrec format (replay
+    // is video/posture only); forwarded unrecorded so the renderer still
+    // gets live audio and transfer feedback while a recording is running.
+    audioStart(info) {
+      sink.audioStart?.(info);
+    },
+    audioPacket(packet) {
+      sink.audioPacket?.(packet);
+    },
+    audioEnd(reason) {
+      sink.audioEnd?.(reason);
+    },
+    transferProgress(progress) {
+      sink.transferProgress?.(progress);
+    },
   };
 }

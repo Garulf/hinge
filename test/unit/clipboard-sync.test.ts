@@ -1,9 +1,24 @@
 import { expect, test } from "vitest";
 import { createClipboardSync, type ClipboardHost } from "../../src/main/clipboard-sync";
 
-function fakeHost(): { host: ClipboardHost; written: string[] } {
+interface FakeHost {
+  host: ClipboardHost;
+  written: string[];
+  current(): string;
+  setCurrent(v: string): void;
+}
+
+function fakeHost(initial = ""): FakeHost {
+  let current = initial;
   const written: string[] = [];
-  return { host: { writeText: async (t) => { written.push(t); }, readText: async () => "" }, written };
+  const host: ClipboardHost = {
+    readText: async () => current,
+    writeText: async (t) => {
+      written.push(t);
+      current = t;
+    },
+  };
+  return { host, written, current: () => current, setCurrent: (v) => { current = v; } };
 }
 
 function fakeStream(): { stream: ReadableStream<string>; push: (v: string) => void; close: () => void } {
@@ -12,8 +27,12 @@ function fakeStream(): { stream: ReadableStream<string>; push: (v: string) => vo
   return { stream, push: (v) => controller.enqueue(v), close: () => controller.close() };
 }
 
-test("a device clipboard change is written to the PC clipboard", async () => {
-  const { host, written } = fakeHost();
+function flush(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+test("a device clipboard change different from the current PC clipboard is written to it", async () => {
+  const { host, written } = fakeHost("");
   const { stream, push, close } = fakeStream();
   const sync = createClipboardSync({ stream, host });
   const done = sync.start();
@@ -23,51 +42,58 @@ test("a device clipboard change is written to the PC clipboard", async () => {
   expect(written).toEqual(["copied on the phone"]);
 });
 
-test("a PC-to-device push's echo is suppressed once and does not bounce back to the PC clipboard, breaking the loop", async () => {
-  const { host, written } = fakeHost();
+test("a device value that already equals the current PC clipboard is never written (the echo check)", async () => {
+  const { host, written } = fakeHost("already this");
   const { stream, push, close } = fakeStream();
   const sync = createClipboardSync({ stream, host });
   const done = sync.start();
-
-  const sequence = sync.beginPush("pushed from pc");
-  expect(sequence).toBe(1n);
-  push("pushed from pc"); // the device echoing back exactly what we set
-  push("a later real device change"); // this one must still propagate
+  push("already this");
   close();
   await done;
-
-  expect(written).toEqual(["a later real device change"]);
+  expect(written).toEqual([]);
 });
 
-test("sequence numbers increment on every push, and two pushes in flight before either echo arrives are each independently suppressed", async () => {
-  const { host, written } = fakeHost();
+test("scrcpy-style echo check by exact reported sequence: paste foo to phone, copy bar on the PC, copy foo on the phone again -> PC ends up with foo", async () => {
+  // The PC clipboard already holds "foo" (what we just pushed to the phone via setClipboard).
+  const { host, written, setCurrent, current } = fakeHost("foo");
   const { stream, push, close } = fakeStream();
   const sync = createClipboardSync({ stream, host });
   const done = sync.start();
 
-  expect(sync.beginPush("first")).toBe(1n);
-  expect(sync.beginPush("second")).toBe(2n);
-  push("first");
-  push("second");
-  push("a genuine device change");
+  push("foo"); // the device echoing back exactly what was just set: matches, skipped
+  setCurrent("bar"); // the user copies "bar" on the PC, outside this app entirely
+  push("foo"); // a genuine new copy of "foo" on the device, now different from the PC's current "bar"
   close();
   await done;
 
-  expect(written).toEqual(["a genuine device change"]);
+  expect(written).toEqual(["foo"]);
+  expect(current()).toBe("foo");
 });
 
-test("a device change that does not match the pending push clears the pending flag and is written, not swallowed", async () => {
-  const { host, written } = fakeHost();
+test("beginPush still hands out increasing sequence numbers for the setClipboard control message", () => {
+  const { host } = fakeHost();
+  const sync = createClipboardSync({ stream: undefined, host });
+  expect(sync.beginPush("a")).toBe(1n);
+  expect(sync.beginPush("b")).toBe(2n);
+  expect(sync.beginPush("c")).toBe(3n);
+});
+
+test("no unbounded state: many pushes of the same content never make a later genuine device copy of it get swallowed", async () => {
+  const { host, written, setCurrent } = fakeHost("x");
   const { stream, push, close } = fakeStream();
   const sync = createClipboardSync({ stream, host });
   const done = sync.start();
 
-  sync.beginPush("expected echo");
-  push("something else entirely");
+  // Ten pushes of "x" in a row (as if the user pasted the same thing to the
+  // phone repeatedly); none of these leave any trace for later.
+  for (let i = 0; i < 10; i++) sync.beginPush("x");
+
+  setCurrent("something else"); // the PC clipboard moved on
+  push("x"); // the device now genuinely has "x" again, distinct from history
   close();
   await done;
 
-  expect(written).toEqual(["something else entirely"]);
+  expect(written).toEqual(["x"]);
 });
 
 test("start() with no stream resolves immediately instead of hanging", async () => {
@@ -77,7 +103,7 @@ test("start() with no stream resolves immediately instead of hanging", async () 
 });
 
 test("stop() cancels the drain so start() resolves without reading further", async () => {
-  const { host, written } = fakeHost();
+  const { host, written } = fakeHost("");
   const { stream, push } = fakeStream();
   const sync = createClipboardSync({ stream, host });
   const done = sync.start();
@@ -87,10 +113,6 @@ test("stop() cancels the drain so start() resolves without reading further", asy
   await done;
   expect(written).toEqual(["one"]);
 });
-
-function flush(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
 
 test("a write failure is logged, not thrown, and draining continues", async () => {
   const { stream, push, close } = fakeStream();
@@ -111,4 +133,25 @@ test("a write failure is logged, not thrown, and draining continues", async () =
   await done;
   expect(logs.some((l) => l.includes("clipboard busy"))).toBe(true);
   expect(written).toEqual(["ok-after"]);
+});
+
+test("a readText() failure is logged and treated as an empty current clipboard, not a crash", async () => {
+  const { stream, push, close } = fakeStream();
+  const logs: string[] = [];
+  const written: string[] = [];
+  const host: ClipboardHost = {
+    readText: async () => {
+      throw new Error("clipboard locked");
+    },
+    writeText: async (t) => {
+      written.push(t);
+    },
+  };
+  const sync = createClipboardSync({ stream, host, log: (l) => logs.push(l) });
+  const done = sync.start();
+  push("phone value");
+  close();
+  await done;
+  expect(logs.some((l) => l.includes("clipboard locked"))).toBe(true);
+  expect(written).toEqual(["phone value"]);
 });

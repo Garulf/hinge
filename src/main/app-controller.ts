@@ -1,9 +1,10 @@
 import { basename } from "node:path";
 import type { Adb } from "@yume-chan/adb";
-import type { AudioStreamInfo, ControlIntent, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
+import type { AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
 import type { MediaSink, MediaSource } from "./media-source";
-import { deviceStatus, pickDevice, type DeviceSummary } from "./transport";
+import { dedupeDevices, deviceStatus, pickDevice, transportOf, type DeviceSummary } from "./transport";
+import { pairNewDevice, switchDeviceToWifi, type WirelessDeps } from "./wireless";
 
 export interface PortLike {
   postMessage(msg: MainToRenderer, transfer: ArrayBuffer[]): void;
@@ -13,6 +14,21 @@ export interface PortLike {
 function withLogHint(status: SessionStatus, hint: string): SessionStatus {
   if (!hint || status.state !== "error") return status;
   return { ...status, message: `${status.message} ${hint}` };
+}
+
+/** A device command that rejects outright (rather than resolving with its own ok:false) still needs a same-shaped result to send back. */
+function errorResult(type: DeviceCommand["type"], message: string): DeviceCommandResult {
+  switch (type) {
+    case "list":
+      return { type, devices: [] };
+    case "pair":
+      return { type, ok: false, connectedAddress: null, message };
+    case "switch-to-wifi":
+      return { type, ok: false, address: null, message };
+    case "connect":
+    case "disconnect":
+      return { type, ok: false, message };
+  }
 }
 
 /**
@@ -82,6 +98,14 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
       source.transfer?.(msg.paths);
       return;
     }
+    if (msg.kind === "device-command") {
+      if (!source.handleDeviceCommand) return;
+      source
+        .handleDeviceCommand(msg.command)
+        .then((result) => post({ kind: "device-command-result", id: msg.id, result }))
+        .catch((e) => post({ kind: "device-command-result", id: msg.id, result: errorResult(msg.command.type, String(e)) }));
+      return;
+    }
     source.control(msg.intent);
   });
 
@@ -122,6 +146,7 @@ export class DeviceSource implements MediaSource {
   #sessionRetryAbort: AbortController | null = null;
   #lastSessionError: string | null = null;
   #runToken = 0;
+  #tcpReconnectAbort: AbortController | null = null;
 
   constructor(
     private readonly opts: {
@@ -134,6 +159,10 @@ export class DeviceSource implements MediaSource {
       recordSink?: (sink: MediaSink) => MediaSink;
       /** Started for every connected live session (not only while recording) and stopped with it. */
       foldMonitor?: FoldMonitorStarter;
+      /** Absent in contexts with no adb server access (e.g. replay): TCP reconnect and device-panel commands are then both unavailable. */
+      wireless?: WirelessDeps;
+      /** Fired whenever a device is chosen to connect to (automatic pick or chooseDevice()), so the caller can remember it as the last device. */
+      onConnected?: (serial: string) => void;
     },
   ) {
     this.#preferredSerial = opts.preferredSerial ?? null;
@@ -153,8 +182,55 @@ export class DeviceSource implements MediaSource {
     this.#session?.transfer?.(localPaths);
   }
 
+  /** Manual device choice for a future device panel: pins the serial and switches the session to it immediately if it is already listed. */
+  chooseDevice(serial: string): void {
+    if (this.#stopped) return;
+    this.#cancelTcpReconnect();
+    this.#preferredSerial = serial;
+    const device = this.#lastDevices.find((d) => d.serial === serial);
+    if (!device) return;
+    const status = deviceStatus(device);
+    if (status) {
+      this.#teardownSession();
+      this.#sink?.status(status);
+      return;
+    }
+    if (this.#sessionSerial === device.serial) return;
+    this.#teardownSession();
+    this.#connect(device);
+  }
+
+  async handleDeviceCommand(command: DeviceCommand): Promise<DeviceCommandResult> {
+    switch (command.type) {
+      case "list":
+        return { type: "list", devices: dedupeDevices(this.#lastDevices, this.#sessionSerial) };
+      case "pair": {
+        if (!this.opts.wireless) return { type: "pair", ok: false, connectedAddress: null, message: "wireless is unavailable" };
+        const result = await pairNewDevice(this.opts.wireless, command.hostPort, command.code);
+        if (result.connectedAddress) this.chooseDevice(result.connectedAddress);
+        return { type: "pair", ok: true, connectedAddress: result.connectedAddress };
+      }
+      case "connect":
+        this.chooseDevice(command.serial);
+        return { type: "connect", ok: true };
+      case "switch-to-wifi": {
+        if (!this.opts.wireless) return { type: "switch-to-wifi", ok: false, address: null, message: "wireless is unavailable" };
+        const adb = await this.opts.host.open(command.serial);
+        const address = await switchDeviceToWifi(this.opts.wireless, adb);
+        return { type: "switch-to-wifi", ok: true, address };
+      }
+      case "disconnect": {
+        if (!this.opts.wireless) return { type: "disconnect", ok: false, message: "wireless is unavailable" };
+        if (transportOf(command.serial) === "usb") return { type: "disconnect", ok: false, message: "cannot disconnect a USB-connected device this way" };
+        await this.opts.wireless.disconnect(command.serial);
+        return { type: "disconnect", ok: true };
+      }
+    }
+  }
+
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#cancelTcpReconnect();
     this.#reconnectAbort?.abort();
     this.#reconnectAbort = null;
     this.#sessionRetryAbort?.abort();
@@ -243,13 +319,54 @@ export class DeviceSource implements MediaSource {
     if (status) {
       this.#teardownSession();
       this.#sink.status(status);
+      if (status.state === "no-device") this.#maybeBeginTcpReconnect();
       return;
     }
+    this.#cancelTcpReconnect();
     if (!device) return;
     if (this.#sessionSerial === device.serial) return;
     this.#teardownSession();
     this.#preferredSerial = device.serial;
     this.#connect(device);
+  }
+
+  /**
+   * A USB device dropping just means "unplugged"; adb's own tracking picks
+   * it back up when replugged. A TCP/mDNS device dropping means the phone
+   * left adb's connected-device list entirely (Wi-Fi hiccup, phone asleep):
+   * nothing will bring it back without an explicit `wireless.connect`,
+   * which this retries on a backoff until it succeeds or the device list
+   * changes again (a real change, a manual chooseDevice(), or stop()).
+   */
+  #maybeBeginTcpReconnect(): void {
+    if (this.#stopped || this.#tcpReconnectAbort || !this.opts.wireless) return;
+    const serial = this.#preferredSerial;
+    if (!serial || transportOf(serial) === "usb") return;
+    const controller = new AbortController();
+    this.#tcpReconnectAbort = controller;
+    void this.#tcpReconnectLoop(serial, controller);
+  }
+
+  async #tcpReconnectLoop(address: string, controller: AbortController): Promise<void> {
+    const delay = this.opts.delay ?? defaultDelay;
+    let attempt = 0;
+    while (!this.#stopped && !controller.signal.aborted) {
+      await delay(SESSION_RETRY_DELAYS_MS[Math.min(attempt, SESSION_RETRY_DELAYS_MS.length - 1)], controller.signal);
+      if (this.#stopped || controller.signal.aborted) break;
+      try {
+        await this.opts.wireless!.connect(address);
+        break; // adb's own device tracking picks the reconnected device up from here
+      } catch (e) {
+        this.opts.log?.(`wireless reconnect attempt failed: ${String(e)}`);
+        attempt++;
+      }
+    }
+    if (this.#tcpReconnectAbort === controller) this.#tcpReconnectAbort = null;
+  }
+
+  #cancelTcpReconnect(): void {
+    this.#tcpReconnectAbort?.abort();
+    this.#tcpReconnectAbort = null;
   }
 
   #teardownSession(): void {
@@ -270,6 +387,7 @@ export class DeviceSource implements MediaSource {
   #connect(device: DeviceSummary): void {
     this.#sessionSerial = device.serial;
     this.#sessionEverStreamed = false;
+    this.opts.onConnected?.(device.serial);
     const run = ++this.#runToken;
     void this.#run(device, run);
   }

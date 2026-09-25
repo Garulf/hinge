@@ -1,5 +1,5 @@
 import type { PostureReading } from "../shared/posture";
-import type { AudioStreamInfo, ControlIntent, SessionStatus, TransferProgress, VideoStreamInfo, WireAudioPacket, WireMediaPacket } from "../shared/wire";
+import type { AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, SessionStatus, TransferProgress, VideoStreamInfo, WireAudioPacket, WireMediaPacket } from "../shared/wire";
 
 export interface MediaSink {
   videoStart(info: VideoStreamInfo): void;
@@ -21,6 +21,8 @@ export interface MediaSource {
   stop(): Promise<void>;
   /** Absent in contexts with nothing to push files to (e.g. the probe mode or replay). */
   transfer?(localPaths: string[]): void;
+  /** Absent in contexts with no adb server access (e.g. replay); device listing, pairing and switching are then all unavailable. */
+  handleDeviceCommand?(command: DeviceCommand): Promise<DeviceCommandResult>;
   /**
    * Resolves when the source ends on its own (stream closed, retries exhausted),
    * as opposed to being stopped explicitly. Absent for sources that never end

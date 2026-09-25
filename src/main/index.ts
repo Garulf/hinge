@@ -16,8 +16,10 @@ import { teeToRecording } from "./recorder";
 import { ReplaySource } from "./replay-source";
 import { ScrcpySession } from "./scrcpy-session";
 import { DEFAULT_STREAM_SETTINGS } from "./scrcpy-init";
+import { loadSettings } from "./settings";
 import { vendorPaths } from "./vendor-paths";
 import { createPhoneWindow } from "./window";
+import { createWirelessDeps } from "./wireless";
 
 function reportAndExit(e: unknown): never {
   const report = reportStartupError(e, { packaged: app.isPackaged, platform: process.platform });
@@ -92,6 +94,12 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
   const host = new AdbHost({ adbPath: paths.adb });
   await host.ensureServer();
 
+  const settings = await loadSettings(join(app.getPath("userData"), "settings.json"));
+  const wireless = createWirelessDeps(host.client);
+  const onConnected = (serial: string): void => {
+    void settings.save({ lastDevice: serial });
+  };
+
   const clipboardHost: ClipboardHost = { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) };
   const createSession: SessionFactory = (device, adb) =>
     new ScrcpySession({
@@ -105,7 +113,15 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
     });
 
   if (!opts.record) {
-    const source = new DeviceSource({ host, preferredSerial: opts.serial, log, createSession, foldMonitor: startFoldMonitor });
+    const source = new DeviceSource({
+      host,
+      preferredSerial: opts.serial ?? settings.current.lastDevice,
+      log,
+      createSession,
+      foldMonitor: startFoldMonitor,
+      wireless,
+      onConnected,
+    });
     return { source, closeRecording: async () => {} };
   }
 
@@ -123,11 +139,13 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
   const writer = createQueuedWriter(opened.stream);
   const source = new DeviceSource({
     host,
-    preferredSerial: opts.serial,
+    preferredSerial: opts.serial ?? settings.current.lastDevice,
     log,
     createSession,
     recordSink: (sink) => teeToRecording(sink, writer, Date.now, log),
     foldMonitor: startFoldMonitor,
+    wireless,
+    onConnected,
   });
   return { source, closeRecording: closeRecordStream(opened.stream, writer) };
 }

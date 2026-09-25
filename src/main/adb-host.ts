@@ -41,6 +41,7 @@ function toDeviceSummary(device: AdbServerClientType.Device): DeviceSummary {
     serial: device.serial,
     state: device.state,
     model: device.model ?? null,
+    device: device.device ?? null,
     transport: transportOf(device.serial),
   };
 }

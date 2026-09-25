@@ -61,6 +61,7 @@ export async function waitForDevice(
       serial: d.serial,
       state: d.state,
       model: d.model ?? null,
+      device: null,
       transport: transportOf(d.serial),
     }));
     const device = pickDevice(summaries, preferredSerial);

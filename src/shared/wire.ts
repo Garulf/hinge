@@ -38,6 +38,31 @@ export type ControlIntent =
 
 export interface PostureMessage { kind: "posture"; reading: PostureReading }
 
+export type TransportKind = "usb" | "tcp" | "mdns";
+
+/** device is Tango's Device.device (the codename), used with model to dedupe the same phone listed twice (ip:port and mDNS serial). */
+export interface DeviceSummary {
+  serial: string;
+  state: string;
+  model: string | null;
+  device: string | null;
+  transport: TransportKind;
+}
+
+export type DeviceCommand =
+  | { type: "list" }
+  | { type: "pair"; hostPort: string; code: string }
+  | { type: "connect"; serial: string }
+  | { type: "switch-to-wifi"; serial: string }
+  | { type: "disconnect"; serial: string };
+
+export type DeviceCommandResult =
+  | { type: "list"; devices: DeviceSummary[] }
+  | { type: "pair"; ok: boolean; connectedAddress: string | null; message?: string }
+  | { type: "connect"; ok: boolean; message?: string }
+  | { type: "switch-to-wifi"; ok: boolean; address: string | null; message?: string }
+  | { type: "disconnect"; ok: boolean; message?: string };
+
 export type TransferKind = "install" | "push";
 export type TransferState = "queued" | "running" | "done" | "error" | "cancelled";
 
@@ -61,13 +86,15 @@ export type MainToRenderer =
   | { kind: "audio-end"; reason?: "unsupported" }
   | { kind: "status"; status: SessionStatus }
   | { kind: "transfer-progress"; progress: TransferProgress }
+  | { kind: "device-command-result"; id: string; result: DeviceCommandResult }
   | PostureMessage;
 
 export type RendererToMain =
   | { kind: "ready" }
   | { kind: "control"; intent: ControlIntent }
   /** Local PC file paths, already resolved in the preload via webUtils.getPathForFile; main decides install vs. push by extension. */
-  | { kind: "drop-files"; paths: string[] };
+  | { kind: "drop-files"; paths: string[] }
+  | { kind: "device-command"; id: string; command: DeviceCommand };
 
 type LooseMediaPacket =
   | { type: "configuration"; data: Uint8Array }

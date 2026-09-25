@@ -16,6 +16,17 @@ from fold7_params import P  # noqa: E402
 
 REQUIRED_NODES = ["Root", "FixedHalf", "Hinge", "CoverHalf", "CoverScreen", "InnerScreen", "Rig"]
 REQUIRED_BONES = ["bone_fixed", "bone_cover"]
+EXPECTED_PARENTS = {
+    "FixedHalf": "Root",
+    "Hinge": "Root",
+    "CoverHalf": "Hinge",
+    "CoverScreen": "CoverHalf",
+    "InnerScreen": "FixedHalf",
+    "HingeFill": "FixedHalf",
+    "Rig": "Root",
+    "bone_fixed": "Rig",
+    "bone_cover": "bone_fixed",
+}
 REQUIRED_MATERIALS = [
     "frame", "back_glass", "hinge_spine", "camera_island", "lens_glass",
     "screen_border", "screen_cover", "screen_inner", "button", "port",
@@ -242,6 +253,16 @@ def check_structure(model, report):
     report.check("Hinge rest rotation is 180 deg about Y", about_y, fmt_vec(hinge_q))
 
 
+def check_parents(model, report):
+    for child, expected in EXPECTED_PARENTS.items():
+        if child not in model.names:
+            report.check(f"parent of {child}", False, "node missing")
+            continue
+        parent = model.parent.get(model.names[child])
+        actual = model.gltf.nodes[parent].name if parent is not None else None
+        report.check(f"parent of {child}", actual == expected, f"{actual} (expected {expected})")
+
+
 def check_materials(model, report):
     names = {m.name for m in model.gltf.materials}
     missing = [m for m in REQUIRED_MATERIALS if m not in names]
@@ -372,6 +393,7 @@ def main():
     model = Model(path)
     report = Report()
     check_structure(model, report)
+    check_parents(model, report)
     check_materials(model, report)
     check_extras(model, report)
     check_budget(model, path, report)

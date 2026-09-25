@@ -31,7 +31,10 @@ screen. The file is in the rest pose, fully open (fold angle 180 degrees).
 
 - `Root` > `FixedHalf` (camera half, X > 0, never moves), `Root` > `Hinge` > `CoverHalf`
   (X < 0 when open, carries `CoverScreen`), `Root` > `Rig` (bones `bone_fixed`, `bone_cover`).
-  The exporter places the skinned `InnerScreen` and `HingeFill` under `Rig`.
+  The skinned `InnerScreen` and `HingeFill` are children of `FixedHalf`; their
+  skin joints are `bone_fixed` (child of `Rig`) and `bone_cover` (child of `bone_fixed`).
+  `check_glb.py` asserts these parents. Blender's glTF importer moves skinned
+  meshes under the armature on import, so a re-imported scene differs from the file.
 - Fold angle `a` (0 closed, 100 half open, 180 open): set the full rotation of
   both `Hinge` and `bone_cover` to a rotation of `-a` about +Y, for example
   `q.setFromAxisAngle(Y, -a)` on each. Both nodes sit on the hinge axis and share

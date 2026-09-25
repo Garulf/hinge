@@ -1,3 +1,5 @@
+import type { PostureReading } from "./posture";
+
 export type WireMediaPacket =
   | { type: "configuration"; data: Uint8Array }
   | { type: "data"; keyframe: boolean | null; pts: number | null; data: Uint8Array }
@@ -19,13 +21,17 @@ export type ControlIntent =
   | { type: "scroll"; x: number; y: number; videoWidth: number; videoHeight: number; scrollX: number; scrollY: number; buttons: number }
   | { type: "key"; action: "down" | "up"; keyCode: number; repeat: number; metaState: number }
   | { type: "text"; text: string }
-  | { type: "back-or-screen-on"; action: "down" | "up" };
+  | { type: "back-or-screen-on"; action: "down" | "up" }
+  | { type: "reset-video" };
+
+export interface PostureMessage { kind: "posture"; reading: PostureReading }
 
 export type MainToRenderer =
   | { kind: "video-start"; info: VideoStreamInfo }
   | { kind: "video-packet"; packet: WireMediaPacket }
   | { kind: "video-end" }
-  | { kind: "status"; status: SessionStatus };
+  | { kind: "status"; status: SessionStatus }
+  | PostureMessage;
 
 export type RendererToMain =
   | { kind: "ready" }

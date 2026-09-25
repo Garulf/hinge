@@ -24,6 +24,7 @@ export interface ControllerLike {
   injectKeyCode(m: { action: number; keyCode: number; repeat: number; metaState: number }): Promise<void>;
   injectText(text: string): Promise<void>;
   backOrScreenOn(action: number): Promise<void>;
+  resetVideo(): Promise<void>;
 }
 
 const TOUCH_ACTION: Record<TouchAction, number> = {
@@ -72,5 +73,7 @@ export function applyIntent(c: ControllerLike, intent: ControlIntent): Promise<v
       return c.injectText(intent.text);
     case "back-or-screen-on":
       return c.backOrScreenOn(KEY_ACTION[intent.action]);
+    case "reset-video":
+      return c.resetVideo();
   }
 }

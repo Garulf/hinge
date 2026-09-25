@@ -20,4 +20,5 @@ test("packet data is copied into an owned buffer so it can be transferred", () =
 test("session packets and non-packet messages carry no transferables", () => {
   expect(transferablesOf({ kind: "video-packet", packet: { type: "session", width: 1, height: 2, isClientResize: false } })).toEqual([]);
   expect(transferablesOf({ kind: "video-end" })).toEqual([]);
+  expect(transferablesOf({ kind: "posture", reading: { stateId: 3, posture: "open", rotation: 0 } })).toEqual([]);
 });

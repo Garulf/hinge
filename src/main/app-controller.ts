@@ -3,7 +3,6 @@ import type { Adb } from "@yume-chan/adb";
 import type { ControlIntent, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
 import type { MediaSink, MediaSource } from "./media-source";
-import type { PostureSample } from "./posture-sampler";
 import { deviceStatus, pickDevice, type DeviceSummary } from "./transport";
 
 export interface PortLike {
@@ -45,6 +44,7 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
     },
     videoEnd: () => post({ kind: "video-end" }),
     status: (status) => post({ kind: "status", status: withLogHint(status, logHint) }),
+    posture: (reading) => post({ kind: "posture", reading }),
   };
 
   let started = false;
@@ -76,10 +76,11 @@ export interface DeviceWatcher {
 
 export type SessionFactory = (device: DeviceSummary, adb: Adb) => MediaSource;
 
-/** Kept as a separate type from posture-sampler.ts's startSampler so DeviceSource stays testable without a real adb. */
-export type PostureStarter = (
+/** Same shape as fold-monitor.ts's startFoldMonitor, kept as its own type here so DeviceSource stays testable without a real adb. */
+export type FoldMonitorStarter = (
   adb: Adb,
-  onSample: (sample: PostureSample) => void,
+  sink: MediaSink,
+  log: (line: string) => void,
 ) => Promise<() => Promise<void>>;
 
 export class DeviceSource implements MediaSource {
@@ -107,8 +108,8 @@ export class DeviceSource implements MediaSource {
       delay?: (ms: number, signal: AbortSignal) => Promise<void>;
       /** Wraps the sink once at start(), e.g. to tee video and posture events into a recording. */
       recordSink?: (sink: MediaSink) => MediaSink;
-      /** Started for each connected session, only when the (possibly wrapped) sink defines postureLine. */
-      posture?: PostureStarter;
+      /** Started for every connected live session (not only while recording) and stopped with it. */
+      foldMonitor?: FoldMonitorStarter;
     },
   ) {
     this.#preferredSerial = opts.preferredSerial ?? null;
@@ -260,11 +261,11 @@ export class DeviceSource implements MediaSource {
     try {
       const adb = await this.opts.host.open(device.serial);
       if (this.#stopped || this.#sessionSerial !== device.serial) return;
-      if (sink.postureLine && this.opts.posture) {
+      if (this.opts.foldMonitor) {
         try {
-          this.#stopPosture = await this.opts.posture(adb, (sample) => sink.postureLine?.(sample.lines.join(" | ")));
+          this.#stopPosture = await this.opts.foldMonitor(adb, sink, this.opts.log ?? (() => {}));
         } catch (e) {
-          this.opts.log?.(`posture sampler failed to start: ${String(e)}`);
+          this.opts.log?.(`fold monitor failed to start: ${String(e)}`);
         }
         if (this.#stopped || this.#sessionSerial !== device.serial) {
           await this.#stopPostureSampler();

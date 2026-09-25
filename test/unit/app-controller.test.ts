@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { bindSource, DeviceSource, type DeviceWatcher, type PortLike, type PostureStarter } from "../../src/main/app-controller";
+import { bindSource, DeviceSource, type DeviceWatcher, type FoldMonitorStarter, type PortLike } from "../../src/main/app-controller";
 import type { MediaSource, MediaSink } from "../../src/main/media-source";
 import type { ControlIntent, MainToRenderer, RendererToMain, SessionStatus } from "../../src/shared/wire";
 import type { DeviceSummary } from "../../src/main/transport";
@@ -723,26 +723,24 @@ test("wraps the sink once via recordSink so every session's session.start() sees
   expect(typeof sessionSinks[0].postureLine).toBe("function");
 });
 
-test("starts the posture sampler when a session connects and stops it when that session is torn down", async () => {
+test("starts the fold monitor when a session connects (even without recording) and stops it when that session is torn down", async () => {
   const watcher = fakeWatcher();
   let starts = 0;
   let stops = 0;
   let seenAdb: unknown;
-  const state: { deliver: Parameters<PostureStarter>[1] | null } = { deliver: null };
-  const posture: PostureStarter = async (adb, onSample) => {
+  let seenSink: MediaSink | undefined;
+  const foldMonitor: FoldMonitorStarter = async (adb, sink) => {
     starts++;
     seenAdb = adb;
-    state.deliver = onSample;
+    seenSink = sink;
     return async () => {
       stops++;
     };
   };
-  const postureLines: string[] = [];
   const source = new DeviceSource({
     host: watcher.host,
     createSession: () => new FakeSession(),
-    recordSink: (sink) => ({ ...sink, postureLine: (line) => postureLines.push(line) }),
-    posture,
+    foldMonitor,
   });
   const openedAdb = { marker: "adb" };
   watcher.host.open = async () => openedAdb as never;
@@ -753,46 +751,45 @@ test("starts the posture sampler when a session connects and stops it when that 
   await flush();
   expect(starts).toBe(1);
   expect(seenAdb).toBe(openedAdb);
-
-  state.deliver?.({ tick: 1, lines: ["OPENED", "SurfaceOrientation: 1"] });
-  expect(postureLines).toEqual(["OPENED | SurfaceOrientation: 1"]);
+  expect(seenSink).toBe(sink);
 
   watcher.emit([]);
   await flush();
   expect(stops).toBe(1);
 });
 
-test("does not start the posture sampler when the sink has no postureLine (no recording)", async () => {
+test("the fold monitor sees the recording-wrapped sink when recordSink is set", async () => {
   const watcher = fakeWatcher();
-  let starts = 0;
-  const posture: PostureStarter = async () => {
-    starts++;
+  let seenSink: MediaSink | undefined;
+  const foldMonitor: FoldMonitorStarter = async (_adb, sink) => {
+    seenSink = sink;
     return async () => {};
   };
   const source = new DeviceSource({
     host: watcher.host,
     createSession: () => new FakeSession(),
-    posture,
+    recordSink: (sink) => ({ ...sink, postureLine: () => {} }),
+    foldMonitor,
   });
   const { sink } = fakeSink();
   await source.start(sink);
 
   watcher.emit([device("USB1")]);
   await flush();
-  expect(starts).toBe(0);
+  expect(seenSink).not.toBe(sink);
+  expect(typeof seenSink?.postureLine).toBe("function");
 });
 
-test("a posture sampler that fails to start is best-effort: mirroring still starts and the failure is logged, not shown as an error", async () => {
+test("a fold monitor that fails to start is best-effort: mirroring still starts and the failure is logged, not shown as an error", async () => {
   const watcher = fakeWatcher();
   const logs: string[] = [];
-  const posture: PostureStarter = async () => {
+  const foldMonitor: FoldMonitorStarter = async () => {
     throw new Error("shell spawn failed");
   };
   const source = new DeviceSource({
     host: watcher.host,
     createSession: () => new FakeSession(),
-    recordSink: (sink) => ({ ...sink, postureLine: () => {} }),
-    posture,
+    foldMonitor,
     log: (line) => logs.push(line),
   });
   const { sink, statuses } = fakeSink();
@@ -802,20 +799,19 @@ test("a posture sampler that fails to start is best-effort: mirroring still star
   await flush();
 
   expect(statuses.some((s) => s.state === "error")).toBe(false);
-  expect(logs.some((l) => l.includes("posture sampler failed to start") && l.includes("shell spawn failed"))).toBe(true);
+  expect(logs.some((l) => l.includes("fold monitor failed to start") && l.includes("shell spawn failed"))).toBe(true);
 });
 
-test("stop() stops a running posture sampler", async () => {
+test("stop() stops a running fold monitor", async () => {
   const watcher = fakeWatcher();
   let stops = 0;
-  const posture: PostureStarter = async () => async () => {
+  const foldMonitor: FoldMonitorStarter = async () => async () => {
     stops++;
   };
   const source = new DeviceSource({
     host: watcher.host,
     createSession: () => new FakeSession(),
-    recordSink: (sink) => ({ ...sink, postureLine: () => {} }),
-    posture,
+    foldMonitor,
   });
   const { sink } = fakeSink();
   await source.start(sink);

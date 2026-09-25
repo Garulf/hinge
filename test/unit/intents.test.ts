@@ -9,6 +9,7 @@ function fake() {
     injectKeyCode: async (m) => { calls.push(["key", m]); },
     injectText: async (t) => { calls.push(["text", t]); },
     backOrScreenOn: async (a) => { calls.push(["back", a]); },
+    resetVideo: async () => { calls.push(["reset-video", undefined]); },
   };
   return { c, calls };
 }
@@ -36,4 +37,10 @@ test("key, text, scroll and back map to their controller calls", async () => {
     ["scroll", { pointerX: 1, pointerY: 2, videoWidth: 3, videoHeight: 4, scrollX: 0, scrollY: -1, buttons: 0 }],
     ["back", 0],
   ]);
+});
+
+test("reset-video calls the controller's resetVideo", async () => {
+  const { c, calls } = fake();
+  await applyIntent(c, { type: "reset-video" });
+  expect(calls).toEqual([["reset-video", undefined]]);
 });

@@ -41,7 +41,8 @@ interface StdoutLike {
   stdout: ReadableStream<Uint8Array>;
 }
 
-function stdoutOf(process: unknown): ReadableStream<Uint8Array> {
+/** Shared with fold-monitor.ts's one-shot `print-states` run: adb.subprocess spawn() results expose their output as either `stdout` (shellProtocol) or `output` (noneProtocol). */
+export function stdoutOf(process: unknown): ReadableStream<Uint8Array> {
   if (process !== null && typeof process === "object" && "stdout" in process) {
     return (process as StdoutLike).stdout;
   }

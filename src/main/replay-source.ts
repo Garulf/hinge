@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { decodeRecording, type RecordedEvent } from "../shared/recording";
 import type { ControlIntent } from "../shared/wire";
+import { PostureStream, STATES_MARKER } from "./fold-monitor";
 import type { MediaSink, MediaSource } from "./media-source";
 
 export interface Clock {
@@ -15,6 +16,7 @@ export class ReplaySource implements MediaSource {
   private readonly loop: boolean;
   private sink: MediaSink | null = null;
   private timers: unknown[] = [];
+  private readonly postureStream = new PostureStream((reading) => this.sink?.posture?.(reading));
 
   constructor(
     private readonly file: string,
@@ -67,6 +69,10 @@ export class ReplaySource implements MediaSource {
   private dispatch(sink: MediaSink, event: RecordedEvent): void {
     if (event.kind === "video-start") sink.videoStart(event.info);
     else if (event.kind === "video-packet") sink.videoPacket(event.packet);
-    else sink.postureLine?.(event.line);
+    else {
+      sink.postureLine?.(event.line);
+      if (event.line.startsWith(STATES_MARKER)) this.postureStream.statesLine(event.line);
+      else this.postureStream.sample(event.line.split(" | "));
+    }
   }
 }

@@ -8,7 +8,7 @@ import { createLogger, type Logger } from "./logger";
 import type { MediaSink, MediaSource } from "./media-source";
 import { resolveOutputPath } from "./output-path";
 import { createQueuedWriter } from "./queued-writer";
-import { startSampler } from "./posture-sampler";
+import { startFoldMonitor } from "./fold-monitor";
 import { runProbe } from "./probe";
 import { recordProgressHtml, recordResultHtml } from "./probe-window";
 import { teeToRecording } from "./recorder";
@@ -100,7 +100,7 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
     });
 
   if (!opts.record) {
-    const source = new DeviceSource({ host, preferredSerial: opts.serial, log, createSession, posture: startSampler });
+    const source = new DeviceSource({ host, preferredSerial: opts.serial, log, createSession, foldMonitor: startFoldMonitor });
     return { source, closeRecording: async () => {} };
   }
 
@@ -122,7 +122,7 @@ async function buildSource(opts: { serial: string | null; replay: string | null;
     log,
     createSession,
     recordSink: (sink) => teeToRecording(sink, writer, Date.now, log),
-    posture: startSampler,
+    foldMonitor: startFoldMonitor,
   });
   return { source, closeRecording: closeRecordStream(opened.stream, writer) };
 }

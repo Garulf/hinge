@@ -1,3 +1,4 @@
+import type { PostureReading } from "../shared/posture";
 import type { ControlIntent, SessionStatus, VideoStreamInfo, WireMediaPacket } from "../shared/wire";
 
 export interface MediaSink {
@@ -6,6 +7,7 @@ export interface MediaSink {
   videoEnd(): void;
   status(status: SessionStatus): void;
   postureLine?(line: string): void;
+  posture?(reading: PostureReading): void;
 }
 
 export interface MediaSource {

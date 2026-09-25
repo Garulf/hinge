@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { ReplaySource, type Clock } from "../../src/main/replay-source";
 import type { MediaSink } from "../../src/main/media-source";
+import type { PostureReading } from "../../src/shared/posture";
 import type { RecordedEvent } from "../../src/shared/recording";
 
 class FakeClock implements Clock {
@@ -63,4 +64,33 @@ test("control intents are recorded, not dropped", async () => {
   const src = new ReplaySource("f.hrec", events, { clock: new FakeClock() });
   src.control({ type: "text", text: "hi" });
   expect(src.controls).toEqual([{ type: "text", text: "hi" }]);
+});
+
+test("feeds recorded posture lines through a PostureStream: a states line sets the table, other lines are samples split on ' | '", async () => {
+  const postureEvents: RecordedEvent[] = [
+    { t: 0, kind: "video-start", info: { codecId: 1, width: 10, height: 20, deviceName: null } },
+    { t: 0, kind: "posture-line", line: "@states 0=CLOSED,1=TENT,2=HALF_OPENED,3=OPENED" },
+    { t: 10, kind: "posture-line", line: "3 | mRotation=0" },
+    { t: 20, kind: "posture-line", line: "2 | mRotation=0" },
+  ];
+  const clock = new FakeClock();
+  const src = new ReplaySource("f.hrec", postureEvents, { clock });
+  const postures: PostureReading[] = [];
+  const rawLines: string[] = [];
+  const sink: MediaSink = {
+    videoStart: () => {},
+    videoPacket: () => {},
+    videoEnd: () => {},
+    status: () => {},
+    postureLine: (l) => rawLines.push(l),
+    posture: (r) => postures.push(r),
+  };
+  await src.start(sink);
+  clock.advance(20);
+
+  expect(rawLines).toEqual(["@states 0=CLOSED,1=TENT,2=HALF_OPENED,3=OPENED", "3 | mRotation=0", "2 | mRotation=0"]);
+  expect(postures).toEqual([
+    { stateId: 3, posture: "open", rotation: 0 },
+    { stateId: 2, posture: "half", rotation: 0 },
+  ]);
 });

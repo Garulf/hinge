@@ -19,7 +19,24 @@ const SEGMENTS = [
   { w: 1092, h: 984, secs: 1, label: "INNER LAND" },
 ];
 
-const POSTURE_BETWEEN_SEGMENTS = ["synthetic: OPENED", "synthetic: ROTATION 1"];
+const STATES_LINE = "@states 0=CLOSED,1=TENT,2=HALF_OPENED,3=OPENED,4=CONCURRENT_INNER_DEFAULT,5=CONCURRENT_OUTER_DEFAULT";
+
+// Posture lines emitted just before each segment starts, matching the M0
+// probe timeline (opening walks 0 -> 1 -> 2 -> 3 within about a second, the
+// stream switching to the inner panel size at HALF_OPENED). offsetMs is
+// relative to the segment's own start time.
+const POSTURE_BEFORE_SEGMENT = [
+  [
+    { offsetMs: 0, line: STATES_LINE },
+    { offsetMs: 0, line: "0 | mRotation=0 | Physical size: 1080x2520" },
+  ],
+  [
+    { offsetMs: 0, line: "1 | mRotation=0 | Physical size: 1080x2520" },
+    { offsetMs: 150, line: "2 | mRotation=0 | Physical size: 1968x2184" },
+    { offsetMs: 300, line: "3 | mRotation=0 | Physical size: 1968x2184" },
+  ],
+  [{ offsetMs: 0, line: "3 | mRotation=1 | Physical size: 1968x2184" }],
+];
 
 function drawtextIsAvailable() {
   const filters = execFileSync(FFMPEG, ["-hide_banner", "-filters"], { encoding: "utf8" });
@@ -65,6 +82,11 @@ function buildEvents() {
   for (let segIndex = 0; segIndex < SEGMENTS.length; segIndex++) {
     const seg = SEGMENTS[segIndex];
     console.log(`rendering segment ${seg.label} (${seg.w}x${seg.h}, ${seg.secs}s)`);
+
+    for (const { offsetMs, line } of POSTURE_BEFORE_SEGMENT[segIndex]) {
+      events.push({ t: t + offsetMs, kind: "posture-line", line });
+    }
+
     const rawStream = renderSegment(seg, useDrawtext);
     const accessUnits = groupAccessUnits(splitNalUnits(rawStream));
 
@@ -89,10 +111,6 @@ function buildEvents() {
       });
       frameIndex += 1;
       t += FRAME_MS;
-    }
-
-    if (segIndex < SEGMENTS.length - 1) {
-      events.push({ t, kind: "posture-line", line: POSTURE_BETWEEN_SEGMENTS[segIndex] });
     }
   }
 

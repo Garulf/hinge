@@ -3,6 +3,7 @@ import { teeToRecording } from "../../src/main/recorder";
 import { createQueuedWriter, type WritableLike } from "../../src/main/queued-writer";
 import { decodeRecording, RECORDING_MAGIC } from "../../src/shared/recording";
 import type { MediaSink } from "../../src/main/media-source";
+import type { PostureReading } from "../../src/shared/posture";
 import type { SessionStatus } from "../../src/shared/wire";
 
 function fakeStream(): WritableLike & { chunks: Uint8Array[]; error: (e: Error) => void } {
@@ -84,4 +85,24 @@ test("a stream error posts a sticky error status once, logs it, and drops furthe
   // No further bytes are written to the recording stream after the error.
   sink.videoPacket({ type: "data", keyframe: false, pts: 2, data: new Uint8Array([9]) });
   expect(stream.chunks.length).toBe(chunksBeforeError);
+});
+
+test("forwards posture readings to the inner sink without recording them (only the raw postureLine text is persisted)", () => {
+  const stream = fakeStream();
+  const writer = createQueuedWriter(stream);
+  const postures: PostureReading[] = [];
+  const inner: MediaSink = {
+    videoStart() {},
+    videoPacket() {},
+    videoEnd() {},
+    status() {},
+    postureLine() {},
+    posture: (r) => postures.push(r),
+  };
+  const sink = teeToRecording(inner, writer, () => 0);
+  const reading: PostureReading = { stateId: 3, posture: "open", rotation: 0 };
+  sink.posture!(reading);
+
+  expect(postures).toEqual([reading]);
+  expect(stream.chunks).toEqual([]);
 });

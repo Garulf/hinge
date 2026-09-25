@@ -57,5 +57,10 @@ export function teeToRecording(sink: MediaSink, writer: QueuedWriter, now: () =>
       record((t) => ({ t, kind: "posture-line", line }));
       sink.postureLine?.(line);
     },
+    posture(reading) {
+      // Not itself recorded: the raw postureLine text is what's persisted,
+      // and a replay reparses it back into the same readings.
+      sink.posture?.(reading);
+    },
   };
 }

@@ -42,7 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
 /**
  * Keyed by the version a stored file reports; each function takes that
  * version's shape and returns the next version's, so `migrate` can chain them
- * up to `currentVersion`. Empty until a real M6+ migration is needed.
+ * up to `currentVersion`. Empty: there is only one settings version so far.
  */
 export type MigrationMap = Record<number, (data: Record<string, unknown>) => Record<string, unknown>>;
 

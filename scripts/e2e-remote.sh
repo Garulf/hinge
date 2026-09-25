@@ -41,7 +41,13 @@ case "$timeout" in
 esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-remote_dir="hinge-e2e"
+remote_dir="${HINGE_REMOTE_DIR:-hinge-e2e}"
+case "$remote_dir" in
+  '' | *[!A-Za-z0-9._-]* | .*)
+    echo "HINGE_REMOTE_DIR must be a plain directory name under the remote home" >&2
+    exit 2
+    ;;
+esac
 label="net.garulf.hinge-e2e-$$"
 
 # shellcheck disable=SC2317  # invoked indirectly via trap

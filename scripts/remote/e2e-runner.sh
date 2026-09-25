@@ -57,6 +57,24 @@ sweep_leftovers() {
   pkill -f "$repo_dir/node_modules/.bin/playwright" >/dev/null 2>&1 || true
 }
 
+# One run at a time per host: the sweep below and the LaunchAgent would
+# otherwise kill or collide with another checkout's run in progress.
+lock_dir="$HOME/.hinge-e2e.lock"
+lock_waited=0
+until mkdir "$lock_dir" 2>/dev/null; do
+  if [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +30 2>/dev/null)" ]; then
+    rmdir "$lock_dir" 2>/dev/null || true
+    continue
+  fi
+  if [ "$lock_waited" -ge 1200 ]; then
+    echo "another e2e run still holds $lock_dir after 20 minutes" >&2
+    exit 1
+  fi
+  sleep 5
+  lock_waited=$((lock_waited + 5))
+done
+trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
+
 sweep_leftovers
 
 new_hash="$(hash_of package-lock.json)"

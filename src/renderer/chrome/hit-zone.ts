@@ -1,3 +1,4 @@
+import type { BodyDims } from "../../shared/layout";
 import type { Rotation } from "../../shared/screen-uv";
 
 export interface Size {
@@ -13,6 +14,9 @@ export interface Box {
 }
 
 export const MENU_EDGE_PX = 24;
+const FALLBACK_BEZEL_MM = 4;
+const PILL_MIN_PX = 22;
+const PILL_MAX_PX = 32;
 export const MENU_HIDE_DELAY_MS = 700;
 const PANEL_MARGIN_PX = 8;
 
@@ -37,17 +41,36 @@ export function bodyRectIn(window: Size, body: Size, rotation: Rotation, centred
   }
 }
 
-/** Within 24 px of the phone's top edge and over the phone. */
-export function inMenuZone(p: { x: number; y: number }, body: Box): boolean {
-  return p.x >= body.x && p.x <= body.x + body.w && p.y >= body.y && p.y < body.y + MENU_EDGE_PX;
+/**
+ * The depth of the bezel along the window's top edge: the body's short side
+ * less the screen's, halved, when upright; its long side less the screen's
+ * when turned. Before the model loads a typical 4 mm stands in.
+ */
+export function topBezelMm(body: BodyDims, open: boolean, rotation: Rotation, screenMm: { w: number; h: number } | null): number {
+  if (!screenMm) return FALLBACK_BEZEL_MM;
+  const sideways = rotation === 1 || rotation === 3;
+  const bodyAcross = sideways ? (open ? body.openWidthMm : body.closedWidthMm) : body.heightMm;
+  const screenAcross = sideways ? screenMm.w : screenMm.h;
+  return Math.max(1, (bodyAcross - screenAcross) / 2);
+}
+
+/** The pill fits inside the bezel, so it never covers the top of the screen, within a size a pointer can still hit. */
+export function pillHeightPx(bezelPx: number): number {
+  return Math.round(Math.min(PILL_MAX_PX, Math.max(PILL_MIN_PX, bezelPx)));
+}
+
+/** The bezel band along the phone's top edge (at most 24 px deep), and only over the phone; the screen below it stays the phone's. */
+export function inMenuZone(p: { x: number; y: number }, body: Box, bezelPx: number = MENU_EDGE_PX): boolean {
+  const depth = Math.min(MENU_EDGE_PX, bezelPx);
+  return p.x >= body.x && p.x <= body.x + body.w && p.y >= body.y && p.y < body.y + depth;
 }
 
 /** The hover menu shows while the pointer is in its zone or on the chrome, lingers briefly after, and stays while a panel is open. */
 export class MenuVisibility {
   #lastInsideMs: number | null = null;
 
-  pointer(p: { x: number; y: number } | null, body: Box, overChrome: boolean, nowMs: number): void {
-    if (overChrome || (p && inMenuZone(p, body))) this.#lastInsideMs = nowMs;
+  pointer(p: { x: number; y: number } | null, body: Box, overChrome: boolean, nowMs: number, bezelPx?: number): void {
+    if (overChrome || (p && inMenuZone(p, body, bezelPx))) this.#lastInsideMs = nowMs;
   }
 
   visible(nowMs: number, panelOpen: boolean): boolean {

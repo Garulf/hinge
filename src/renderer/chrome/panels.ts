@@ -5,7 +5,7 @@ import { connectAddress, validHostPort, validPairingCode, type DeviceCommands } 
 import { el } from "./dom";
 import type { Size } from "./hit-zone";
 import type { ToastInput } from "./toast-queue";
-import { deviceResultToast } from "./toast-text";
+import { deviceResultMessage, PAIR_INPUT_MESSAGES, type DeviceMessage } from "./toast-text";
 
 export type PanelName = "device" | "colour" | "settings";
 
@@ -29,10 +29,11 @@ export interface DevicePanelDeps {
 const TRANSPORT_LABEL = { usb: "USB", tcp: "Wi-Fi", mdns: "Wi-Fi (mDNS)" } as const;
 
 export class DevicePanel implements Panel {
-  readonly size = { w: 300, h: 380 };
+  readonly size = { w: 300, h: 420 };
   readonly node: HTMLElement;
   readonly #deps: DevicePanelDeps;
   readonly #list = el("div");
+  readonly #status = el("div", { className: "status", attrs: { role: "status", "data-device-status": "", hidden: "" } });
   readonly #host = el("input", { attrs: { type: "text", placeholder: "192.168.1.20:37099", spellcheck: "false" } });
   readonly #code = el("input", { attrs: { type: "text", placeholder: "123456", inputmode: "numeric", maxlength: "6" } });
   readonly #port = el("input", { attrs: { type: "text", placeholder: "Connect port, e.g. 41234", inputmode: "numeric" } });
@@ -47,7 +48,7 @@ export class DevicePanel implements Panel {
       el("span", { className: "help", text: "Paired. The phone's Wireless debugging screen shows the IP address and port to connect to." }),
       el("div", { className: "row" }, [el("div", { className: "grow" }, [this.#port]), connect]),
     ]);
-    const refresh = el("button", { text: "Refresh", on: { click: () => this.opened() } });
+    const refresh = el("button", { text: "Refresh", on: { click: () => this.#refreshList() } });
     this.node = panelNode(
       "Devices",
       [
@@ -57,6 +58,7 @@ export class DevicePanel implements Panel {
         el("label", { className: "field" }, [el("span", { className: "sub", text: "IP address and port" }), this.#host]),
         el("label", { className: "field" }, [el("span", { className: "sub", text: "Wi-Fi pairing code" }), this.#code]),
         el("div", { className: "row" }, [el("div", { className: "grow" }), pair]),
+        this.#status,
         this.#connectRow,
       ],
       refresh,
@@ -64,6 +66,11 @@ export class DevicePanel implements Panel {
   }
 
   opened(): void {
+    this.#say(null);
+    this.#refreshList();
+  }
+
+  #refreshList(): void {
     this.#list.replaceChildren(el("div", { className: "empty", text: "Looking for devices..." }));
     this.#deps.commands
       .request({ type: "list" })
@@ -102,30 +109,39 @@ export class DevicePanel implements Panel {
     return el("button", { text: label, title, on: { click: () => void this.#run(command) } });
   }
 
+  /** Toasts sit above the panel too, but a message about the form belongs next to it. */
+  #say(message: DeviceMessage | null): void {
+    this.#status.hidden = message === null;
+    this.#status.textContent = message?.text ?? "";
+    this.#status.classList.toggle("error", message?.tone === "error");
+  }
+
   async #run(command: DeviceCommand): Promise<DeviceCommandResult | null> {
     if (this.#busy) return null;
     this.#busy = true;
     this.node.setAttribute("aria-busy", "true");
+    this.#say({ text: "Working...", tone: "info" });
     try {
       const result = await this.#deps.commands.request(command);
-      const toast = deviceResultToast(result);
-      if (toast) this.#deps.toast(toast);
+      const message = deviceResultMessage(result);
+      this.#say(message);
+      if (message?.tone === "info") this.#deps.toast(message);
       return result;
     } catch (e) {
-      this.#deps.toast({ text: String(e).replace(/^Error:\s*/, ""), tone: "error" });
+      this.#say({ text: String(e).replace(/^Error:\s*/, ""), tone: "error" });
       return null;
     } finally {
       this.#busy = false;
       this.node.removeAttribute("aria-busy");
-      this.opened();
+      this.#refreshList();
     }
   }
 
   async #pair(): Promise<void> {
     const hostPort = this.#host.value.trim();
     const code = this.#code.value.trim();
-    if (!validHostPort(hostPort)) return this.#deps.toast({ text: "Enter the IP address and port shown under the pairing code", tone: "error" });
-    if (!validPairingCode(code)) return this.#deps.toast({ text: "The pairing code is 6 digits", tone: "error" });
+    if (!validHostPort(hostPort)) return this.#say(PAIR_INPUT_MESSAGES.hostPort);
+    if (!validPairingCode(code)) return this.#say(PAIR_INPUT_MESSAGES.code);
     this.#connectRow.hidden = true;
     const result = await this.#run({ type: "pair", hostPort, code });
     if (result?.type === "pair" && result.ok && !result.connectedAddress) this.#connectRow.hidden = false;
@@ -134,7 +150,7 @@ export class DevicePanel implements Panel {
 
   async #connectAfterPair(): Promise<void> {
     const address = connectAddress(this.#host.value, this.#port.value);
-    if (!address) return this.#deps.toast({ text: "Enter the port shown on the Wireless debugging screen", tone: "error" });
+    if (!address) return this.#say(PAIR_INPUT_MESSAGES.connectPort);
     const result = await this.#run({ type: "connect", serial: address });
     if (result?.type === "connect" && result.ok) this.#connectRow.hidden = true;
   }

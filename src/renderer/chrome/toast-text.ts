@@ -31,19 +31,36 @@ export function transferToast(p: TransferProgress): ToastInput {
   }
 }
 
-/** A toast for a device panel command's outcome; listing the devices needs none. */
-export function deviceResultToast(result: DeviceCommandResult): ToastInput | null {
+export interface DeviceMessage {
+  text: string;
+  tone: "info" | "error";
+}
+
+const info = (text: string): DeviceMessage => ({ text, tone: "info" });
+const error = (text: string): DeviceMessage => ({ text, tone: "error" });
+
+/** What the Devices panel says, in its own status line, before sending a pairing request it can already tell is wrong. */
+export const PAIR_INPUT_MESSAGES = {
+  hostPort: error("Enter the IP address and port shown under the pairing code, like 192.168.1.20:37099"),
+  code: error("The pairing code is the 6 digits shown on the phone"),
+  connectPort: error("Enter the port shown on the Wireless debugging screen"),
+} as const;
+
+/** A device panel command's outcome, for the panel's status line (and a toast when it worked); listing the devices needs none. */
+export function deviceResultMessage(result: DeviceCommandResult): DeviceMessage | null {
   switch (result.type) {
     case "list":
       return null;
     case "pair":
-      if (!result.ok) return { text: `Pairing failed: ${shortError(result.message)}`, tone: "error" };
-      return { text: result.connectedAddress ? `Paired and connected to ${result.connectedAddress}` : "Paired. Enter the connect port shown on the phone." };
+      if (!result.ok) return error(`Pairing failed: ${shortError(result.message)}`);
+      if (result.connectedAddress) return info(`Paired and connected to ${result.connectedAddress}`);
+      if (result.message) return error(`Paired, but connecting failed: ${shortError(result.message)}. Enter the connect port shown on the phone.`);
+      return info("Paired. Enter the connect port shown on the phone's Wireless debugging screen.");
     case "connect":
-      return result.ok ? { text: "Connecting..." } : { text: `Could not connect: ${shortError(result.message)}`, tone: "error" };
+      return result.ok ? info("Connecting...") : error(`Could not connect: ${shortError(result.message)}`);
     case "switch-to-wifi":
-      return result.ok ? { text: `Switched to Wi-Fi at ${result.address}` } : { text: `Could not switch to Wi-Fi: ${shortError(result.message)}`, tone: "error" };
+      return result.ok ? info(`Switched to Wi-Fi at ${result.address}`) : error(`Could not switch to Wi-Fi: ${shortError(result.message)}`);
     case "disconnect":
-      return result.ok ? { text: "Disconnected" } : { text: `Could not disconnect: ${shortError(result.message)}`, tone: "error" };
+      return result.ok ? info("Disconnected") : error(`Could not disconnect: ${shortError(result.message)}`);
   }
 }

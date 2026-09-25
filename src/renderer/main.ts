@@ -13,7 +13,7 @@ import { AudioPipe } from "./audio-pipe";
 import { createWorkletPlayer } from "./audio/worklet-player";
 import { Chrome } from "./chrome/chrome";
 import { DeviceCommands } from "./chrome/device-commands";
-import { bodyRectIn, type Box } from "./chrome/hit-zone";
+import { bodyRectIn, topBezelMm, type Box } from "./chrome/hit-zone";
 import { transferToast } from "./chrome/toast-text";
 import { InputRouter } from "./input/input-router";
 import { MediaGate } from "./media-gate";
@@ -109,7 +109,8 @@ function sizeWindow(out: DirectorOutput, rotation: Rotation): void {
   const viewport = { w: innerWidth, h: innerHeight };
   const body = bodyRectIn(viewport, size, rotation, fullscreen);
   placeStage(fullscreen ? body : null);
-  chrome.update({ window: viewport, body, pxPerMm }, performance.now());
+  const bezelPx = topBezelMm(FOLD7_BODY, open, rotation, scene.screenSizeMm(open ? "inner" : "cover")) * pxPerMm;
+  chrome.update({ window: viewport, body, pxPerMm, bezelPx }, performance.now());
   if (fullscreen) return;
   const panel = chrome.neededWindow();
   windowSizer.update(deviceAlignedSize(panel ? unionSize(size, panel) : size, window.devicePixelRatio), rotation, out.settled);

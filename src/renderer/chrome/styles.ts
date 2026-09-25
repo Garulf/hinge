@@ -3,13 +3,15 @@ export const CHROME_CSS = `
 [data-chrome] * { box-sizing: border-box; }
 [data-chrome] [hidden] { display: none !important; }
 .hinge-glass { background: rgba(24, 24, 28, 0.86); backdrop-filter: blur(14px); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); }
-.hinge-menu { position: absolute; display: flex; gap: 2px; padding: 3px; border-radius: 999px; opacity: 0; transform: translateY(-4px); transition: opacity 120ms ease, transform 120ms ease; }
+.hinge-menu { --pill: 28px; position: absolute; display: flex; gap: 2px; padding: 1px; height: var(--pill); align-items: center; border-radius: 999px; opacity: 0; transform: translateY(-4px); transition: opacity 120ms ease, transform 120ms ease; }
 .hinge-menu.shown { opacity: 1; transform: none; pointer-events: auto; }
-.hinge-menu button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 999px; background: transparent; color: inherit; cursor: pointer; }
+.hinge-menu button { width: calc(var(--pill) - 4px); height: calc(var(--pill) - 4px); padding: 0; display: grid; place-items: center; border: 0; border-radius: 999px; background: transparent; color: inherit; cursor: pointer; }
+.hinge-menu button svg { width: calc((var(--pill) - 4px) * 0.72); height: calc((var(--pill) - 4px) * 0.72); stroke-width: 2.4; }
+.hinge-menu.hinge-glass { background: rgba(52, 52, 60, 0.94); border-color: rgba(255, 255, 255, 0.18); }
 .hinge-menu button:hover { background: rgba(255, 255, 255, 0.12); }
 .hinge-menu button[aria-pressed="true"] { background: rgba(120, 170, 255, 0.28); color: #cfe0ff; }
 .hinge-menu button.close:hover { background: rgba(255, 80, 80, 0.3); }
-.hinge-toasts { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.hinge-toasts { position: absolute; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .hinge-toast { max-width: 100%; padding: 7px 12px; border-radius: 10px; overflow: hidden; position: relative; animation: hinge-in 140ms ease; overflow-wrap: anywhere; }
 .hinge-toast.error { background: rgba(92, 24, 28, 0.9); border-color: rgba(255, 120, 120, 0.35); }
 .hinge-toast .bar { position: absolute; left: 0; bottom: 0; height: 2px; background: #7fb0ff; transition: width 120ms linear; }
@@ -24,6 +26,8 @@ export const CHROME_CSS = `
 .hinge-panel .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hinge-panel .sub { font-size: 11px; color: #a8a8b3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hinge-panel .help { font-size: 11px; color: #a8a8b3; }
+.hinge-panel .status { font-size: 12px; margin: 6px 0; padding: 6px 8px; border-radius: 8px; background: rgba(120, 170, 255, 0.14); overflow-wrap: anywhere; }
+.hinge-panel .status.error { background: rgba(255, 90, 90, 0.18); color: #ffd0d0; }
 .hinge-panel .badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: rgba(120, 170, 255, 0.22); color: #cfe0ff; }
 .hinge-panel button, .hinge-panel select, .hinge-panel input[type="text"] { font: inherit; color: inherit; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; padding: 4px 8px; }
 .hinge-panel button { cursor: pointer; white-space: nowrap; }

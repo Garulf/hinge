@@ -2,7 +2,7 @@ import type { Settings, SettingsPatch } from "../../shared/settings";
 import type { HingeAction } from "../../shared/shortcuts";
 import type { DeviceCommands } from "./device-commands";
 import { el, place, svgIcon } from "./dom";
-import { MenuVisibility, panelBox, sizeForPanel, type Box, type Size } from "./hit-zone";
+import { MenuVisibility, panelBox, pillHeightPx, sizeForPanel, type Box, type Size } from "./hit-zone";
 import { ICONS, type IconName } from "./icons";
 import { ColourPanel, DevicePanel, SettingsPanel, type Panel, type PanelName } from "./panels";
 import { CHROME_CSS } from "./styles";
@@ -13,6 +13,8 @@ export interface ChromeLayout {
   /** Where the phone body is in the window right now. */
   body: Box;
   pxPerMm: number;
+  /** Depth of the bezel along the phone's top edge, where the menu lives. */
+  bezelPx: number;
 }
 
 export interface ChromeDeps {
@@ -24,11 +26,16 @@ export interface ChromeDeps {
   currentSerial(): string | null;
 }
 
-const MENU_SIZE = { w: 186, h: 36 };
-const MENU_INSET_PX = 4;
+const MENU_BUTTONS = 6;
+const MENU_GAP_PX = 2;
+const MENU_PAD_PX = 1;
 const PANEL_GAP_PX = 6;
-const TOAST_BEZEL_MM = 6;
-const TOAST_MIN_TOP_PX = 44;
+const TOAST_GAP_PX = 8;
+
+function menuWidth(pill: number): number {
+  const button = pill - 4;
+  return MENU_BUTTONS * button + (MENU_BUTTONS - 1) * MENU_GAP_PX + 2 * MENU_PAD_PX + 2;
+}
 
 type MenuButton = { name: IconName; title: string; press: () => void };
 
@@ -54,6 +61,8 @@ export class Chrome {
   #pointer: { x: number; y: number } | null = null;
   #overChrome = false;
   #settings: Settings | null = null;
+  #pill = 0;
+  #swallowEscapeUp = false;
 
   constructor(parent: HTMLElement, deps: ChromeDeps) {
     this.#deps = deps;
@@ -100,7 +109,7 @@ export class Chrome {
 
   /** The window size an open panel needs, for the window to grow to while it is open. */
   neededWindow(): Size | null {
-    return this.#open ? sizeForPanel(this.#panels[this.#open].size, MENU_INSET_PX + MENU_SIZE.h + PANEL_GAP_PX) : null;
+    return this.#open ? sizeForPanel(this.#panels[this.#open].size, this.#menuBottom() + PANEL_GAP_PX) : null;
   }
 
   closePanel(): void {
@@ -110,19 +119,24 @@ export class Chrome {
   update(layout: ChromeLayout, nowMs: number): void {
     this.#layout = layout;
     const { body } = layout;
-    this.#visibility.pointer(this.#pointer, body, this.#overChrome, nowMs);
-    const menuTop = body.y + MENU_INSET_PX;
+    this.#visibility.pointer(this.#pointer, body, this.#overChrome, nowMs, layout.bezelPx);
+    const pill = pillHeightPx(layout.bezelPx);
+    if (pill !== this.#pill) {
+      this.#pill = pill;
+      this.#menu.style.setProperty("--pill", `${pill}px`);
+    }
+    const menuTop = body.y + Math.max(0, (layout.bezelPx - pill) / 2);
     this.#menu.classList.toggle("shown", this.#visibility.visible(nowMs, this.#open !== null));
-    place(this.#menu, { x: body.x + (body.w - MENU_SIZE.w) / 2, y: menuTop });
+    place(this.#menu, { x: body.x + (body.w - menuWidth(pill)) / 2, y: menuTop });
 
     if (this.#open) {
       const panel = this.#panels[this.#open];
-      const box = panelBox(body, layout.window, panel.size, menuTop + MENU_SIZE.h + PANEL_GAP_PX);
+      const box = panelBox(body, layout.window, panel.size, menuTop + pill + PANEL_GAP_PX);
       place(panel.node, box);
       panel.node.style.maxHeight = `${Math.max(120, layout.window.h - box.y - 8)}px`;
     }
 
-    const toastTop = body.y + Math.max(TOAST_BEZEL_MM * layout.pxPerMm, TOAST_MIN_TOP_PX);
+    const toastTop = body.y + Math.max(layout.bezelPx, pill) + TOAST_GAP_PX;
     place(this.#toastsNode, { x: body.x + 12, y: toastTop, w: Math.max(80, body.w - 24) });
     this.#renderToasts(this.#queue.visible(nowMs));
 
@@ -150,6 +164,12 @@ export class Chrome {
       bar.hidden = toast.progress === null;
       bar.style.width = `${Math.round((toast.progress ?? 0) * 100)}%`;
     }
+  }
+
+  /** Relative to the body's top edge. */
+  #menuBottom(): number {
+    const bezel = this.#layout?.bezelPx ?? this.#pill;
+    return Math.max(bezel, this.#pill);
   }
 
   #toggle(name: PanelName): void {
@@ -190,8 +210,33 @@ export class Chrome {
       },
       { capture: true },
     );
-    this.root.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") this.#setOpen(null);
+    // Capturing on window runs before the input router's own window
+    // listener, so an Escape that closes a panel never reaches the phone.
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.key !== "Escape" || !this.#open) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.#swallowEscapeUp = true;
+        this.#setOpen(null);
+      },
+      { capture: true },
+    );
+    window.addEventListener(
+      "keyup",
+      (e) => {
+        if (e.key !== "Escape" || !this.#swallowEscapeUp) return;
+        e.stopImmediatePropagation();
+        this.#swallowEscapeUp = false;
+      },
+      { capture: true },
+    );
+    // A clicked button would otherwise keep focus, and Space or Enter meant
+    // for the phone would press it again (Close, say).
+    this.root.addEventListener("click", (e) => {
+      const button = (e.target as Element | null)?.closest?.("button");
+      if (button instanceof HTMLButtonElement) button.blur();
     });
   }
 }

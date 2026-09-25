@@ -1,4 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { FOLD7_BODY } from "../../src/shared/layout";
 
@@ -11,6 +12,7 @@ interface Stats {
   angle: number | null;
   lit: Lit;
   rotation: number;
+  badge: "flex" | null;
   settled: boolean;
   brightness: { cover: number; inner: number };
   laidOut: boolean;
@@ -60,7 +62,7 @@ function stats(page: Page): Promise<Stats> {
     const canvas = document.querySelector("canvas");
     const laidOut = canvas !== null && canvas.width === Math.round(innerWidth * devicePixelRatio) && canvas.height === Math.round(innerHeight * devicePixelRatio);
     if (!api) {
-      return { framesDecoded: 0, cls: null, window: { w: 0, h: 0 }, angle: null, lit: null, rotation: 0, settled: false, brightness: { cover: 0, inner: 0 }, laidOut };
+      return { framesDecoded: 0, cls: null, window: { w: 0, h: 0 }, angle: null, lit: null, rotation: 0, badge: null, settled: false, brightness: { cover: 0, inner: 0 }, laidOut };
     }
     return { ...api.stats(), laidOut };
   });
@@ -87,6 +89,29 @@ async function waitFor(page: Page, what: string, matches: (s: Stats) => boolean,
 /** Settled on the lit screen at full brightness with the canvas laid out for the final window size. */
 function restingOn(lit: "cover" | "inner", s: Stats): boolean {
   return s.lit === lit && s.settled && s.laidOut && s.brightness[lit] === 1;
+}
+
+/** Animation frame intervals over a stretch of playback, to show what uploading and mipmapping every video frame costs. */
+async function frameIntervals(page: Page, durationMs: number): Promise<{ median: number; p95: number; max: number; frames: number }> {
+  const intervals = await page.evaluate(
+    (durationMs) =>
+      new Promise<number[]>((resolve) => {
+        const gaps: number[] = [];
+        let last: number | null = null;
+        const start = performance.now();
+        const tick = (now: number) => {
+          if (last !== null) gaps.push(now - last);
+          last = now;
+          if (now - start < durationMs) requestAnimationFrame(tick);
+          else resolve(gaps);
+        };
+        requestAnimationFrame(tick);
+      }),
+    durationMs,
+  );
+  const sorted = [...intervals].sort((a, b) => a - b);
+  const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
+  return { median: at(0.5), p95: at(0.95), max: sorted.at(-1) ?? 0, frames: sorted.length };
 }
 
 function aspect(s: Stats): number {
@@ -147,7 +172,14 @@ test("replays the synthetic fold: closed, opening led by posture, open, landscap
     const closedBounds = await windowBounds(app);
     await page.screenshot({ path: "test-results/closed.png" });
 
-    const open = await waitFor(page, "the open phone", (s) => restingOn("inner", s) && s.rotation === 0 && Math.abs(aspect(s) - OPEN_ASPECT) < 0.02, 20_000);
+    // The fixture holds HALF_OPENED with the inner screen lit for 2 s before
+    // opening flat. A software GL can draw too few frames in that window to
+    // rest first, so only a real GPU waits for the settled pose to shoot it.
+    const flex = await waitFor(page, "the flex badge", (s) => s.badge === "flex" && s.lit === "inner" && (softwareGl || (restingOn("inner", s) && s.rotation === 0)), 20_000);
+    expect(flex.badge).toBe("flex");
+    await page.screenshot({ path: "test-results/flex.png" });
+
+    const open = await waitFor(page, "the open phone", (s) => restingOn("inner", s) && s.badge === null && s.rotation === 0 && Math.abs(aspect(s) - OPEN_ASPECT) < 0.02, 20_000);
     expect(open.angle).toBe(180);
     const openBounds = await windowBounds(app);
     expect(Math.abs(openBounds.x + openBounds.width - (closedBounds.x + closedBounds.width))).toBeLessThanOrEqual(2);
@@ -161,6 +193,12 @@ test("replays the synthetic fold: closed, opening led by posture, open, landscap
       const firstInner = history.findIndex((p) => p.lit === "inner");
       expect(firstInner).toBeGreaterThan(0);
       expect(history.slice(0, firstInner).some((p) => p.lit === "cover" && p.moving)).toBe(true);
+    }
+
+    if (!softwareGl) {
+      const timing = await frameIntervals(page, 2000);
+      await writeFile("test-results/frame-times.json", JSON.stringify(timing, null, 2));
+      expect(timing.median).toBeLessThan(34);
     }
 
     const pxPerMm = open.window.h / FOLD7_BODY.heightMm;

@@ -15,12 +15,17 @@ const BADGE_SIZE_MM = { w: 9, h: 2.6 };
 const BADGE_LIFT_MM = 0.4;
 const SCREENS: ScreenKind[] = ["cover", "inner"];
 
+/**
+ * The stream is usually drawn smaller than its own resolution, which plain
+ * linear filtering aliases; three regenerates the mip chain on every frame
+ * upload.
+ */
 function videoTexture(frame?: VideoFrame): THREE.VideoFrameTexture {
   const texture = new THREE.VideoFrameTexture();
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.minFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
   texture.magFilter = THREE.LinearFilter;
-  texture.generateMipmaps = false;
+  texture.generateMipmaps = true;
   if (frame) texture.setFrame(frame);
   return texture;
 }

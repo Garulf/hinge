@@ -33,20 +33,22 @@ const STATES_LINE = "@states 0=CLOSED,1=TENT,2=HALF_OPENED,3=OPENED,4=CONCURRENT
 // probe timeline (opening walks 0 -> 1 -> 2 -> 3 within about a second).
 // offsetMs is relative to the segment's own start time and is negative for
 // every line that must lead the stream restart: on real hardware posture
-// changes before the stream restarts at the new size, so HALF_OPENED (and
-// the matching 1968x2184 size) arrives before the inner stream's first
-// packet, not after it, and the same for the landscape rotation.
+// changes before the stream restarts at the new size, so HALF_OPENED
+// arrives before the inner stream's first packet, not after it, and the same
+// for the landscape rotation. The phone then rests half open (Flex mode) with
+// the inner screen lit for two seconds before it opens flat.
+const FLEX_HOLD_MS = 2000;
 const POSTURE_BEFORE_SEGMENT = [
   [
     { offsetMs: 0, line: STATES_LINE },
-    { offsetMs: 0, line: "0 | mRotation=0 | Physical size: 1080x2520" },
+    { offsetMs: 0, line: "0 | mRotation=0" },
   ],
   [
-    { offsetMs: -450, line: "1 | mRotation=0 | Physical size: 1080x2520" },
-    { offsetMs: -300, line: "2 | mRotation=0 | Physical size: 1968x2184" },
-    { offsetMs: -150, line: "3 | mRotation=0 | Physical size: 1968x2184" },
+    { offsetMs: -450, line: "1 | mRotation=0" },
+    { offsetMs: -300, line: "2 | mRotation=0" },
+    { offsetMs: FLEX_HOLD_MS, line: "3 | mRotation=0" },
   ],
-  [{ offsetMs: -150, line: "3 | mRotation=1 | Physical size: 1968x2184" }],
+  [{ offsetMs: -150, line: "3 | mRotation=1" }],
 ];
 
 function drawtextIsAvailable() {

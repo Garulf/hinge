@@ -10,12 +10,41 @@ import { toWire, type ControlIntent } from "../shared/wire";
 
 type Client = AdbScrcpyClient<AdbScrcpyOptions4_1<any>>;
 
+const FIRST_PACKET_TIMEOUT_MS = 10_000;
+
+/**
+ * The real Tango calls, isolated behind an interface so a fake server (no
+ * jar, no adb, no device) can drive the attempt loop, the per-attempt jar
+ * push and the first-packet timeout in tests.
+ */
+export interface ScrcpyServerDeps {
+  readServerJar(path: string): Promise<Uint8Array>;
+  pushServer(adb: Adb, jar: Uint8Array): Promise<void>;
+  startClient(adb: Adb, options: AdbScrcpyOptions4_1<any>): Promise<Client>;
+}
+
+const defaultDeps: ScrcpyServerDeps = {
+  readServerJar: (path) => readFile(path),
+  pushServer: async (adb, jar) => {
+    await AdbScrcpyClient.pushServer(
+      adb,
+      new PushReadableStream<Uint8Array>((controller) => {
+        controller.enqueue(jar);
+        controller.close();
+      }),
+    );
+  },
+  startClient: (adb, options) => AdbScrcpyClient.start(adb, DefaultServerPath, options),
+};
+
 export class ScrcpySession implements MediaSource {
   #client: Client | undefined;
   #stopped = false;
   #endedFired = false;
   #resolveEnded!: () => void;
   readonly ended: Promise<void>;
+  readonly #deps: ScrcpyServerDeps;
+  readonly #firstPacketTimeoutMs: number;
 
   constructor(
     private readonly opts: {
@@ -25,8 +54,12 @@ export class ScrcpySession implements MediaSource {
       serverPath: string;
       settings: StreamSettings;
       log?: (line: string) => void;
+      deps?: Partial<ScrcpyServerDeps>;
+      firstPacketTimeoutMs?: number;
     },
   ) {
+    this.#deps = { ...defaultDeps, ...opts.deps };
+    this.#firstPacketTimeoutMs = opts.firstPacketTimeoutMs ?? FIRST_PACKET_TIMEOUT_MS;
     this.ended = new Promise((resolve) => {
       this.#resolveEnded = resolve;
     });
@@ -35,16 +68,6 @@ export class ScrcpySession implements MediaSource {
   async start(sink: MediaSink): Promise<void> {
     try {
       sink.status({ state: "connecting", serial: this.opts.serial });
-      const jar = await readFile(this.opts.serverPath);
-      if (this.#stopped) return;
-      await AdbScrcpyClient.pushServer(
-        this.opts.adb,
-        new PushReadableStream<Uint8Array>((controller) => {
-          controller.enqueue(new Uint8Array(jar));
-          controller.close();
-        }),
-      );
-      if (this.#stopped) return;
 
       let lastError: unknown;
       for (const attempt of [0, 1, 2] as const) {
@@ -80,8 +103,16 @@ export class ScrcpySession implements MediaSource {
     let client: Client | undefined;
     let outputPromise: Promise<string[]> = Promise.resolve([]);
     try {
+      // scrcpy-server unlinks its own jar from the device after launch (cleanup
+      // defaults to true), so a jar pushed once before the loop is gone by the
+      // second attempt; push it fresh for every attempt.
+      const jar = await this.#deps.readServerJar(this.opts.serverPath);
+      if (this.#stopped) return "stopped";
+      await this.#deps.pushServer(this.opts.adb, jar);
+      if (this.#stopped) return "stopped";
+
       const options = new AdbScrcpyOptions4_1(buildInit(this.opts.settings, attempt) as never);
-      client = await AdbScrcpyClient.start(this.opts.adb, DefaultServerPath, options);
+      client = await this.#deps.startClient(this.opts.adb, options);
       this.#client = client;
       if (this.#stopped) {
         await client.close().catch(() => {});
@@ -100,7 +131,7 @@ export class ScrcpySession implements MediaSource {
       if (!video) throw new Error("scrcpy server started without a video stream");
 
       const reader = video.stream.getReader();
-      const first = await reader.read();
+      const first = await this.#readFirstPacket(reader);
       if (this.#stopped) {
         await client.close().catch(() => {});
         this.#client = undefined;
@@ -130,6 +161,23 @@ export class ScrcpySession implements MediaSource {
     }
   }
 
+  /** A server that starts but never emits a frame would otherwise hang the attempt forever. */
+  async #readFirstPacket(
+    reader: ReadableStreamDefaultReader<ScrcpyVideoStreamPacket>,
+  ): Promise<ReadableStreamReadResult<ScrcpyVideoStreamPacket>> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`no video packet within ${this.#firstPacketTimeoutMs}ms`)), this.#firstPacketTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
   #markEnded(): void {
     if (this.#endedFired) return;
     this.#endedFired = true;
@@ -140,6 +188,7 @@ export class ScrcpySession implements MediaSource {
     try {
       for (;;) {
         const { done, value } = await reader.read();
+        if (this.#stopped) return;
         if (done) break;
         sink.videoPacket(toWire(value));
       }

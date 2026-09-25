@@ -28,7 +28,7 @@ class DefaultProbe implements ServerProbe {
 class DefaultSpawner implements Spawner {
   async startServer(adbPath: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      execFile(adbPath, ["start-server"], (error, _stdout, stderr) => {
+      execFile(adbPath, ["start-server"], { windowsHide: true }, (error, _stdout, stderr) => {
         if (error) reject(new Error(stderr || error.message));
         else resolve();
       });

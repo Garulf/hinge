@@ -40,6 +40,46 @@ test("posts an error status when the source fails to start", async () => {
   expect(posted).toContainEqual({ kind: "status", status: { state: "error", message: "Error: boom" } });
 });
 
+test("appends a short log hint to error statuses when a log path is given", async () => {
+  const posted: MainToRenderer[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: (m) => posted.push(m), onMessage: (fn) => { handler = fn; } };
+  bindSource(
+    { start: async () => { throw new Error("boom"); }, control: () => {}, stop: async () => {} },
+    port,
+    { logPath: "/home/user/.config/hinge/logs/hinge.log" },
+  );
+  handler({ kind: "ready" });
+  await flush();
+  expect(posted).toContainEqual({ kind: "status", status: { state: "error", message: "Error: boom (log: hinge.log)" } });
+});
+
+test("a second ready (renderer reload) replays the last video-start and configuration packet instead of restarting the source", async () => {
+  const posted: MainToRenderer[] = [];
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: (m) => posted.push(m), onMessage: (fn) => { handler = fn; } };
+  let startCalls = 0;
+  let sink!: MediaSink;
+  const source: MediaSource = { start: async (s) => { startCalls++; sink = s; }, control: () => {}, stop: async () => {} };
+  bindSource(source, port);
+
+  handler({ kind: "ready" });
+  await flush();
+  sink.videoStart({ codecId: 1, width: 2, height: 3, deviceName: null });
+  sink.videoPacket({ type: "configuration", data: new Uint8Array([9, 9]) });
+  sink.videoPacket({ type: "data", keyframe: true, pts: 1, data: new Uint8Array([1]) });
+
+  posted.length = 0;
+  handler({ kind: "ready" });
+  await flush();
+
+  expect(startCalls).toBe(1);
+  expect(posted).toEqual([
+    { kind: "video-start", info: { codecId: 1, width: 2, height: 3, deviceName: null } },
+    { kind: "video-packet", packet: { type: "configuration", data: new Uint8Array([9, 9]) } },
+  ]);
+});
+
 function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -62,19 +102,30 @@ function device(serial: string, transport: DeviceSummary["transport"] = "usb"): 
 class FakeSession implements MediaSource {
   stopped = false;
   startCalls = 0;
+  #sink: MediaSink | null = null;
   #resolveEnded!: () => void;
   readonly ended: Promise<void> = new Promise((resolve) => {
     this.#resolveEnded = resolve;
   });
 
-  async start(): Promise<void> {
+  async start(sink: MediaSink): Promise<void> {
     this.startCalls++;
+    this.#sink = sink;
   }
 
   control(): void {}
 
   async stop(): Promise<void> {
     this.stopped = true;
+  }
+
+  /** Marks this session as having reached the phone's video stream. */
+  streamed(): void {
+    this.#sink?.status({ state: "streaming", serial: "unused", model: null });
+  }
+
+  fail(message: string): void {
+    this.#sink?.status({ state: "error", message });
   }
 
   end(): void {
@@ -171,10 +222,205 @@ test("reconnects when the session ends on its own while the device stays listed"
   await flush();
   expect(sessions).toHaveLength(1);
 
+  sessions[0].streamed();
   sessions[0].end();
   await flush();
   expect(opened).toEqual(["USB1", "USB1"]);
   expect(sessions).toHaveLength(2);
+});
+
+test("does not reconnect immediately when a session ends without ever streaming; backs off with the error visible", async () => {
+  const watcher = fakeWatcher();
+  const opened: string[] = [];
+  const sessions: FakeSession[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return {} as never;
+  };
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink, statuses } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(sessions).toHaveLength(1);
+
+  sessions[0].fail("class not found");
+  sessions[0].end();
+  await flush();
+
+  // The failure went through the backoff (delay actually invoked, not skipped)
+  // and the error stayed on screen with a countdown, rather than being
+  // silently replaced by an immediate reconnect.
+  expect(delays).toEqual([1000]);
+  expect(statuses).toContainEqual({ state: "error", message: "class not found (retrying in 1s)" });
+  expect(opened).toEqual(["USB1", "USB1"]);
+  expect(sessions).toHaveLength(2);
+});
+
+test("session-start backoff climbs 1/2/4/8/15s across repeated non-streaming failures", async () => {
+  const watcher = fakeWatcher();
+  const sessions: FakeSession[] = [];
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  for (let i = 0; i < 6; i++) {
+    sessions.at(-1)!.fail("boom");
+    sessions.at(-1)!.end();
+    await flush();
+  }
+
+  expect(delays).toEqual([1000, 2000, 4000, 8000, 15000, 15000]);
+});
+
+test("a device-list change cancels a pending session-start retry and resets the backoff", async () => {
+  const watcher = fakeWatcher();
+  const sessions: FakeSession[] = [];
+  let signalSeen: AbortSignal | undefined;
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    delay: (_ms, signal) =>
+      new Promise((resolve) => {
+        signalSeen = signal;
+        if (signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      }),
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  sessions[0].fail("boom");
+  sessions[0].end();
+  await flush();
+  expect(signalSeen?.aborted).toBeFalsy();
+
+  // The device disappears: the pending retry is cancelled, not left to fire later.
+  watcher.emit([]);
+  await flush();
+  expect(signalSeen?.aborted).toBe(true);
+  expect(sessions).toHaveLength(1);
+});
+
+test("a successful stream resets the session-start backoff for the next failure", async () => {
+  const watcher = fakeWatcher();
+  const sessions: FakeSession[] = [];
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  // A fails, backs off at 1s; B (its replacement) also fails without
+  // streaming, so the ladder climbs to 2s.
+  sessions[0].fail("first failure");
+  sessions[0].end();
+  await flush();
+  sessions[1].fail("second failure");
+  sessions[1].end();
+  await flush();
+  expect(delays).toEqual([1000, 2000]);
+  expect(sessions).toHaveLength(3);
+
+  // C streams successfully, then later ends (e.g. the phone was unplugged):
+  // that is an immediate reconnect, not a backed-off retry.
+  sessions[2].streamed();
+  sessions[2].end();
+  await flush();
+  expect(delays).toEqual([1000, 2000]);
+  expect(sessions).toHaveLength(4);
+
+  // D fails without streaming: the ladder restarted at 1s because C streamed.
+  sessions[3].fail("third failure");
+  sessions[3].end();
+  await flush();
+  expect(delays).toEqual([1000, 2000, 1000]);
+});
+
+test("keeps the current session's serial when it is still listed, even as its mDNS duplicate flickers", async () => {
+  const watcher = fakeWatcher();
+  const opened: string[] = [];
+  const sessions: FakeSession[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return {} as never;
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  const tcp = device("10.0.0.23:34065", "tcp");
+  const mdns = device("adb-R3GYC0638KH-rizcTw._adb-tls-connect._tcp", "mdns");
+
+  watcher.emit([tcp, mdns]);
+  await flush();
+  expect(opened).toEqual(["10.0.0.23:34065"]);
+  expect(sessions).toHaveLength(1);
+
+  // The mDNS entry for the same phone disappears, then reappears: the
+  // session tied to the tcp serial must not be torn down and restarted.
+  watcher.emit([tcp]);
+  await flush();
+  watcher.emit([tcp, mdns]);
+  await flush();
+
+  expect(opened).toEqual(["10.0.0.23:34065"]);
+  expect(sessions).toHaveLength(1);
+  expect(sessions[0].stopped).toBe(false);
 });
 
 test("does not start a session when the device disappears during open", async () => {
@@ -534,6 +780,29 @@ test("does not start the posture sampler when the sink has no postureLine (no re
   watcher.emit([device("USB1")]);
   await flush();
   expect(starts).toBe(0);
+});
+
+test("a posture sampler that fails to start is best-effort: mirroring still starts and the failure is logged, not shown as an error", async () => {
+  const watcher = fakeWatcher();
+  const logs: string[] = [];
+  const posture: PostureStarter = async () => {
+    throw new Error("shell spawn failed");
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    recordSink: (sink) => ({ ...sink, postureLine: () => {} }),
+    posture,
+    log: (line) => logs.push(line),
+  });
+  const { sink, statuses } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  expect(statuses.some((s) => s.state === "error")).toBe(false);
+  expect(logs.some((l) => l.includes("posture sampler failed to start") && l.includes("shell spawn failed"))).toBe(true);
 });
 
 test("stop() stops a running posture sampler", async () => {

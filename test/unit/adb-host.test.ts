@@ -1,5 +1,20 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { AdbHost } from "../../src/main/adb-host";
+
+vi.mock("node:child_process", () => ({
+  execFile: vi.fn((_path: string, _args: string[], opts: unknown, cb: (e: Error | null, stdout: string, stderr: string) => void) => {
+    execFileCalls.push(opts);
+    cb(null, "", "");
+  }),
+}));
+const execFileCalls: unknown[] = [];
+
+test("spawning the bundled adb hides the console window on Windows", async () => {
+  execFileCalls.length = 0;
+  const host = new AdbHost({ adbPath: "/x/adb", probe: { isRunning: async () => false } });
+  await host.ensureServer();
+  expect(execFileCalls).toEqual([{ windowsHide: true }]);
+});
 
 test("uses an already running adb server and never spawns one", async () => {
   let spawned = false;

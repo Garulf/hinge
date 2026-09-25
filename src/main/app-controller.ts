@@ -1,5 +1,6 @@
+import { basename } from "node:path";
 import type { Adb } from "@yume-chan/adb";
-import type { ControlIntent, MainToRenderer, RendererToMain } from "../shared/wire";
+import type { ControlIntent, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
 import type { MediaSink, MediaSource } from "./media-source";
 import type { PostureSample } from "./posture-sampler";
@@ -10,22 +11,50 @@ export interface PortLike {
   onMessage(fn: (msg: RendererToMain) => void): void;
 }
 
-export function bindSource(source: MediaSource, port: PortLike): MediaSink {
+function withLogHint(status: SessionStatus, hint: string): SessionStatus {
+  if (!hint || status.state !== "error") return status;
+  return { ...status, message: `${status.message} ${hint}` };
+}
+
+/**
+ * Wires a MediaSource to a renderer port. A repeated "ready" (the renderer
+ * reloaded, e.g. after Ctrl+R or a crash) must not restart the source, since
+ * it is still running from the main process's point of view; instead replay
+ * the last video-start and the latest configuration packet so the new
+ * renderer context can pick the stream back up without a fresh server start.
+ */
+export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath?: string }): MediaSink {
+  const logHint = opts?.logPath ? `(log: ${basename(opts.logPath)})` : "";
+
   function post(msg: MainToRenderer): void {
     port.postMessage(msg, transferablesOf(msg));
   }
 
+  let lastVideoStart: VideoStreamInfo | null = null;
+  let lastConfigPacket: { type: "configuration"; data: Uint8Array } | null = null;
+
   const sink: MediaSink = {
-    videoStart: (info) => post({ kind: "video-start", info }),
-    videoPacket: (packet) => post({ kind: "video-packet", packet }),
+    videoStart: (info) => {
+      lastVideoStart = info;
+      lastConfigPacket = null;
+      post({ kind: "video-start", info });
+    },
+    videoPacket: (packet) => {
+      if (packet.type === "configuration") lastConfigPacket = { type: "configuration", data: packet.data.slice() };
+      post({ kind: "video-packet", packet });
+    },
     videoEnd: () => post({ kind: "video-end" }),
-    status: (status) => post({ kind: "status", status }),
+    status: (status) => post({ kind: "status", status: withLogHint(status, logHint) }),
   };
 
   let started = false;
   port.onMessage((msg) => {
     if (msg.kind === "ready") {
-      if (started) return;
+      if (started) {
+        if (lastVideoStart) post({ kind: "video-start", info: lastVideoStart });
+        if (lastConfigPacket) post({ kind: "video-packet", packet: { type: "configuration", data: lastConfigPacket.data.slice() } });
+        return;
+      }
       started = true;
       source.start(sink).catch((e) => sink.status({ state: "error", message: String(e) }));
       return;
@@ -37,6 +66,7 @@ export function bindSource(source: MediaSource, port: PortLike): MediaSink {
 }
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000];
+const SESSION_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
 
 export interface DeviceWatcher {
   ensureServer(): Promise<"existing" | "spawned">;
@@ -46,11 +76,7 @@ export interface DeviceWatcher {
 
 export type SessionFactory = (device: DeviceSummary, adb: Adb) => MediaSource;
 
-/**
- * Starts a background posture sampler bound to one session's adb connection.
- * Returns a disposer that stops it. Mirrors posture-sampler.ts's startSampler,
- * kept as a separate type here so DeviceSource stays testable without a real adb.
- */
+/** Kept as a separate type from posture-sampler.ts's startSampler so DeviceSource stays testable without a real adb. */
 export type PostureStarter = (
   adb: Adb,
   onSample: (sample: PostureSample) => void,
@@ -67,6 +93,10 @@ export class DeviceSource implements MediaSource {
   #lastDevices: DeviceSummary[] = [];
   #preferredSerial: string | null;
   #stopped = false;
+  #sessionEverStreamed = false;
+  #sessionRetryAttempt = 0;
+  #sessionRetryAbort: AbortController | null = null;
+  #lastSessionError: string | null = null;
 
   constructor(
     private readonly opts: {
@@ -98,6 +128,8 @@ export class DeviceSource implements MediaSource {
     this.#stopped = true;
     this.#reconnectAbort?.abort();
     this.#reconnectAbort = null;
+    this.#sessionRetryAbort?.abort();
+    this.#sessionRetryAbort = null;
     const session = this.#session;
     this.#session = null;
     this.#sessionSerial = null;
@@ -112,7 +144,7 @@ export class DeviceSource implements MediaSource {
     let dispose: (() => Promise<void>) | undefined;
     try {
       dispose = await this.opts.host.watch(
-        (devices) => this.#onDevices(devices),
+        (devices) => this.#onWatcherDevices(devices),
         () => this.#onWatchError(),
       );
     } catch (e) {
@@ -168,6 +200,12 @@ export class DeviceSource implements MediaSource {
     }
   }
 
+  /** The watcher's own onChange callback: a real device-list change always cancels and resets a pending session-start retry. */
+  #onWatcherDevices(devices: DeviceSummary[]): void {
+    this.#cancelSessionRetry();
+    this.#onDevices(devices);
+  }
+
   #onDevices(devices: DeviceSummary[]): void {
     this.#lastDevices = devices;
     if (this.#stopped || !this.#sink) return;
@@ -201,17 +239,33 @@ export class DeviceSource implements MediaSource {
 
   #connect(device: DeviceSummary): void {
     this.#sessionSerial = device.serial;
+    this.#sessionEverStreamed = false;
     void this.#run(device);
   }
 
   async #run(device: DeviceSummary): Promise<void> {
     const sink = this.#sink;
     if (!sink) return;
+    const observedSink: MediaSink = {
+      ...sink,
+      status: (status) => {
+        if (status.state === "streaming") {
+          this.#sessionEverStreamed = true;
+          this.#sessionRetryAttempt = 0;
+        }
+        if (status.state === "error") this.#lastSessionError = status.message;
+        sink.status(status);
+      },
+    };
     try {
       const adb = await this.opts.host.open(device.serial);
       if (this.#stopped || this.#sessionSerial !== device.serial) return;
       if (sink.postureLine && this.opts.posture) {
-        this.#stopPosture = await this.opts.posture(adb, (sample) => sink.postureLine?.(sample.lines.join(" | ")));
+        try {
+          this.#stopPosture = await this.opts.posture(adb, (sample) => sink.postureLine?.(sample.lines.join(" | ")));
+        } catch (e) {
+          this.opts.log?.(`posture sampler failed to start: ${String(e)}`);
+        }
         if (this.#stopped || this.#sessionSerial !== device.serial) {
           await this.#stopPostureSampler();
           return;
@@ -220,23 +274,59 @@ export class DeviceSource implements MediaSource {
       const session = this.opts.createSession(device, adb);
       this.#session = session;
       session.ended?.then(() => this.#onSessionEnded(device.serial));
-      await session.start(sink);
+      await session.start(observedSink);
     } catch (e) {
       if (this.#sessionSerial === device.serial) {
         this.#session = null;
         this.#sessionSerial = null;
       }
       await this.#stopPostureSampler();
-      sink.status({ state: "error", message: String(e) });
+      observedSink.status({ state: "error", message: String(e) });
     }
   }
 
   #onSessionEnded(serial: string): void {
     if (this.#stopped || this.#sessionSerial !== serial) return;
+    const streamed = this.#sessionEverStreamed;
     this.#session = null;
     this.#sessionSerial = null;
     void this.#stopPostureSampler();
-    this.#onDevices(this.#lastDevices);
+    if (streamed) {
+      this.#sessionRetryAttempt = 0;
+      this.#onDevices(this.#lastDevices);
+      return;
+    }
+    this.#beginSessionRetry();
+  }
+
+  /**
+   * A session that never reached "streaming" before ending is a persistent
+   * start failure (bad jar, no encoder, etc), not a transient disconnect:
+   * reconnecting immediately would hot-loop at adb speed. Keep the last
+   * error on screen with a countdown and back off instead.
+   */
+  #beginSessionRetry(): void {
+    if (this.#stopped) return;
+    const delayMs = SESSION_RETRY_DELAYS_MS[Math.min(this.#sessionRetryAttempt, SESSION_RETRY_DELAYS_MS.length - 1)];
+    const base = this.#lastSessionError ?? "Failed to start";
+    this.#sink?.status({ state: "error", message: `${base} (retrying in ${Math.round(delayMs / 1000)}s)` });
+    const controller = new AbortController();
+    this.#sessionRetryAbort = controller;
+    const delay = this.opts.delay ?? defaultDelay;
+    void delay(delayMs, controller.signal).then(() => {
+      // Superseded (a newer retry started) or cancelled (device-list change or stop): the
+      // cancelling code path already decided what happens next, do nothing here.
+      if (this.#stopped || this.#sessionRetryAbort !== controller) return;
+      this.#sessionRetryAbort = null;
+      this.#sessionRetryAttempt++;
+      this.#onDevices(this.#lastDevices);
+    });
+  }
+
+  #cancelSessionRetry(): void {
+    this.#sessionRetryAbort?.abort();
+    this.#sessionRetryAbort = null;
+    this.#sessionRetryAttempt = 0;
   }
 }
 

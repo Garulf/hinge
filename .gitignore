@@ -170,3 +170,7 @@ test-results/
 playwright-report/
 *.hrec
 !test/fixtures/*.hrec
+
+# model
+model/out/
+__pycache__/

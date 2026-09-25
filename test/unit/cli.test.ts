@@ -7,3 +7,5 @@ test("record", () => expect(parseArgs(["--record", "out.hrec"])).toMatchObject({
 test("probe with defaults", () => expect(parseArgs(["--probe"])).toEqual({ mode: "probe", serial: null, seconds: 90, out: null }));
 test("probe with seconds and out", () => expect(parseArgs(["--probe", "--seconds", "30", "--out", "r.json"])).toEqual({ mode: "probe", serial: null, seconds: 30, out: "r.json" }));
 test("ignores electron and chromium switches", () => expect(parseArgs(["--no-sandbox", "--enable-logging", "."]).mode).toBe("run"));
+test("rejects a missing --seconds value", () => expect(() => parseArgs(["--probe", "--seconds"])).toThrow(/--seconds/));
+test("rejects a non-numeric --seconds value", () => expect(() => parseArgs(["--probe", "--seconds", "soon"])).toThrow(/--seconds/));

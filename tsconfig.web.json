@@ -4,5 +4,14 @@
     "strict": true, "noEmit": false, "emitDeclarationOnly": true, "outDir": "out/tsc-web",
     "lib": ["ES2023", "DOM", "DOM.Iterable"], "skipLibCheck": true
   },
-  "include": ["src/renderer", "src/shared", "src/preload/api.d.ts"]
+  "include": [
+    "src/renderer",
+    "src/shared",
+    "src/preload/api.d.ts",
+    "test/unit/frame-lifecycle.test.ts",
+    "test/unit/input-router.test.ts",
+    "test/unit/texture-renderer.test.ts",
+    "test/unit/video-pipe.test.ts",
+    "test/unit/wrap-text.test.ts"
+  ]
 }

@@ -6,7 +6,7 @@ export const SAMPLER_SCRIPT = [
   "while true; do",
   '  i=$((i+1)); echo "@@hinge-tick $i"',
   "  cmd device_state print-state 2>&1",
-  "  dumpsys input 2>/dev/null | grep -m1 SurfaceOrientation",
+  "  dumpsys window displays 2>/dev/null | grep -m1 -E '^ *mRotation='",
   "  wm size 2>&1 | tail -n 1",
   "  sleep 0.25",
   "done",

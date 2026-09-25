@@ -24,9 +24,13 @@ export function parseArgs(argv: string[]): Mode {
       case "--record":
         record = argv[++i] ?? null;
         break;
-      case "--seconds":
-        seconds = Number(argv[++i]);
+      case "--seconds": {
+        const raw = argv[++i];
+        const value = raw === undefined ? Number.NaN : Number(raw);
+        if (!Number.isFinite(value)) throw new Error(`--seconds requires a numeric value, got ${raw ?? "(missing)"}`);
+        seconds = value;
         break;
+      }
       case "--out":
         out = argv[++i] ?? null;
         break;

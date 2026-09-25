@@ -2,9 +2,13 @@ import { _electron as electron, expect, test } from "@playwright/test";
 import { resolve } from "node:path";
 
 test("replays the synthetic fold recording and follows the size change", async () => {
-  const app = await electron.launch({
-    args: [resolve("out/main/index.js"), "--replay", resolve("test/fixtures/synthetic-fold.hrec"), "--use-gl=angle", "--use-angle=swiftshader", "--no-sandbox"],
-  });
+  const args = ["--replay", resolve("test/fixtures/synthetic-fold.hrec"), "--use-gl=angle", "--use-angle=swiftshader", "--no-sandbox"];
+  // Defaults to running the unpacked main entry through the electron npm binary;
+  // set HINGE_E2E_EXECUTABLE to a packaged build's executable to run against it instead.
+  const executablePath = process.env.HINGE_E2E_EXECUTABLE;
+  const app = await electron.launch(
+    executablePath ? { executablePath, args } : { args: [resolve("out/main/index.js"), ...args] },
+  );
   const page = await app.firstWindow();
   type Stats = { framesDecoded: number; width: number; height: number; cls: { screen: string; rotated: boolean } | null; window: { w: number; h: number } };
   // __hinge is assigned at the end of the renderer's module script, which can

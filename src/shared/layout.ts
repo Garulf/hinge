@@ -46,7 +46,7 @@ export function workLayout(streamW: number, streamH: number, cls: ScreenClass, s
 export function defaultScale(streamW: number, streamH: number, cls: ScreenClass, workAreaHeight: number): number {
   const spec = specFor(cls);
   const streamLongSide = Math.max(streamW, streamH);
-  const mmPerPxRatio = streamLongSide / longSideMm(spec);
+  const pxPerMmAtScale1 = streamLongSide / longSideMm(spec);
   const targetWindowH = workAreaHeight * 0.85;
-  return targetWindowH / (bodyHeightMm(cls, spec) * mmPerPxRatio);
+  return targetWindowH / (bodyHeightMm(cls, spec) * pxPerMmAtScale1);
 }

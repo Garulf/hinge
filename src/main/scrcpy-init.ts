@@ -24,7 +24,11 @@ export function buildInit(s: StreamSettings, attempt: 0 | 1 | 2): Record<string,
     maxSize: s.maxSize,
     maxFps: s.maxFps,
     ignoreVideoEncoderConstraints: attempt > 0,
-    clipboardAutosync: true,
+    // Windows Firewall prompts for a reverse tunnel (listens on all interfaces); a
+    // forward tunnel only binds localhost on the device side.
+    tunnelForward: true,
+    // ClipboardStream blocks on backpressure (M5 drains it); off until then.
+    clipboardAutosync: false,
     powerOn: true,
     stayAwake: false,
     sendDeviceMeta: true,

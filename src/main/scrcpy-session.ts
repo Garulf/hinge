@@ -197,6 +197,11 @@ export class ScrcpySession implements MediaSource {
    * there is no separate device message to tell them apart.
    */
   async #startAudio(client: Client, sink: MediaSink): Promise<void> {
+    if (!this.opts.settings.audio) {
+      // Off by the user's own setting: not a failure, no toast.
+      sink.audioEnd?.("disabled");
+      return;
+    }
     // client.audioStream must always be awaited, even with nothing to
     // forward audio to: scrcpy-server is already streaming it once
     // audio:true was passed, and never reading the socket would leave it

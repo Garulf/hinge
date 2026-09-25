@@ -11,7 +11,7 @@ export interface MediaSink {
   /** Absent in contexts that never forward audio (e.g. the probe mode); a source must skip starting audio entirely rather than calling these unguarded. */
   audioStart?(info: AudioStreamInfo): void;
   audioPacket?(packet: WireAudioPacket): void;
-  audioEnd?(reason?: "unsupported"): void;
+  audioEnd?(reason?: "unsupported" | "disabled"): void;
   transferProgress?(progress: TransferProgress): void;
 }
 

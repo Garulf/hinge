@@ -82,8 +82,14 @@ export type MainToRenderer =
   | { kind: "video-end" }
   | { kind: "audio-start"; info: AudioStreamInfo }
   | { kind: "audio-packet"; packet: WireAudioPacket }
-  /** reason "unsupported" covers both the device metadata reporting "disabled"/"errored" and the audio stream failing before it produced anything; absent for a clean end (e.g. session stop). */
-  | { kind: "audio-end"; reason?: "unsupported" }
+  /**
+   * reason "unsupported" covers both the device metadata reporting
+   * "disabled"/"errored" and the audio stream failing before it produced
+   * anything (both toast-worthy); "disabled" is audio turned off by the
+   * user's own settings, not a failure; absent for a clean end (e.g.
+   * session stop).
+   */
+  | { kind: "audio-end"; reason?: "unsupported" | "disabled" }
   | { kind: "status"; status: SessionStatus }
   | { kind: "transfer-progress"; progress: TransferProgress }
   | { kind: "device-command-result"; id: string; result: DeviceCommandResult }

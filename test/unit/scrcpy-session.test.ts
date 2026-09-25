@@ -71,16 +71,18 @@ function baseOpts(
     log: (l: string) => void;
     clipboardHost: { readText: () => Promise<string>; writeText: (t: string) => Promise<void> };
     transferDeps: Partial<TransferDeps>;
+    settingsOverride: Partial<typeof DEFAULT_STREAM_SETTINGS>;
   }>,
 ) {
+  const { settingsOverride, ...rest } = extra ?? {};
   return {
     adb: {} as never,
     serial: "S1",
     model: "Pixel",
     serverPath: "/vendor/scrcpy-server-v4.1",
-    settings: DEFAULT_STREAM_SETTINGS,
+    settings: { ...DEFAULT_STREAM_SETTINGS, ...settingsOverride },
     deps,
-    ...extra,
+    ...rest,
   };
 }
 
@@ -346,6 +348,31 @@ test("a successful audio stream posts audio-start with the Opus codec id and for
 
   expect(audioPackets).toEqual([{ type: "data", pts: null, data: new Uint8Array([9]) }]);
   expect(audioEnds).toEqual([undefined]);
+
+  await session.stop();
+});
+
+test("audio turned off in settings posts audio-end('disabled'), not 'unsupported', and never touches client.audioStream", async () => {
+  const videoStream = new ReadableStream<{ type: "data"; data: Uint8Array }>({
+    start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }),
+  });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => ({
+      ...oneShotClient(() => videoStream),
+      get audioStream(): never {
+        throw new Error("must not be touched when audio is off in settings");
+      },
+    }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps, { settingsOverride: { audio: false } }));
+  const { sink, audioStarts, audioEnds } = fakeSink();
+  await session.start(sink);
+  await flush();
+
+  expect(audioStarts).toEqual([]);
+  expect(audioEnds).toEqual(["disabled"]);
 
   await session.stop();
 });

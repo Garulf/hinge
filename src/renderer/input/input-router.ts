@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
+import { ModifierTracker } from "../../shared/modifiers";
 import { screenUvToStream } from "../../shared/screen-uv";
 import { hingeShortcut, type HingeAction } from "../../shared/shortcuts";
 import { streamToDevice, TouchTracker, type StreamPoint } from "../../shared/touch";
@@ -22,6 +23,7 @@ export class InputRouter {
   readonly #onAction: (action: HingeAction) => void;
   readonly #touch: TouchTracker;
   readonly #keys = new KeyTracker();
+  readonly #modifiers = new ModifierTracker();
   readonly #raycaster = new THREE.Raycaster();
   #dragging = false;
 
@@ -51,6 +53,7 @@ export class InputRouter {
     window.addEventListener("keyup", (e) => this.#onKey(e));
     window.addEventListener("blur", () => {
       this.#cancelInteraction();
+      this.#modifiers.clear();
       for (const intent of this.#keys.flush()) this.#send(intent);
     });
   }
@@ -122,7 +125,8 @@ export class InputRouter {
       metaKey: e.metaKey,
       shiftKey: e.shiftKey,
     };
-    const action = hingeShortcut(like);
+    this.#modifiers.handle(like);
+    const action = hingeShortcut(like, this.#modifiers);
     if (action) {
       e.preventDefault();
       this.#onAction(action);

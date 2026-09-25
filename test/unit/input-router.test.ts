@@ -203,11 +203,17 @@ test("scrolling maps through the same rotation", () => {
   expect(sent[0]).toMatchObject({ type: "scroll", x: 60, y: 80 });
 });
 
-test("MOD+D fires the toggle-view action and is never forwarded to the phone", () => {
+function fireKey(type: "keydown" | "keyup", code: string, over: Record<string, unknown> = {}) {
+  const preventDefault = vi.fn();
+  fakeWindow.fire(type, { type, code, key: code, repeat: false, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, preventDefault, ...over });
+  return preventDefault;
+}
+
+test("left Alt+D fires the toggle-view action and is never forwarded to the phone", () => {
   const onAction = vi.fn();
   const { sent } = setup({ onAction });
-  const preventDefault = vi.fn();
-  fakeWindow.fire("keydown", { type: "keydown", code: "KeyD", key: "d", repeat: false, ctrlKey: false, altKey: true, metaKey: false, shiftKey: false, preventDefault });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  const preventDefault = fireKey("keydown", "KeyD", { altKey: true });
 
   expect(onAction).toHaveBeenCalledOnce();
   expect(onAction).toHaveBeenCalledWith("toggle-view");
@@ -215,13 +221,58 @@ test("MOD+D fires the toggle-view action and is never forwarded to the phone", (
   expect(sent).toEqual([]);
 });
 
+test("left Super+D fires the toggle-view action", () => {
+  const onAction = vi.fn();
+  setup({ onAction });
+  fireKey("keydown", "MetaLeft", { metaKey: true });
+  fireKey("keydown", "KeyD", { metaKey: true });
+
+  expect(onAction).toHaveBeenCalledOnce();
+  expect(onAction).toHaveBeenCalledWith("toggle-view");
+});
+
+test("right Alt+D does not toggle (AltGr on many layouts); normal key handling applies and nothing is forwarded", () => {
+  const onAction = vi.fn();
+  const { sent } = setup({ onAction });
+  fireKey("keydown", "AltRight", { altKey: true });
+  const preventDefault = fireKey("keydown", "KeyD", { altKey: true });
+
+  expect(onAction).not.toHaveBeenCalled();
+  // Falls through to normal handling: keyIntents already treats any
+  // alt-held combo as producing nothing, so this stays unclaimed too.
+  expect(preventDefault).not.toHaveBeenCalled();
+  expect(sent).toEqual([]);
+});
+
 test("MOD+D with no onAction supplied is a silent no-op default, still not forwarded", () => {
   const { sent } = setup();
-  const preventDefault = vi.fn();
-  fakeWindow.fire("keydown", { type: "keydown", code: "KeyD", key: "d", repeat: false, ctrlKey: false, altKey: true, metaKey: false, shiftKey: false, preventDefault });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  const preventDefault = fireKey("keydown", "KeyD", { altKey: true });
 
   expect(preventDefault).toHaveBeenCalledOnce();
   expect(sent).toEqual([]);
+});
+
+test("releasing left Alt (keyup) before D means D alone no longer toggles", () => {
+  const onAction = vi.fn();
+  setup({ onAction });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fireKey("keyup", "AltLeft", { altKey: false });
+  fireKey("keydown", "KeyD", { altKey: false });
+
+  expect(onAction).not.toHaveBeenCalled();
+});
+
+test("window blur clears held modifiers, so D alone no longer toggles afterwards", () => {
+  const onAction = vi.fn();
+  setup({ onAction });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fakeWindow.fire("blur", {});
+  // The (fake) real browser would also stop reporting altKey true once Alt
+  // is no longer physically held; simulate that alongside the tracker clear.
+  fireKey("keydown", "KeyD", { altKey: false });
+
+  expect(onAction).not.toHaveBeenCalled();
 });
 
 test("with no lit screen a left press drags the window", () => {

@@ -76,7 +76,7 @@ class ImageEstimates:
     speaker_hole_count: int = 5
     speaker_hole_diameter_mm: float = 1.1
     speaker_hole_pitch_mm: float = 1.8
-    speaker_holes_center_from_hinge_mm: float = 52.0
+    speaker_holes_center_from_hinge_mm: float = 47.0
     mic_hole_diameter_mm: float = 0.8
     earpiece_slot_length_mm: float = 7.0
     earpiece_slot_height_mm: float = 0.7

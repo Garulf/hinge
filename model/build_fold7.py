@@ -401,7 +401,7 @@ def build_hinge_fill(phone):
         bm.faces.new((low[i], low[j], high[j], high[i]))
     split_along_planes(bm, crease_loop_positions(), [])
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-    slots = Slots(phone.materials, "screen_border")
+    slots = Slots(phone.materials, "hinge_spine")
     obj = mesh_object("HingeFill", bm, slots, phone.fixed_half)
     assign_crease_weights(obj).object = phone.rig
     return obj

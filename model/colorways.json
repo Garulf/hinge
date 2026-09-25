@@ -30,9 +30,9 @@
           "roughness": 0.35
         },
         "antenna_band": {
-          "baseColor": "#242426",
-          "metallic": 0.0,
-          "roughness": 0.5
+          "baseColor": "#101011",
+          "metallic": 1.0,
+          "roughness": 0.65
         }
       }
     },
@@ -65,9 +65,9 @@
           "roughness": 0.35
         },
         "antenna_band": {
-          "baseColor": "#1a2240",
-          "metallic": 0.0,
-          "roughness": 0.5
+          "baseColor": "#141a30",
+          "metallic": 1.0,
+          "roughness": 0.65
         }
       }
     },
@@ -100,9 +100,9 @@
           "roughness": 0.35
         },
         "antenna_band": {
-          "baseColor": "#a09e9a",
-          "metallic": 0.0,
-          "roughness": 0.5
+          "baseColor": "#8e8c89",
+          "metallic": 1.0,
+          "roughness": 0.65
         }
       }
     },
@@ -135,9 +135,9 @@
           "roughness": 0.35
         },
         "antenna_band": {
-          "baseColor": "#b4c4ba",
-          "metallic": 0.0,
-          "roughness": 0.5
+          "baseColor": "#9fb0a6",
+          "metallic": 1.0,
+          "roughness": 0.65
         }
       }
     }

@@ -6,7 +6,7 @@ import { classifyScreen, type ScreenClass } from "../shared/fold7";
 import { bodySizePx, deviceAlignedSize, FOLD7_BODY, unionSize } from "../shared/layout";
 import type { Rotation } from "../shared/screen-uv";
 import type { Settings } from "../shared/settings";
-import { normaliseModifiers, type HingeAction } from "../shared/shortcuts";
+import { defaultModifiers, normaliseModifiers, type HingeAction } from "../shared/shortcuts";
 import { viewWindowSize } from "../shared/view-window";
 import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
@@ -330,7 +330,7 @@ function onAction(action: HingeAction): void {
 
 new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }), {
   onAction,
-  modifiers: () => normaliseModifiers(settings?.shortcutModifiers),
+  modifiers: () => normaliseModifiers(settings?.shortcutModifiers, defaultModifiers(window.hinge.platform)),
   paused: () => display.paused,
 });
 

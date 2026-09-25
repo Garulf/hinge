@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { ModifierTracker } from "../../src/shared/modifiers";
 import type { KeyEventLike } from "../../src/shared/keymap";
-import { normaliseModifiers, ShortcutHandler, SHORTCUT_TABLE } from "../../src/shared/shortcuts";
+import { defaultModifiers, normaliseModifiers, ShortcutHandler, SHORTCUT_TABLE } from "../../src/shared/shortcuts";
 
 const HOME = 3;
 const BACK = 4;
@@ -188,6 +188,14 @@ test("normaliseModifiers keeps known names in order, drops the rest, and falls b
   expect(normaliseModifiers(["bogus"])).toEqual(["lalt", "lsuper"]);
   expect(normaliseModifiers(["rsuper", "bogus", "rsuper", "lctrl"])).toEqual(["rsuper", "lctrl"]);
   expect(normaliseModifiers("ralt")).toEqual(["ralt"]);
+});
+
+test("MOD defaults to left Alt alone on Windows, which reserves most Win+letter combos, and left Alt + left Super elsewhere", () => {
+  expect(defaultModifiers("win32")).toEqual(["lalt"]);
+  expect(defaultModifiers("linux")).toEqual(["lalt", "lsuper"]);
+  expect(defaultModifiers("darwin")).toEqual(["lalt", "lsuper"]);
+  expect(normaliseModifiers(undefined, defaultModifiers("win32"))).toEqual(["lalt"]);
+  expect(normaliseModifiers(["bogus"], defaultModifiers("win32"))).toEqual(["lalt"]);
 });
 
 test("the table covers every letter scrcpy documents plus hinge's d", () => {

@@ -16,12 +16,18 @@ export type HingeAction =
 
 export const SHORTCUT_MODIFIERS: readonly ModifierKey[] = ["lalt", "ralt", "lsuper", "rsuper", "lctrl", "rctrl"];
 export const DEFAULT_MODIFIERS: readonly ModifierKey[] = ["lalt", "lsuper"];
+const WINDOWS_DEFAULT_MODIFIERS: readonly ModifierKey[] = ["lalt"];
+
+/** Windows reserves most Win+letter combinations for itself, so MOD there is left Alt alone. */
+export function defaultModifiers(platform: string): ModifierKey[] {
+  return [...(platform === "win32" ? WINDOWS_DEFAULT_MODIFIERS : DEFAULT_MODIFIERS)];
+}
 
 /** Settings come from a file on disk, so anything unknown is dropped; an empty result falls back to the default. */
-export function normaliseModifiers(value: unknown): ModifierKey[] {
+export function normaliseModifiers(value: unknown, fallback: readonly ModifierKey[] = DEFAULT_MODIFIERS): ModifierKey[] {
   const raw = Array.isArray(value) ? value : [value];
   const picked = [...new Set(raw.filter((v): v is ModifierKey => SHORTCUT_MODIFIERS.includes(v as ModifierKey)))];
-  return picked.length > 0 ? picked : [...DEFAULT_MODIFIERS];
+  return picked.length > 0 ? picked : [...fallback];
 }
 
 const KEYCODE = {

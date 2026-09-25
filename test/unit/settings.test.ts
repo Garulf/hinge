@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { DEFAULT_SETTINGS, loadSettings } from "../../src/main/settings";
+import { DEFAULT_SETTINGS, defaultSettings, loadSettings } from "../../src/main/settings";
 
 let dir: string;
 let path: string;
@@ -79,11 +79,11 @@ test("the migration hook runs on a settings file from an older version before it
   writeFileSync(path, JSON.stringify({ version: 1, colourway: "Silver" }));
   const store = await loadSettings(path, {
     migrations: {
-      1: (data) => ({ ...(data as object), version: 2, migrated: true }),
+      1: (data) => ({ ...(data as object), version: 2, colourway: `${String(data.colourway)}-migrated` }),
     },
     currentVersion: 2,
   });
-  expect((store.current as unknown as { migrated: boolean }).migrated).toBe(true);
+  expect(store.current.colourway).toBe("Silver-migrated");
   expect(store.current.version).toBe(2);
 });
 
@@ -123,4 +123,148 @@ test("onChange fires with the new settings after save() and saveDevice(), not be
   off();
   await store.save({ audio: true });
   expect(seen).toHaveLength(2);
+});
+
+test("the default MOD is left Alt alone on Windows and left Alt + left Super elsewhere", async () => {
+  expect(defaultSettings("win32").shortcutModifiers).toEqual(["lalt"]);
+  expect(defaultSettings("linux").shortcutModifiers).toEqual(["lalt", "lsuper"]);
+  const store = await loadSettings(path, { platform: "win32" });
+  expect(store.current.shortcutModifiers).toEqual(["lalt"]);
+});
+
+test("each field of a loaded file is checked on its own: a wrong type falls back to that field's default, the rest are kept", async () => {
+  writeFileSync(
+    path,
+    JSON.stringify({
+      version: 2,
+      colourway: 7,
+      videoCodec: "vp9",
+      videoBitRate: "fast",
+      maxSize: -5,
+      maxFps: 60,
+      audio: "yes",
+      shortcutModifiers: ["rctrl", "bogus"],
+      alwaysOnTop: true,
+      lastDevice: 12,
+      view: "showcase",
+      devices: { A: { pxPerMm: 5, windowPosition: { x: "1", y: 2 }, view: "sideways" }, B: "junk" },
+      stray: 1,
+    }),
+  );
+  const store = await loadSettings(path);
+  expect(store.current).toEqual({
+    ...DEFAULT_SETTINGS,
+    maxFps: 60,
+    shortcutModifiers: ["rctrl"],
+    alwaysOnTop: true,
+    view: "showcase",
+    devices: { A: { pxPerMm: 5 } },
+  });
+  expect(existsSync(`${path}.bad`)).toBe(false);
+});
+
+test("a version 1 file migrates: the stale shortcutModifier key goes, and serial-keyed devices wait to be adopted by identity", async () => {
+  writeFileSync(
+    path,
+    JSON.stringify({
+      version: 1,
+      colourway: "Silver",
+      shortcutModifier: "lalt",
+      shortcutModifiers: ["lalt", "lsuper"],
+      lastDevice: "10.0.0.5:41234",
+      devices: { "10.0.0.5:41234": { pxPerMm: 6, view: "showcase" } },
+    }),
+  );
+  const store = await loadSettings(path, { platform: "linux" });
+  expect(store.current.version).toBe(2);
+  expect(store.current).not.toHaveProperty("shortcutModifier");
+  expect(store.current.shortcutModifiers).toEqual(["lalt", "lsuper"]);
+  expect(store.current.devices).toEqual({});
+  expect(store.current.legacyDevices).toEqual({ "10.0.0.5:41234": { pxPerMm: 6, view: "showcase" } });
+  expect(store.current.lastDevice).toBe("10.0.0.5:41234");
+});
+
+test("on Windows the migration swaps the old default left Alt + left Super for the new left Alt default, but keeps a custom choice", async () => {
+  writeFileSync(path, JSON.stringify({ version: 1, shortcutModifiers: ["lalt", "lsuper"] }));
+  expect((await loadSettings(path, { platform: "win32" })).current.shortcutModifiers).toEqual(["lalt"]);
+  writeFileSync(path, JSON.stringify({ version: 1, shortcutModifiers: ["rctrl"] }));
+  expect((await loadSettings(path, { platform: "win32" })).current.shortcutModifiers).toEqual(["rctrl"]);
+});
+
+test("adoptTransport moves a serial-keyed entry and a serial lastDevice over to the phone's identity, once", async () => {
+  writeFileSync(
+    path,
+    JSON.stringify({
+      version: 1,
+      lastDevice: "10.0.0.5:41234",
+      devices: { "10.0.0.5:41234": { pxPerMm: 6, view: "showcase" }, "adb-R5CY-x._adb-tls-connect._tcp": { windowPosition: { x: 1, y: 2 } }, OTHER: { pxPerMm: 3 } },
+    }),
+  );
+  const store = await loadSettings(path);
+  const seen: unknown[] = [];
+  store.onChange((s) => seen.push(s));
+
+  await store.adoptTransport("10.0.0.5:41234", "R5CY");
+  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6, view: "showcase" } });
+  expect(store.current.lastDevice).toBe("R5CY");
+  expect(store.current.legacyDevices).toEqual({ "adb-R5CY-x._adb-tls-connect._tcp": { windowPosition: { x: 1, y: 2 } }, OTHER: { pxPerMm: 3 } });
+
+  await store.adoptTransport("adb-R5CY-x._adb-tls-connect._tcp", "R5CY");
+  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6, view: "showcase", windowPosition: { x: 1, y: 2 } } });
+  expect(store.current.legacyDevices).toEqual({ OTHER: { pxPerMm: 3 } });
+
+  await store.adoptTransport("OTHER", "OTHER");
+  expect(store.current.devices.OTHER).toEqual({ pxPerMm: 3 });
+  expect(store.current).not.toHaveProperty("legacyDevices");
+  expect(seen).toHaveLength(3);
+
+  await store.adoptTransport("10.0.0.5:41234", "R5CY");
+  expect(seen).toHaveLength(3);
+  expect(JSON.parse(readFileSync(path, "utf8")).devices.R5CY).toEqual({ pxPerMm: 6, view: "showcase", windowPosition: { x: 1, y: 2 } });
+});
+
+test("the identity's own saved values win over an adopted serial-keyed entry", async () => {
+  writeFileSync(path, JSON.stringify({ version: 2, devices: { R5CY: { pxPerMm: 9 } }, legacyDevices: { "10.0.0.5:5555": { pxPerMm: 6, view: "showcase" } } }));
+  const store = await loadSettings(path);
+  await store.adoptTransport("10.0.0.5:5555", "R5CY");
+  expect(store.current.devices.R5CY).toEqual({ pxPerMm: 9, view: "showcase" });
+});
+
+test("a rename that fails with EPERM or EBUSY (a virus scanner holding the file on Windows) is retried up to 3 times", async () => {
+  let calls = 0;
+  const flaky = async (from: string, to: string) => {
+    calls++;
+    if (calls <= 3) throw Object.assign(new Error("busy"), { code: calls === 2 ? "EBUSY" : "EPERM" });
+    const { rename } = await import("node:fs/promises");
+    await rename(from, to);
+  };
+  const store = await loadSettings(path, { rename: flaky });
+  await store.save({ colourway: "Silver" });
+  expect(calls).toBe(4);
+  expect(JSON.parse(readFileSync(path, "utf8")).colourway).toBe("Silver");
+});
+
+test("a rename that keeps failing gives up after 3 retries, rejects, and leaves no temp file behind", async () => {
+  let calls = 0;
+  const store = await loadSettings(path, {
+    rename: async () => {
+      calls++;
+      throw Object.assign(new Error("locked"), { code: "EPERM" });
+    },
+  });
+  await expect(store.save({ colourway: "Silver" })).rejects.toThrow("locked");
+  expect(calls).toBe(4);
+  expect(readdirSync(dir)).toEqual([]);
+});
+
+test("any other rename error is not retried", async () => {
+  let calls = 0;
+  const store = await loadSettings(path, {
+    rename: async () => {
+      calls++;
+      throw Object.assign(new Error("gone"), { code: "ENOENT" });
+    },
+  });
+  await expect(store.save({ colourway: "Silver" })).rejects.toThrow("gone");
+  expect(calls).toBe(1);
 });

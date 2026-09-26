@@ -159,9 +159,10 @@ shade from the top still works):
 - **Colour** picks the model's colourway: Jet Black, Blue Shadow, Silver
   Shadow or Mint.
 - **Pin** keeps the window above other windows.
-- **Settings** has the shortcut modifier, phone audio, and the video codec,
-  bit rate, size and frame rate limits. Stream settings apply the next time
-  the phone connects.
+- **Settings** has the shortcut modifier, phone audio, the video codec,
+  bit rate, size and frame rate limits, and how smoothly and how far the
+  mouse wheel scrolls the phone. Stream settings apply the next time the
+  phone connects.
 - **Close** quits.
 
 Panels open inside the window (it grows while one needs the room) and close

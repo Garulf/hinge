@@ -18,6 +18,8 @@ export function defaultSettings(platform: string = process.platform): Settings {
     audio: true,
     shortcutModifiers: defaultModifiers(platform),
     alwaysOnTop: false,
+    scrollSmoothing: 150,
+    scrollSpeed: 1,
     lastDevice: null,
     view: "work",
     devices: {},
@@ -30,6 +32,7 @@ type PatchKey = keyof SettingsPatch;
 
 const isNonNegative = (v: unknown): boolean => typeof v === "number" && Number.isFinite(v) && v >= 0;
 const isBoolean = (v: unknown): boolean => typeof v === "boolean";
+const isPositive = (v: unknown): boolean => typeof v === "number" && Number.isFinite(v) && v > 0;
 const isView = (v: unknown): boolean => v === "work" || v === "showcase";
 
 const FIELD_CHECKS: Record<PatchKey, (value: unknown) => boolean> = {
@@ -41,6 +44,8 @@ const FIELD_CHECKS: Record<PatchKey, (value: unknown) => boolean> = {
   audio: isBoolean,
   shortcutModifiers: Array.isArray,
   alwaysOnTop: isBoolean,
+  scrollSmoothing: isNonNegative,
+  scrollSpeed: isPositive,
   lastDevice: (v) => v === null || typeof v === "string",
   view: isView,
 };

@@ -488,6 +488,8 @@ function setupWith(opts: {
   paused?: () => boolean;
   onAction?: (action: HingeAction) => void;
   view?: View;
+  scrolling?: () => { smoothingMs: number; speed: number };
+  requestFrame?: (callback: (time: number) => void) => void;
 }) {
   const canvas = fakeCanvas();
   const scene = fakeScene();
@@ -806,4 +808,74 @@ test("a plain press between two Alt clicks means they are not a double click", (
   fireKey("keydown", "AltLeft", { altKey: true });
   click(55);
   expect(onRotated).not.toHaveBeenCalled();
+});
+
+function frameQueue() {
+  const pending: ((time: number) => void)[] = [];
+  let now = 0;
+  return {
+    request: (callback: (time: number) => void) => pending.push(callback),
+    run(count = Infinity) {
+      for (let i = 0; i < count && pending.length > 0; i++) {
+        now += 16;
+        pending.shift()!(now);
+      }
+    },
+    get waiting() {
+      return pending.length;
+    },
+  };
+}
+
+function scrolled(sent: ControlIntent[]): number {
+  return sent.reduce((sum, i) => sum + (i.type === "scroll" ? i.scrollY : 0), 0);
+}
+
+test("with smoothing, a notch starts scrolling at once and eases out over the next frames", () => {
+  const frames = frameQueue();
+  const { canvas, sent } = setupWith({ scrolling: () => ({ smoothingMs: 150, speed: 1 }), requestFrame: frames.request });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, timeStamp: 0, ...CENTER });
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ type: "scroll", x: 50, y: 50, scrollX: 0 });
+  frames.run();
+  expect(sent.length).toBeGreaterThan(4);
+  expect(scrolled(sent)).toBeCloseTo(-1, 9);
+  expect(frames.waiting).toBe(0);
+});
+
+test("the scroll speed scales how far a notch goes", () => {
+  const { canvas, sent } = setupWith({ scrolling: () => ({ smoothingMs: 0, speed: 0.5 }) });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, ...CENTER });
+  expect(sent).toEqual([expect.objectContaining({ type: "scroll", scrollY: -0.5 })]);
+});
+
+test("a notch still easing out stops when the display pauses", () => {
+  const frames = frameQueue();
+  let paused = false;
+  const { canvas, sent } = setupWith({ paused: () => paused, scrolling: () => ({ smoothingMs: 150, speed: 1 }), requestFrame: frames.request });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, timeStamp: 0, ...CENTER });
+  paused = true;
+  frames.run();
+  expect(sent).toHaveLength(1);
+  expect(frames.waiting).toBe(0);
+});
+
+test("a notch still easing out stops when the view transition starts", () => {
+  const frames = frameQueue();
+  const { canvas, sent, scene } = setupWith({ scrolling: () => ({ smoothingMs: 150, speed: 1 }), requestFrame: frames.request });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, timeStamp: 0, ...CENTER });
+  scene.state.view = { target: "showcase", t: 0.1, active: true };
+  frames.run();
+  expect(sent).toHaveLength(1);
+});
+
+test("wheel events during an ease join it rather than each starting their own frames", () => {
+  const frames = frameQueue();
+  const { canvas, sent } = setupWith({ scrolling: () => ({ smoothingMs: 150, speed: 1 }), requestFrame: frames.request });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, timeStamp: 0, ...CENTER });
+  frames.run(1);
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, timeStamp: 20, ...CENTER });
+  expect(frames.waiting).toBe(1);
+  frames.run();
+  expect(scrolled(sent)).toBeCloseTo(-2, 9);
 });

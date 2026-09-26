@@ -3,15 +3,12 @@ import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
 import { RotateGesture, type Point } from "../../shared/model-rotation";
 import { ModifierTracker, type ModifierKey } from "../../shared/modifiers";
 import { WheelSteps } from "../../shared/scale";
+import { ScrollSmoother, wheelToScroll } from "../../shared/scroll-smoother";
 import { insideScreenMask, screenUvToStream } from "../../shared/screen-uv";
 import { DEFAULT_MODIFIERS, ShortcutHandler, type HingeAction } from "../../shared/shortcuts";
 import { streamToDevice, TouchTracker, type PointerEventLike, type StreamPoint } from "../../shared/touch";
 import type { ControlIntent } from "../../shared/wire";
 import type { PhoneScene } from "../scene/phone-scene";
-
-function clamp(n: number, min: number, max: number): number {
-  return Math.min(Math.max(n, min), max);
-}
 
 const CHROME_FIELDS = "[data-chrome] input, [data-chrome] select, [data-chrome] textarea";
 
@@ -34,7 +31,19 @@ export interface InputRouterOptions {
   onRotated?: (outcome: "moved" | "reset") => void;
   /** An Alt+left press starts turning the model while the work view is showing: switches to showcase without resetting the turn. */
   onEnterShowcase?: () => void;
+  /** How long a wheel notch eases out over (0 sends it at once) and how far it scrolls, read on every wheel event. */
+  scrolling?: () => ScrollFeel;
+  requestFrame?: (callback: (time: number) => void) => void;
 }
+
+export interface ScrollFeel {
+  smoothingMs: number;
+  speed: number;
+}
+
+const FRAME_MS = 1000 / 60;
+
+type ScrollTarget = Omit<Extract<ControlIntent, { type: "scroll" }>, "type" | "scrollX" | "scrollY">;
 
 /**
  * What a press does, fixed at pointerdown until release: a touch on the
@@ -59,6 +68,11 @@ export class InputRouter {
   readonly #rotate = new RotateGesture();
   readonly #onRotated: (outcome: "moved" | "reset") => void;
   readonly #onEnterShowcase: () => void;
+  readonly #scrolling: () => ScrollFeel;
+  readonly #requestFrame: (callback: (time: number) => void) => void;
+  readonly #scroll = new ScrollSmoother();
+  #scrollTarget: ScrollTarget | null = null;
+  #scrollFrameAt: number | null = null;
   #press: PressMode | null = null;
   /** Whether the current rotate press has moved the model, so a plain Alt+click saves nothing. */
   #turned = false;
@@ -83,6 +97,8 @@ export class InputRouter {
     this.#paused = opts.paused ?? (() => false);
     this.#onRotated = opts.onRotated ?? (() => {});
     this.#onEnterShowcase = opts.onEnterShowcase ?? (() => {});
+    this.#scrolling = opts.scrolling ?? (() => ({ smoothingMs: 0, speed: 1 }));
+    this.#requestFrame = opts.requestFrame ?? ((callback) => requestAnimationFrame(callback));
 
     canvas.addEventListener("pointerdown", (e) => this.#onPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.#onPointerMove(e));
@@ -244,16 +260,36 @@ export class InputRouter {
     const size = this.#videoSize();
     if (!hit || !size) return;
     const point = streamToDevice(hit.x, hit.y, size.w, size.h);
-    this.#send({
-      type: "scroll",
-      x: point.x,
-      y: point.y,
-      videoWidth: size.w,
-      videoHeight: size.h,
-      scrollX: clamp(-e.deltaX / 100, -1, 1),
-      scrollY: clamp(-e.deltaY / 100, -1, 1),
-      buttons: e.buttons,
-    });
+    this.#scrollTarget = { x: point.x, y: point.y, videoWidth: size.w, videoHeight: size.h, buttons: e.buttons };
+    const feel = this.#scrolling();
+    const delta = wheelToScroll(e.deltaX, e.deltaY, feel.speed);
+    this.#scroll.add(delta.x, delta.y);
+    if (this.#scrollFrameAt !== null) return;
+    this.#sendScroll(FRAME_MS, feel.smoothingMs);
+    this.#scheduleScroll(e.timeStamp);
+  }
+
+  #scheduleScroll(sentAt: number): void {
+    if (this.#scroll.idle) {
+      this.#scrollFrameAt = null;
+      return;
+    }
+    this.#scrollFrameAt = sentAt;
+    this.#requestFrame((time) => this.#onScrollFrame(time));
+  }
+
+  /** A notch still easing out stops when the view starts moving or the display pauses, as a fresh wheel event would. */
+  #onScrollFrame(time: number): void {
+    if (this.#scene.view().active || this.#paused()) this.#scroll.clear();
+    else this.#sendScroll(Math.max(0, time - (this.#scrollFrameAt ?? time)), this.#scrolling().smoothingMs);
+    this.#scheduleScroll(time);
+  }
+
+  #sendScroll(elapsedMs: number, smoothingMs: number): void {
+    const target = this.#scrollTarget;
+    const slice = this.#scroll.take(elapsedMs, smoothingMs);
+    if (!target || (slice.x === 0 && slice.y === 0)) return;
+    this.#send({ type: "scroll", ...target, scrollX: slice.x, scrollY: slice.y });
   }
 
   #onKey(e: KeyboardEvent): void {

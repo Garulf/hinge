@@ -10,6 +10,25 @@ const MAX_SCROLL_PER_MESSAGE = 16;
  */
 export const SMALLEST_SLICE = 0.05;
 
+/** Chromium reports a mouse wheel's notches in whole multiples of this; a touchpad's or a free-spinning wheel's fine steps are not. */
+const WHEEL_DELTA_PER_NOTCH = 120;
+
+/**
+ * Whether a wheel event comes from a notched mouse wheel rather than a
+ * touchpad's many small steps. Chromium's non-standard wheelDeltaX/Y carries
+ * the notch count; an event without them counts as a notch.
+ */
+export interface ChromiumWheelDeltas {
+  wheelDeltaX?: number;
+  wheelDeltaY?: number;
+}
+
+export function isWheelNotch(e: ChromiumWheelDeltas): boolean {
+  const { wheelDeltaX: x, wheelDeltaY: y } = e;
+  if (x === undefined || y === undefined) return true;
+  return (x !== 0 || y !== 0) && x % WHEEL_DELTA_PER_NOTCH === 0 && y % WHEEL_DELTA_PER_NOTCH === 0;
+}
+
 /** A wheel event's deltas in scrcpy scroll units: one notch is one unit, and scrolling down is negative. */
 export function wheelToScroll(deltaX: number, deltaY: number, speed: number): { x: number; y: number } {
   return { x: (-deltaX / WHEEL_NOTCH_PX) * speed, y: (-deltaY / WHEEL_NOTCH_PX) * speed };

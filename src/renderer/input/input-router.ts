@@ -3,10 +3,11 @@ import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
 import { RotateGesture, type Point } from "../../shared/model-rotation";
 import { ModifierTracker, type ModifierKey } from "../../shared/modifiers";
 import { WheelSteps } from "../../shared/scale";
-import { ScrollSmoother, wheelToScroll } from "../../shared/scroll-smoother";
+import { isWheelNotch, ScrollSmoother, wheelToScroll, type ChromiumWheelDeltas } from "../../shared/scroll-smoother";
 import { insideScreenMask, screenUvToStream } from "../../shared/screen-uv";
 import { DEFAULT_MODIFIERS, ShortcutHandler, type HingeAction } from "../../shared/shortcuts";
 import { streamToDevice, TouchTracker, type PointerEventLike, type StreamPoint } from "../../shared/touch";
+import { WheelSwipe } from "../../shared/wheel-swipe";
 import type { ControlIntent } from "../../shared/wire";
 import type { PhoneScene } from "../scene/phone-scene";
 
@@ -31,14 +32,17 @@ export interface InputRouterOptions {
   onRotated?: (outcome: "moved" | "reset") => void;
   /** An Alt+left press starts turning the model while the work view is showing: switches to showcase without resetting the turn. */
   onEnterShowcase?: () => void;
-  /** How long a wheel notch eases out over (0 sends it at once) and how far it scrolls, read on every wheel event. */
+  /** How a wheel notch reaches the phone and how far it scrolls, read on every wheel event. */
   scrolling?: () => ScrollFeel;
   requestFrame?: (callback: (time: number) => void) => void;
 }
 
 export interface ScrollFeel {
+  /** How long a notch sent as scroll events eases out over; 0 sends it at once. */
   smoothingMs: number;
   speed: number;
+  /** "swipe" moves a finger for each burst of notches; scroll events otherwise. A touchpad always sends scroll events. */
+  style?: "swipe" | "events";
 }
 
 const FRAME_MS = 1000 / 60;
@@ -71,6 +75,8 @@ export class InputRouter {
   readonly #scrolling: () => ScrollFeel;
   readonly #requestFrame: (callback: (time: number) => void) => void;
   readonly #scroll = new ScrollSmoother();
+  readonly #swipe = new WheelSwipe();
+  #swipeFrameWaiting = false;
   #scrollTarget: ScrollTarget | null = null;
   #scrollFrameAt: number | null = null;
   #press: PressMode | null = null;
@@ -148,6 +154,7 @@ export class InputRouter {
       window.hinge.beginDrag();
       return;
     }
+    this.#cancelSwipe();
     this.#press = e.button === 0 ? "touch" : null;
     this.#dispatch({ kind: "down", button: e.button, buttons: e.buttons, hit, ctrl: e.ctrlKey, shift: e.shiftKey });
   }
@@ -193,6 +200,7 @@ export class InputRouter {
 
   /** Lets go of every touch and key the phone still has held, before focus is lost or the display pauses. */
   #releaseAll(): void {
+    this.#cancelSwipe();
     this.#cancelInteraction();
     for (const intent of [...this.#shortcuts.flush(), ...this.#keys.flush()]) this.#send(intent);
   }
@@ -259,14 +267,45 @@ export class InputRouter {
     const hit = this.#hitOf(e);
     const size = this.#videoSize();
     if (!hit || !size) return;
-    const point = streamToDevice(hit.x, hit.y, size.w, size.h);
-    this.#scrollTarget = { x: point.x, y: point.y, videoWidth: size.w, videoHeight: size.h, buttons: e.buttons };
     const feel = this.#scrolling();
     const delta = wheelToScroll(e.deltaX, e.deltaY, feel.speed);
+    const notch = isWheelNotch(e as WheelEvent & ChromiumWheelDeltas);
+    if (notch && feel.style === "swipe" && this.#press !== "touch") {
+      this.#swipeNotch(delta, { x: hit.x * size.w, y: hit.y * size.h }, size, e.timeStamp);
+      return;
+    }
+    const point = streamToDevice(hit.x, hit.y, size.w, size.h);
+    this.#scrollTarget = { x: point.x, y: point.y, videoWidth: size.w, videoHeight: size.h, buttons: e.buttons };
     this.#scroll.add(delta.x, delta.y);
     if (this.#scrollFrameAt !== null) return;
-    this.#sendScroll(FRAME_MS, feel.smoothingMs);
+    this.#sendScroll(FRAME_MS, notch ? feel.smoothingMs : 0);
     this.#scheduleScroll(e.timeStamp);
+  }
+
+  #swipeNotch(units: { x: number; y: number }, at: { x: number; y: number }, size: { w: number; h: number }, time: number): void {
+    for (const intent of this.#swipe.add(units, at, size, time)) this.#send(intent);
+    this.#requestSwipeFrame();
+  }
+
+  #requestSwipeFrame(): void {
+    if (this.#swipeFrameWaiting || !this.#swipe.busy) return;
+    this.#swipeFrameWaiting = true;
+    this.#requestFrame((time) => this.#onSwipeFrame(time));
+  }
+
+  /** The finger lets go without a fling when the view starts moving, the display pauses or the stream changes size under it. */
+  #onSwipeFrame(time: number): void {
+    this.#swipeFrameWaiting = false;
+    const held = this.#swipe.stream;
+    const size = this.#videoSize();
+    const streamChanged = held !== null && (size?.w !== held.w || size?.h !== held.h);
+    const stop = this.#scene.view().active || this.#paused() || streamChanged;
+    for (const intent of stop ? this.#swipe.cancel() : this.#swipe.frame(time)) this.#send(intent);
+    this.#requestSwipeFrame();
+  }
+
+  #cancelSwipe(): void {
+    for (const intent of this.#swipe.cancel()) this.#send(intent);
   }
 
   #scheduleScroll(sentAt: number): void {

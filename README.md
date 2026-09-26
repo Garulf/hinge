@@ -32,7 +32,7 @@ r37.0.1) and `scrcpy-server-v4.1` into `vendor/` (gitignored). Pass `--only win`
 
 ## Status
 
-First release candidate. The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, in a flat work view or a 3D showcase view, with touch, keyboard, scrcpy's shortcuts, clipboard sync, phone audio, file drop and Wi-Fi pairing. Builds are made locally for Windows (installer and portable exe) and Linux (AppImage and deb).
+First release candidate. The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, in a flat work view or a 3D showcase view, with touch, keyboard, scrcpy's shortcuts, clipboard sync, phone audio, mirrored notifications, file drop and Wi-Fi pairing. Builds are made locally for Windows (installer and portable exe) and Linux (AppImage and deb).
 
 ## Running
 
@@ -159,9 +159,9 @@ shade from the top still works):
 - **Colour** picks the model's colourway: Jet Black, Blue Shadow, Silver
   Shadow or Mint.
 - **Pin** keeps the window above other windows.
-- **Settings** has the shortcut modifier, phone audio, and the video codec,
-  bit rate, size and frame rate limits. Stream settings apply the next time
-  the phone connects.
+- **Settings** has the shortcut modifier, notification mirroring, phone
+  audio, and the video codec, bit rate, size and frame rate limits. Stream
+  settings apply the next time the phone connects.
 - **Close** quits.
 
 Panels open inside the window (it grows while one needs the room) and close
@@ -217,6 +217,14 @@ Phones on Android 11 or newer play their audio through the PC. If the phone
 can't share audio, hinge says so once and carries on without it; if the
 audio stops partway while the video goes on, a notice says that too. Turn
 it off in Settings.
+
+### Notifications
+
+While the phone is streaming, its notifications appear on the PC too:
+ongoing, foreground-service, group-summary and below-default-importance
+ones are left out, and nothing pops while the hinge window is focused.
+Clicking one brings hinge to the front and opens the app on the phone.
+Turn it off in Settings.
 
 ### Files
 

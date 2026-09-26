@@ -12,7 +12,8 @@ export interface Point {
 }
 
 export const MODEL_REST: ModelAngles = { yaw: 0, pitch: 0 };
-export const MODEL_LIMITS: ModelAngles = { yaw: 75, pitch: 60 };
+/** The one remaining limit: the turn is a full 360 degree turntable in yaw, but still tips at most this far in pitch. */
+export const PITCH_LIMIT_DEG = 60;
 
 const DEG_PER_PX = 0.3;
 const CLICK_SLOP_PX = 6;
@@ -29,8 +30,22 @@ function clamp(n: number, limit: number): number {
   return Number.isFinite(n) ? Math.min(Math.max(n, -limit), limit) : 0;
 }
 
+/**
+ * Wraps a yaw of any size into (-180, 180], the same orientation it always
+ * was: 170 + 30 lands on -160, not 200, so a drag that carries the turn past
+ * 180 never jumps and the reset spring (a plain interpolation to 0) always
+ * takes the short way home.
+ */
+function wrapYaw(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  let wrapped = n % 360;
+  if (wrapped > 180) wrapped -= 360;
+  else if (wrapped <= -180) wrapped += 360;
+  return wrapped;
+}
+
 export function clampModelAngles(angles: ModelAngles): ModelAngles {
-  return { yaw: clamp(angles.yaw, MODEL_LIMITS.yaw), pitch: clamp(angles.pitch, MODEL_LIMITS.pitch) };
+  return { yaw: wrapYaw(angles.yaw), pitch: clamp(angles.pitch, PITCH_LIMIT_DEG) };
 }
 
 function distance(a: Point, b: Point): number {

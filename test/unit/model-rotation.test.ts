@@ -16,11 +16,17 @@ test("a drag starts from the angle it is pressed at, so drags accumulate", () =>
   expect(gesture.move({ x: 10, y: 10 })).toEqual({ yaw: 23, pitch: -13 });
 });
 
-test("the angle is clamped to yaw 75 and pitch 60 either way", () => {
+test("pitch is clamped to 60 either way, but yaw is a full 360 turntable that wraps instead of clamping", () => {
   const gesture = new RotateGesture();
   gesture.press({ x: 0, y: 0 }, MODEL_REST, 0);
-  expect(gesture.move({ x: 10_000, y: -10_000 })).toEqual({ yaw: 75, pitch: 60 });
-  expect(gesture.move({ x: -10_000, y: 10_000 })).toEqual({ yaw: -75, pitch: -60 });
+  expect(gesture.move({ x: 10_000, y: -10_000 })).toEqual({ yaw: 120, pitch: 60 });
+  expect(gesture.move({ x: -10_000, y: 10_000 })).toEqual({ yaw: -120, pitch: -60 });
+});
+
+test("a drag that carries the yaw past 180 wraps instead of jumping back", () => {
+  const gesture = new RotateGesture();
+  gesture.press({ x: 0, y: 0 }, { yaw: 170, pitch: 0 }, 0);
+  expect(gesture.move({ x: 100, y: 0 })).toEqual({ yaw: -160, pitch: 0 });
 });
 
 test("a move before any press, or after release, changes nothing", () => {
@@ -92,8 +98,10 @@ test("a cancelled press is neither a click nor a drag, and forgets the first cli
   expect(gesture.release({ x: 0, y: 0 }, 250)).toBe("keep");
 });
 
-test("clampModelAngles keeps angles inside the limits and turns non-finite values into rest", () => {
-  expect(clampModelAngles({ yaw: 100, pitch: -100 })).toEqual({ yaw: 75, pitch: -60 });
+test("clampModelAngles wraps yaw into (-180, 180], clamps pitch to 60, and turns non-finite values into rest", () => {
+  expect(clampModelAngles({ yaw: 170 + 30, pitch: -100 })).toEqual({ yaw: -160, pitch: -60 });
+  expect(clampModelAngles({ yaw: 180, pitch: 0 })).toEqual({ yaw: 180, pitch: 0 });
+  expect(clampModelAngles({ yaw: -180, pitch: 0 })).toEqual({ yaw: 180, pitch: 0 });
   expect(clampModelAngles({ yaw: Number.NaN, pitch: 5 })).toEqual({ yaw: 0, pitch: 5 });
 });
 
@@ -105,10 +113,10 @@ test("set moves the model at once and stays there", () => {
   expect(rotation.moving).toBe(false);
 });
 
-test("set clamps to the limits", () => {
+test("set wraps yaw and clamps pitch to the limits", () => {
   const rotation = new ModelRotation();
   rotation.set({ yaw: -200, pitch: 200 });
-  expect(rotation.angles).toEqual({ yaw: -75, pitch: 60 });
+  expect(rotation.angles).toEqual({ yaw: 160, pitch: 60 });
 });
 
 function settleTime(from: { yaw: number; pitch: number }, within: number): { visibleMs: number; exactMs: number } {
@@ -134,6 +142,22 @@ test("reset springs back to rest in about 400 ms and lands exactly on 0,0", () =
     expect(visibleMs).toBeGreaterThanOrEqual(320);
     expect(visibleMs).toBeLessThanOrEqual(460);
     expect(exactMs).toBeLessThan(800);
+  }
+});
+
+test("reset from 170 or -170 takes the short way home, never travelling the long way round through 180", () => {
+  for (const from of [170, -170]) {
+    const rotation = new ModelRotation();
+    rotation.set({ yaw: from, pitch: 0 });
+    rotation.reset();
+    let maxTravel = 0;
+    for (let t = 16; t <= 3000; t += 16) {
+      const { yaw } = rotation.tick(16);
+      maxTravel = Math.max(maxTravel, Math.abs(yaw));
+      if (yaw === 0 && !rotation.moving) break;
+    }
+    expect(maxTravel).toBeLessThan(180);
+    expect(rotation.angles).toEqual({ yaw: 0, pitch: 0 });
   }
 });
 

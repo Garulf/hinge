@@ -254,7 +254,7 @@ test("the 2 to 3 migration keeps a turn a phone already has, and running it agai
   expect((await loadSettings(path)).current.devices).toEqual(store.current.devices);
 });
 
-test("a saved turn round-trips; one out of range is clamped and a malformed one dropped", async () => {
+test("a saved turn round-trips; an out-of-range one wraps yaw and clamps pitch, and a malformed one is dropped", async () => {
   const store = await loadSettings(path);
   await store.saveDevice("R5CY", { rotation: { yaw: 30, pitch: -12.5 } });
   expect((await loadSettings(path)).current.devices.R5CY).toEqual({ rotation: { yaw: 30, pitch: -12.5 } });
@@ -263,7 +263,7 @@ test("a saved turn round-trips; one out of range is clamped and a malformed one 
     path,
     JSON.stringify({ version: 3, devices: { A: { rotation: { yaw: 400, pitch: -90 } }, B: { rotation: { yaw: "1", pitch: 0 } }, C: { rotation: 5 } } }),
   );
-  expect((await loadSettings(path)).current.devices).toEqual({ A: { rotation: { yaw: 75, pitch: -60 } }, B: {}, C: {} });
+  expect((await loadSettings(path)).current.devices).toEqual({ A: { rotation: { yaw: 40, pitch: -60 } }, B: {}, C: {} });
 });
 
 test("a rename that fails with EPERM or EBUSY (a virus scanner holding the file on Windows) is retried up to 3 times", async () => {

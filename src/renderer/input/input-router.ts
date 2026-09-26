@@ -107,6 +107,7 @@ export class InputRouter {
     const view = this.#scene.view();
     if (view.active) {
       this.#press = "ignored";
+      this.#rotate.otherPress();
       return;
     }
     if (e.button === 0 && this.#altHeld()) {
@@ -115,6 +116,7 @@ export class InputRouter {
       this.#rotate.press(pointOf(e), this.#scene.modelRotation(), e.timeStamp);
       return;
     }
+    this.#rotate.otherPress();
     const hit = this.#hitOf(e);
     if (e.button === 0 && !hit) {
       if (view.t === 1 && !e.shiftKey) {

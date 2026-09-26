@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { DEFAULT_SETTINGS, defaultSettings, loadSettings } from "../../src/main/settings";
+import { DEFAULT_SETTINGS, defaultSettings, loadSettings, settingsMigrations } from "../../src/main/settings";
 
 let dir: string;
 let path: string;
@@ -238,6 +238,20 @@ test("a version 2 file migrates to 3: every phone gets the model's turn at rest"
     R5CY: { pxPerMm: 9, view: "showcase", rotation: { yaw: 0, pitch: 0 } },
     OTHER: { rotation: { yaw: 0, pitch: 0 } },
   });
+});
+
+test("the 2 to 3 migration keeps a turn a phone already has, and running it again changes nothing", async () => {
+  const step = settingsMigrations("linux")[2];
+  const v2 = { version: 2, devices: { A: { pxPerMm: 5, rotation: { yaw: 10, pitch: -5 } }, B: { view: "work" } } };
+  const once = step(v2);
+  expect(once).toEqual({ version: 3, devices: { A: { pxPerMm: 5, rotation: { yaw: 10, pitch: -5 } }, B: { view: "work", rotation: { yaw: 0, pitch: 0 } } } });
+  expect(step({ ...once, version: 2 })).toEqual(once);
+
+  writeFileSync(path, JSON.stringify(v2));
+  const store = await loadSettings(path);
+  expect(store.current.devices.A.rotation).toEqual({ yaw: 10, pitch: -5 });
+  await store.saveDevice("B", { pxPerMm: 7 });
+  expect((await loadSettings(path)).current.devices).toEqual(store.current.devices);
 });
 
 test("a saved turn round-trips; one out of range is clamped and a malformed one dropped", async () => {

@@ -1,6 +1,8 @@
 import { MODEL_REST, type ModelAngles } from "../shared/model-rotation";
 
 export interface RotationMemoryDeps {
+  /** The turn on screen now. */
+  angles(): ModelAngles;
   /** Turns the model at once, for a phone's saved turn. */
   set(angles: ModelAngles): void;
   springToRest(): void;
@@ -27,7 +29,10 @@ export class RotationMemory {
     if (this.#device) this.#deps.save(this.#device, angles);
   }
 
+  /** Springs back to rest; already at rest there is nothing to spring or save. */
   reset(): void {
+    const { yaw, pitch } = this.#deps.angles();
+    if (yaw === MODEL_REST.yaw && pitch === MODEL_REST.pitch) return;
     this.#deps.springToRest();
     if (this.#device) this.#deps.save(this.#device, { ...MODEL_REST });
   }

@@ -42,9 +42,9 @@ function fakeCanvas() {
 // canvas, standing in for the lit screen mesh's UV as the scene shows it.
 type View = { target: "work" | "showcase"; t: number; active: boolean };
 
-function fakeScene(rotation: 0 | 1 | 2 | 3 = 0, turnYawDeg = 0) {
-  const camera = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 1000);
-  camera.position.z = 100;
+function fakeScene(rotation: 0 | 1 | 2 | 3 = 0, turnYawDeg = 0, lens: "ortho" | "perspective" = "ortho") {
+  const camera = lens === "ortho" ? new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 1000) : new THREE.PerspectiveCamera(40, 1, 0.1, 1000);
+  camera.position.z = lens === "ortho" ? 100 : 250;
   camera.updateMatrixWorld();
   const turn = new THREE.Group();
   turn.rotation.y = THREE.MathUtils.degToRad(turnYawDeg);
@@ -68,6 +68,8 @@ function fakeScene(rotation: 0 | 1 | 2 | 3 = 0, turnYawDeg = 0) {
     modelRotation: () => turns.at(-1) ?? { yaw: 0, pitch: 0 },
     setModelRotation: (angles: { yaw: number; pitch: number }) => turns.push(angles),
     state,
+    camera,
+    screenMesh: screen.mesh,
     orbits,
     turns,
     releases: () => releases,
@@ -92,9 +94,10 @@ function setup(opts?: {
   onRotated?: (outcome: "moved" | "reset") => void;
   view?: View;
   turnYawDeg?: number;
+  lens?: "ortho" | "perspective";
 }) {
   const canvas = fakeCanvas();
-  const scene = fakeScene(opts?.rotation, opts?.turnYawDeg);
+  const scene = fakeScene(opts?.rotation, opts?.turnYawDeg, opts?.lens);
   if (opts?.view) scene.state.view = opts.view;
   const sent: ControlIntent[] = [];
   const video = opts?.video ?? { w: 100, h: 100 };
@@ -748,5 +751,30 @@ test("Alt clicks further apart than 400 ms by their event times are not a double
     canvas.fire("pointerdown", { pointerId, button: 0, buttons: 1, timeStamp, ...CENTER });
     canvas.fire("pointerup", { pointerId, button: 0, buttons: 0, timeStamp: timeStamp + 50, ...CENTER });
   }
+  expect(onRotated).not.toHaveBeenCalled();
+});
+
+test("showcase: a turned model seen through the perspective camera maps the hit point's own u and v onto the stream", () => {
+  const { router, scene } = setup({ turnYawDeg: 60, lens: "perspective", view: SHOWCASE });
+  const onScreen = new THREE.Vector3(-30, 10, 0).applyMatrix4(scene.screenMesh.matrixWorld).project(scene.camera);
+  const client = { x: ((onScreen.x + 1) / 2) * 100, y: ((1 - onScreen.y) / 2) * 100 };
+  expect(router.streamPointAt(client.x, client.y)).toEqual({ x: expect.closeTo(0.2, 6), y: expect.closeTo(0.4, 6) });
+  const beyondEdge = new THREE.Vector3(-55, 0, 0).applyMatrix4(scene.screenMesh.matrixWorld).project(scene.camera);
+  expect(router.streamPointAt(((beyondEdge.x + 1) / 2) * 100, 50)).toBeNull();
+});
+
+test("a plain press between two Alt clicks means they are not a double click", () => {
+  const onRotated = vi.fn();
+  const { canvas } = setup({ onRotated });
+  const click = (pointerId: number) => {
+    canvas.fire("pointerdown", { pointerId, button: 0, buttons: 1, ...CENTER });
+    canvas.fire("pointerup", { pointerId, button: 0, buttons: 0, ...CENTER });
+  };
+  fireKey("keydown", "AltLeft", { altKey: true });
+  click(53);
+  fireKey("keyup", "AltLeft");
+  click(54);
+  fireKey("keydown", "AltLeft", { altKey: true });
+  click(55);
   expect(onRotated).not.toHaveBeenCalled();
 });

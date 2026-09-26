@@ -199,6 +199,7 @@ function applySettings(next: Settings): void {
 
 let views: ViewMemory | null = null;
 const rotations = new RotationMemory({
+  angles: () => scene.modelRotation(),
   set: (angles) => scene.setModelRotation(angles),
   springToRest: () => scene.resetModelRotation(),
   save: (id, rotation) => void window.hinge.saveDeviceSettings(id, { rotation }),

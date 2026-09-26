@@ -157,7 +157,6 @@ test("each field of a loaded file is checked on its own: a wrong type falls back
     maxFps: 60,
     shortcutModifiers: ["rctrl"],
     alwaysOnTop: true,
-    view: "showcase",
     devices: { A: { pxPerMm: 5, rotation: { yaw: 0, pitch: 0 } } },
   });
   expect(existsSync(`${path}.bad`)).toBe(false);
@@ -180,7 +179,7 @@ test("a version 1 file migrates: the stale shortcutModifier key goes, and serial
   expect(store.current).not.toHaveProperty("shortcutModifier");
   expect(store.current.shortcutModifiers).toEqual(["lalt", "lsuper"]);
   expect(store.current.devices).toEqual({});
-  expect(store.current.legacyDevices).toEqual({ "10.0.0.5:41234": { pxPerMm: 6, view: "showcase" } });
+  expect(store.current.legacyDevices).toEqual({ "10.0.0.5:41234": { pxPerMm: 6 } });
   expect(store.current.lastDevice).toBe("10.0.0.5:41234");
   expect(store.current.mirrorNotifications).toBe(true);
 });
@@ -206,12 +205,12 @@ test("adoptTransport moves a serial-keyed entry and a serial lastDevice over to 
   store.onChange((s) => seen.push(s));
 
   await store.adoptTransport("10.0.0.5:41234", "R5CY");
-  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6, view: "showcase" } });
+  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6 } });
   expect(store.current.lastDevice).toBe("R5CY");
   expect(store.current.legacyDevices).toEqual({ "adb-R5CY-x._adb-tls-connect._tcp": { windowPosition: { x: 1, y: 2 } }, OTHER: { pxPerMm: 3 } });
 
   await store.adoptTransport("adb-R5CY-x._adb-tls-connect._tcp", "R5CY");
-  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6, view: "showcase", windowPosition: { x: 1, y: 2 } } });
+  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6, windowPosition: { x: 1, y: 2 } } });
   expect(store.current.legacyDevices).toEqual({ OTHER: { pxPerMm: 3 } });
 
   await store.adoptTransport("OTHER", "OTHER");
@@ -221,14 +220,14 @@ test("adoptTransport moves a serial-keyed entry and a serial lastDevice over to 
 
   await store.adoptTransport("10.0.0.5:41234", "R5CY");
   expect(seen).toHaveLength(3);
-  expect(JSON.parse(readFileSync(path, "utf8")).devices.R5CY).toEqual({ pxPerMm: 6, view: "showcase", windowPosition: { x: 1, y: 2 } });
+  expect(JSON.parse(readFileSync(path, "utf8")).devices.R5CY).toEqual({ pxPerMm: 6, windowPosition: { x: 1, y: 2 } });
 });
 
 test("the identity's own saved values win over an adopted serial-keyed entry", async () => {
   writeFileSync(path, JSON.stringify({ version: 2, devices: { R5CY: { pxPerMm: 9 } }, legacyDevices: { "10.0.0.5:5555": { pxPerMm: 6, view: "showcase" } } }));
   const store = await loadSettings(path);
   await store.adoptTransport("10.0.0.5:5555", "R5CY");
-  expect(store.current.devices.R5CY).toEqual({ pxPerMm: 9, view: "showcase", rotation: { yaw: 0, pitch: 0 } });
+  expect(store.current.devices.R5CY).toEqual({ pxPerMm: 9, rotation: { yaw: 0, pitch: 0 } });
 });
 
 test("a version 2 file migrates to 3: every phone gets the model's turn at rest", async () => {
@@ -236,7 +235,7 @@ test("a version 2 file migrates to 3: every phone gets the model's turn at rest"
   const store = await loadSettings(path);
   expect(store.current.version).toBe(4);
   expect(store.current.devices).toEqual({
-    R5CY: { pxPerMm: 9, view: "showcase", rotation: { yaw: 0, pitch: 0 } },
+    R5CY: { pxPerMm: 9, rotation: { yaw: 0, pitch: 0 } },
     OTHER: { rotation: { yaw: 0, pitch: 0 } },
   });
 });

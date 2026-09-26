@@ -74,7 +74,7 @@ export class Chrome {
     parent.append(el("style", { text: CHROME_CSS }));
     const menuButtons: MenuButton[] = [
       { name: "device", title: "Devices", press: () => this.#toggle("device") },
-      { name: "view", title: "Switch view (MOD+d)", press: () => deps.onAction("toggle-view") },
+      { name: "center", title: "Center (MOD+d)", press: () => deps.onAction("center") },
       { name: "colour", title: "Colour", press: () => this.#toggle("colour") },
       { name: "pin", title: "Always on top", press: () => deps.save({ alwaysOnTop: !this.#settings?.alwaysOnTop }) },
       { name: "settings", title: "Settings", press: () => this.#toggle("settings") },

@@ -2,8 +2,6 @@ import type { ScreenClass, ScreenKind } from "./fold7";
 import { POSTURE_ANGLE, type Posture, type PostureReading } from "./posture";
 import { Spring } from "./spring";
 
-export type ViewMode = "work" | "showcase";
-
 export interface DirectorOutput {
   angle: number;
   trueAngle: number;
@@ -76,9 +74,9 @@ export class FoldDirector {
   readonly #requestFrames: () => void;
 
   /** `requestFrames` asks the stream to resend its screen (scrcpy's reset-video), for a lead whose screen has sent nothing. */
-  constructor(opts?: { view?: ViewMode; settleMs?: number; requestFrames?: () => void }) {
+  constructor(opts?: { settleMs?: number; requestFrames?: () => void }) {
     this.#requestFrames = opts?.requestFrames ?? (() => {});
-    this.#blend = opts?.view === "showcase" ? 1 : 0;
+    this.#blend = 0;
     const settleMs = opts?.settleMs ?? DEFAULT_SETTLE_MS;
     this.#workAngle = new Spring({ value: 0, settleMs });
     this.#trueAngle = new Spring({ value: 0, settleMs });
@@ -143,8 +141,8 @@ export class FoldDirector {
     this.#lit = null;
   }
 
-  /** `blend` runs from 0 (the work angle) to 1 (the true angle) as the view transition eases between them. */
-  setView(view: ViewMode, blend: number = view === "showcase" ? 1 : 0): void {
+  /** `blend` runs from 0 (the work angle) to 1 (the true angle) as the phone turns from straight on to the showcase look. */
+  setBlend(blend: number): void {
     this.#blend = blend;
   }
 

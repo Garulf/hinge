@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { caseGrip, type Grip } from "../../shared/case-grip";
 import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
 import { RotateGesture, type Point } from "../../shared/model-rotation";
 import { ModifierTracker, type ModifierKey } from "../../shared/modifiers";
@@ -27,10 +28,8 @@ export interface InputRouterOptions {
   modifiers?: () => readonly ModifierKey[];
   /** While the display is paused nothing but shortcuts reaches the phone, as in scrcpy. */
   paused?: () => boolean;
-  /** An Alt+drag turn of the model ended ("moved"), or an Alt+double-click asked for it to go back to rest ("reset"). */
+  /** A turn of the model ended ("moved"), or a double-click on a turn grip asked for it to go back to straight on ("reset"). */
   onRotated?: (outcome: "moved" | "reset") => void;
-  /** An Alt+left press starts turning the model while the work view is showing: switches to showcase without resetting the turn. */
-  onEnterShowcase?: () => void;
   /** How long a wheel notch eases out over (0 sends it at once) and how far it scrolls, read on every wheel event. */
   scrolling?: () => ScrollFeel;
   requestFrame?: (callback: (time: number) => void) => void;
@@ -47,10 +46,13 @@ type ScrollTarget = Omit<Extract<ControlIntent, { type: "scroll" }>, "type" | "s
 
 /**
  * What a press does, fixed at pointerdown until release: a touch on the
- * phone, a window drag, a showcase orbit, an Alt+drag turn of the model, or
- * nothing (pressed while the view transition ran).
+ * phone, a window drag, a turn of the model, or nothing (pressed while
+ * Center eased the turn back).
  */
-type PressMode = "touch" | "drag" | "orbit" | "rotate" | "ignored";
+type PressMode = "touch" | "drag" | "rotate" | "ignored";
+
+/** Over the lit screen the pointer is the phone's; over the case it shows what a press there would do. */
+const GRIP_CURSOR: Record<Grip | "screen", string> = { screen: "", turn: "grab", move: "move" };
 
 export class InputRouter {
   readonly #canvas: HTMLCanvasElement;
@@ -67,18 +69,17 @@ export class InputRouter {
   readonly #raycaster = new THREE.Raycaster();
   readonly #rotate = new RotateGesture();
   readonly #onRotated: (outcome: "moved" | "reset") => void;
-  readonly #onEnterShowcase: () => void;
   readonly #scrolling: () => ScrollFeel;
   readonly #requestFrame: (callback: (time: number) => void) => void;
   readonly #scroll = new ScrollSmoother();
   #scrollTarget: ScrollTarget | null = null;
   #scrollFrameAt: number | null = null;
   #press: PressMode | null = null;
-  /** Whether the current rotate press has moved the model, so a plain Alt+click saves nothing. */
+  /** Whether the current rotate press has moved the model, so a plain click saves nothing. */
   #turned = false;
-  /** A drag or orbit press held still while the view transition runs. */
+  /** A window drag held still while Center eases the turn back. */
   #heldForTransition = false;
-  #lastPointer = { x: 0, y: 0 };
+  #cursor = "";
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -96,7 +97,6 @@ export class InputRouter {
     this.#shortcuts = new ShortcutHandler(this.#modifiers, opts.modifiers ?? (() => DEFAULT_MODIFIERS));
     this.#paused = opts.paused ?? (() => false);
     this.#onRotated = opts.onRotated ?? (() => {});
-    this.#onEnterShowcase = opts.onEnterShowcase ?? (() => {});
     this.#scrolling = opts.scrolling ?? (() => ({ smoothingMs: 0, speed: 1 }));
     this.#requestFrame = opts.requestFrame ?? ((callback) => requestAnimationFrame(callback));
 
@@ -116,46 +116,52 @@ export class InputRouter {
     });
   }
 
+  /**
+   * A left press with Alt held turns the phone from anywhere. Otherwise the
+   * lit screen takes it as a touch, the case's corners and sides turn the
+   * phone, and its top and bottom (or anywhere off the phone) move the
+   * window.
+   */
   #onPointerDown(e: PointerEvent): void {
     // Capture on every path: a bezel drag needs pointerup even if the
     // cursor ends up outside the (possibly already-moved) window, and a
-    // touch or an orbit needs it for the same reason when dragged off the
+    // touch or a turn needs it for the same reason when dragged off the
     // canvas.
     this.#canvas.setPointerCapture(e.pointerId);
-    this.#lastPointer = { x: e.clientX, y: e.clientY };
     this.#heldForTransition = false;
-    const view = this.#scene.view();
-    if (view.active) {
+    if (this.#scene.view().active) {
       this.#press = "ignored";
       this.#rotate.otherPress();
       return;
     }
     if (e.button === 0 && this.#altHeld()) {
-      this.#press = "rotate";
-      this.#turned = false;
-      if (view.target === "work") this.#onEnterShowcase();
-      this.#rotate.press(pointOf(e), this.#scene.modelRotation(), e.timeStamp);
+      this.#startTurn(e);
       return;
     }
-    this.#rotate.otherPress();
     const hit = this.#hitOf(e);
     if (e.button === 0 && !hit) {
-      if (view.t === 1 && !e.shiftKey) {
-        this.#press = "orbit";
+      if (this.#gripAt(e) === "turn") {
+        this.#startTurn(e);
         return;
       }
+      this.#rotate.otherPress();
       this.#press = "drag";
       window.hinge.beginDrag();
       return;
     }
+    this.#rotate.otherPress();
     this.#press = e.button === 0 ? "touch" : null;
     this.#dispatch({ kind: "down", button: e.button, buttons: e.buttons, hit, ctrl: e.ctrlKey, shift: e.shiftKey });
   }
 
+  #startTurn(e: PointerEvent): void {
+    this.#press = "rotate";
+    this.#turned = false;
+    this.#setCursor("grabbing");
+    this.#rotate.press(pointOf(e), this.#scene.modelRotation(), e.timeStamp);
+  }
+
   #onPointerMove(e: PointerEvent): void {
-    const dx = e.clientX - this.#lastPointer.x;
-    const dy = e.clientY - this.#lastPointer.y;
-    this.#lastPointer = { x: e.clientX, y: e.clientY };
     if (this.#press === "ignored") return;
     if (this.#press === "rotate") {
       const angles = this.#rotate.move(pointOf(e));
@@ -165,17 +171,15 @@ export class InputRouter {
       }
       return;
     }
-    if (this.#press === "drag" || this.#press === "orbit") {
-      if (this.#scene.view().active) {
-        this.#pauseForTransition();
-        return;
-      }
-      if (this.#heldForTransition) this.#resumeAfterTransition();
-      if (this.#press === "orbit") this.#scene.orbitBy(dx, dy);
+    if (this.#press === "drag") {
+      if (this.#scene.view().active) this.#pauseForTransition();
+      else if (this.#heldForTransition) this.#resumeAfterTransition();
       return;
     }
     if (this.#scene.view().active) return;
-    this.#dispatch({ kind: "move", button: e.button, buttons: e.buttons, hit: this.#hitOf(e) });
+    const hit = this.#hitOf(e);
+    if (this.#press === null) this.#setCursor(GRIP_CURSOR[hit ? "screen" : this.#gripAt(e)]);
+    this.#dispatch({ kind: "move", button: e.button, buttons: e.buttons, hit });
   }
 
   #onPointerUp(e: PointerEvent): void {
@@ -183,11 +187,12 @@ export class InputRouter {
     const press = this.#press;
     this.#press = null;
     if (press === "rotate") {
+      this.#setCursor(GRIP_CURSOR.turn);
       this.#endRotate(this.#rotate.release(pointOf(e), e.timeStamp));
       return;
     }
     this.#endPress(press);
-    if (press === "drag" || press === "orbit" || press === "ignored") return;
+    if (press === "drag" || press === "ignored") return;
     this.#dispatch({ kind: "up", button: e.button, buttons: e.buttons, hit: this.#scene.view().active ? null : this.#hitOf(e) });
   }
 
@@ -197,7 +202,7 @@ export class InputRouter {
     for (const intent of [...this.#shortcuts.flush(), ...this.#keys.flush()]) this.#send(intent);
   }
 
-  /** Ends a drag or an orbit and cancels a touch on blur, pointercancel and lostpointercapture. */
+  /** Ends a drag or a turn and cancels a touch on blur, pointercancel and lostpointercapture. */
   #cancelInteraction(): void {
     const press = this.#press;
     this.#press = null;
@@ -207,7 +212,6 @@ export class InputRouter {
 
   #endPress(press: PressMode | null): void {
     if (press === "drag" && !this.#heldForTransition) window.hinge.endDrag();
-    else if (press === "orbit") this.#scene.releaseOrbit();
     else if (press === "rotate") {
       // Cut short by a blur or a lost capture, the turn stays where it got to.
       this.#rotate.cancel();
@@ -223,8 +227,8 @@ export class InputRouter {
     else if (turned) this.#onRotated("moved");
   }
 
-  /** The view toggle springs the turn back to rest, so the rest of this drag must not pull it away again. */
-  #stopRotateForToggle(): void {
+  /** Center springs the turn back to rest, so the rest of this drag must not pull it away again. */
+  #stopRotateForCenter(): void {
     if (this.#press !== "rotate") return;
     this.#press = "ignored";
     this.#turned = false;
@@ -235,16 +239,20 @@ export class InputRouter {
     return this.#modifiers.held("lalt") || this.#modifiers.held("ralt");
   }
 
-  /** Main moves a dragged window on its own timer, so the drag ends outright rather than just ignoring moves. */
+  /**
+   * Main moves a dragged window on its own timer, so while Center resizes
+   * the window around the turn the drag ends outright rather than just
+   * ignoring moves.
+   */
   #pauseForTransition(): void {
-    if (this.#heldForTransition || (this.#press !== "drag" && this.#press !== "orbit")) return;
+    if (this.#heldForTransition || this.#press !== "drag") return;
     this.#heldForTransition = true;
-    if (this.#press === "drag") window.hinge.endDrag();
+    window.hinge.endDrag();
   }
 
   #resumeAfterTransition(): void {
     this.#heldForTransition = false;
-    if (this.#press === "drag") window.hinge.beginDrag();
+    window.hinge.beginDrag();
   }
 
   #onWheel(e: WheelEvent): void {
@@ -313,8 +321,8 @@ export class InputRouter {
       if (shortcut.claimed) e.preventDefault();
       for (const intent of shortcut.intents) this.#send(intent);
       if (shortcut.action === "pause") this.#releaseAll();
-      if (shortcut.action === "toggle-view") {
-        this.#stopRotateForToggle();
+      if (shortcut.action === "center") {
+        this.#stopRotateForCenter();
         this.#pauseForTransition();
       }
       if (shortcut.action) this.#onAction(shortcut.action);
@@ -340,6 +348,29 @@ export class InputRouter {
     return this.#hitOf({ clientX, clientY });
   }
 
+  /** What a left press at this client point would do: touch the phone, turn it, or move the window. */
+  pressAt(clientX: number, clientY: number): "touch" | Grip {
+    const at = { clientX, clientY };
+    return this.#hitOf(at) ? "touch" : this.#gripAt(at);
+  }
+
+  /** Off the phone altogether (the room around a turned phone, say) a press moves the window. */
+  #gripAt(e: { clientX: number; clientY: number }): Grip {
+    const point = this.#scene.bodyPointAt(this.#ndcOf(e));
+    return point ? caseGrip(point) : "move";
+  }
+
+  #setCursor(cursor: string): void {
+    if (cursor === this.#cursor) return;
+    this.#cursor = cursor;
+    this.#canvas.style.cursor = cursor;
+  }
+
+  #ndcOf(e: { clientX: number; clientY: number }): THREE.Vector2 {
+    const rect = this.#canvas.getBoundingClientRect();
+    return new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
+  }
+
   /**
    * Only the lit screen takes touches: a press on the dark or folded-away
    * screen, its masked-off corners, the body or around the phone is a bezel
@@ -348,9 +379,7 @@ export class InputRouter {
   #hitOf(e: { clientX: number; clientY: number }): StreamPoint | null {
     const screen = this.#scene.litScreen();
     if (!screen) return null;
-    const rect = this.#canvas.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -(((e.clientY - rect.top) / rect.height) * 2 - 1));
-    this.#raycaster.setFromCamera(ndc, this.#scene.activeCamera());
+    this.#raycaster.setFromCamera(this.#ndcOf(e), this.#scene.activeCamera());
     const [hit] = this.#raycaster.intersectObject(screen.mesh);
     if (!hit?.uv) return null;
     if (!insideScreenMask(hit.uv.x, hit.uv.y, screen.extras.cornerRadiusUv, screen.extras.pixelSize)) return null;

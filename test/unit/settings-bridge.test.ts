@@ -20,7 +20,7 @@ test("sanitisePatch keeps known keys with values of the right type and drops the
       shortcutModifiers: ["rctrl", "nope"],
       view: "showcase",
     }),
-  ).toEqual({ colourway: "mint", alwaysOnTop: true, videoBitRate: 8_000_000, lastDevice: null, shortcutModifiers: ["rctrl"], view: "showcase" });
+  ).toEqual({ colourway: "mint", alwaysOnTop: true, videoBitRate: 8_000_000, lastDevice: null, shortcutModifiers: ["rctrl"] });
   expect(sanitisePatch(null)).toEqual({});
   expect(sanitisePatch("x")).toEqual({});
 });
@@ -34,8 +34,7 @@ test("sanitisePatch takes a smoothing of 0 but no scroll speed of 0 or below", (
 test("sanitiseDevicePatch keeps a positive pxPerMm and a numeric position only", () => {
   expect(sanitiseDevicePatch({ pxPerMm: 5.5, windowPosition: { x: 1, y: 2 }, other: 1 })).toEqual({ pxPerMm: 5.5, windowPosition: { x: 1, y: 2 } });
   expect(sanitiseDevicePatch({ pxPerMm: 0, windowPosition: { x: "1", y: 2 } })).toEqual({});
-  expect(sanitiseDevicePatch({ view: "showcase" })).toEqual({ view: "showcase" });
-  expect(sanitiseDevicePatch({ view: "sideways" })).toEqual({});
+  expect(sanitiseDevicePatch({ view: "showcase" })).toEqual({});
 });
 
 function fakes() {

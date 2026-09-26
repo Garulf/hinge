@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST, type Vec3 } from "../../src/shared/showcase-camera";
+import { blendedCamera, type Vec3 } from "../../src/shared/showcase-camera";
 
 const deg = (d: number) => (d * Math.PI) / 180;
 
@@ -14,19 +14,13 @@ const BASE = {
   workCentre: { x: 0, y: 0, z: 0 },
   workHalfHeight: HALF.y,
   subject: SUBJECT,
-  yawDeg: SHOWCASE_REST.yaw,
-  pitchDeg: SHOWCASE_REST.pitch,
 };
 
 function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
-test("the showcase rest pose is straight on: yaw and pitch both 0", () => {
-  expect(SHOWCASE_REST).toEqual({ yaw: 0, pitch: 0 });
-});
-
-test("at rest the showcase camera looks straight down the phone's normal, offset along +Z with no yaw or pitch", () => {
+test("at t 1 the camera looks straight down the phone's normal, offset along +Z", () => {
   const rig = blendedCamera({ ...BASE, t: 1 });
   expect(rig.position.x).toBeCloseTo(CENTRE.x, 9);
   expect(rig.position.y).toBeCloseTo(CENTRE.y, 9);
@@ -65,34 +59,14 @@ test("in fullscreen, with room to spare, the showcase still keeps the work view'
   expect((rig.position.z - SUBJECT.max.z) * Math.tan(deg(9))).toBeCloseTo(0.2, 12);
 });
 
-test("an orbit swings the camera around the phone at the rest distance, so the phone never shrinks or grows", () => {
-  const rest = blendedCamera({ ...BASE, t: 1 });
-  const restDistance = distance(rest.position, rest.target);
-  for (const yaw of [SHOWCASE_LIMITS.yaw[0], -30, 30, SHOWCASE_LIMITS.yaw[1]]) {
-    for (const pitch of [SHOWCASE_LIMITS.pitch[0], 0, 20, SHOWCASE_LIMITS.pitch[1]]) {
-      const rig = blendedCamera({ ...BASE, t: 1, yawDeg: yaw, pitchDeg: pitch });
-      const d = distance(rig.position, rig.target);
-      expect(d).toBeCloseTo(restDistance, 12);
-      expect(rig.fovDeg).toBe(rest.fovDeg);
-      expect((rig.position.x - rig.target.x) / d).toBeCloseTo(Math.sin(deg(yaw)) * Math.cos(deg(pitch)), 9);
-      expect((rig.position.y - rig.target.y) / d).toBeCloseTo(Math.sin(deg(pitch)), 9);
-      expect((rig.position.z - rig.target.z) / d).toBeCloseTo(Math.cos(deg(yaw)) * Math.cos(deg(pitch)), 9);
-      expect(rig.near).toBeLessThan(d - 0.2);
-      expect(rig.far).toBeGreaterThan(d + 0.2);
-    }
-  }
-});
-
 test("the camera moves smoothly across the blend: no step between close values of t is a jump", () => {
-  for (const orbit of [{ yawDeg: 0, pitchDeg: 0 }, { yawDeg: 50, pitchDeg: -10 }]) {
-    let previous = blendedCamera({ ...BASE, ...orbit, t: 0.001 });
-    for (let i = 2; i <= 1000; i++) {
-      const rig = blendedCamera({ ...BASE, ...orbit, t: i / 1000 });
-      const previousSpan = distance(previous.position, previous.target) * Math.tan(deg(previous.fovDeg) / 2);
-      const span = distance(rig.position, rig.target) * Math.tan(deg(rig.fovDeg) / 2);
-      expect(Math.abs(span - previousSpan)).toBeLessThan(0.001);
-      expect(distance(rig.target, previous.target)).toBeLessThan(0.001);
-      previous = rig;
-    }
+  let previous = blendedCamera({ ...BASE, t: 0.001 });
+  for (let i = 2; i <= 1000; i++) {
+    const rig = blendedCamera({ ...BASE, t: i / 1000 });
+    const previousSpan = distance(previous.position, previous.target) * Math.tan(deg(previous.fovDeg) / 2);
+    const span = distance(rig.position, rig.target) * Math.tan(deg(rig.fovDeg) / 2);
+    expect(Math.abs(span - previousSpan)).toBeLessThan(0.001);
+    expect(distance(rig.target, previous.target)).toBeLessThan(0.001);
+    previous = rig;
   }
 });

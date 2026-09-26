@@ -108,6 +108,24 @@ view it was last in.
   showcase.
 - Back in the work view the camera and window are exactly as before.
 
+### Turning the phone
+
+Hold Alt (left or right) and drag with the left button anywhere on the
+phone to turn it, in either view: sideways to turn it left or right (up to
+75 degrees), up or down to tilt its top away or toward you (up to 60). It
+follows the pointer while you drag and stays where you leave it; the next
+drag carries on from there. Nothing reaches the phone during an Alt drag,
+not even on the screen, and the window doesn't move.
+
+- Alt+double-click, or switching views, eases it back to straight on.
+- Touches on the screen still land where you click on the turned video.
+- The work view keeps its window size, so a phone turned and tilted a
+  long way can run past the window's edge.
+- Each phone comes back turned the way you left it.
+- Some Linux window managers move the window on Alt+drag (Xfce, and KDE
+  depending on its settings). There the drag moves the window instead of
+  turning the phone, unless you change the window manager's move modifier.
+
 ### Windows
 
 From a `cmd.exe` prompt in the installed or unpacked directory:
@@ -159,6 +177,7 @@ mix of left or right Alt, Super and Ctrl in Settings. The table follows
 | Shrink the window back after a panel | MOD+w |
 | Bigger or smaller, 10 percent steps | MOD+wheel |
 | Work view or 3D view | MOD+d |
+| Turn the phone model, or turn it back | Alt+drag, Alt+double-click |
 | Pause display, or resume | MOD+z, MOD+Shift+z |
 | Reset video capture | MOD+Shift+r |
 | HOME | MOD+h or middle click |
@@ -229,9 +248,9 @@ path. A file that can't be read is kept as `settings.json.bad` and defaults
 are used, and a single setting with a wrong value falls back to its
 default on its own. Besides the panel's options it holds the colourway,
 the last phone, and for each phone (by serial number) the window's
-position, the size you picked and the view (work or 3D) it was last in.
-The last phone's position, size and view are applied at startup, before it
-connects.
+position, the size you picked, the view (work or 3D) it was last in and
+how the model was turned. The last phone's position, size, view and turn
+are applied at startup, before it connects.
 
 ## Development commands
 

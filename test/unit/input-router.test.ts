@@ -16,7 +16,7 @@ function fakeTarget() {
     },
     removeEventListener() {},
     fire(type: string, e: Record<string, unknown> = {}) {
-      const event = { preventDefault: () => {}, ...e };
+      const event = { preventDefault: () => {}, timeStamp: performance.now(), ...e };
       for (const fn of listeners.get(type) ?? []) fn(event);
     },
   };
@@ -42,15 +42,21 @@ function fakeCanvas() {
 // canvas, standing in for the lit screen mesh's UV as the scene shows it.
 type View = { target: "work" | "showcase"; t: number; active: boolean };
 
-function fakeScene(rotation: 0 | 1 | 2 | 3 = 0) {
+function fakeScene(rotation: 0 | 1 | 2 | 3 = 0, turnYawDeg = 0) {
   const camera = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 1000);
   camera.position.z = 100;
+  camera.updateMatrixWorld();
+  const turn = new THREE.Group();
+  turn.rotation.y = THREE.MathUtils.degToRad(turnYawDeg);
   const screen = {
     mesh: new THREE.Mesh(new THREE.PlaneGeometry(100, 100)),
     extras: { punchHole: [0.5, 0.95, 0.02] as [number, number, number], cornerRadiusUv: [0.1, 0.1] as [number, number], pixelSize: [100, 100] as [number, number] },
   };
+  turn.add(screen.mesh);
+  turn.updateMatrixWorld(true);
   const state = { view: { target: "work", t: 0, active: false } as View };
   const orbits: [number, number][] = [];
+  const turns: { yaw: number; pitch: number }[] = [];
   let releases = 0;
   return {
     activeCamera: () => camera,
@@ -59,8 +65,11 @@ function fakeScene(rotation: 0 | 1 | 2 | 3 = 0) {
     view: () => state.view,
     orbitBy: (dx: number, dy: number) => orbits.push([dx, dy]),
     releaseOrbit: () => releases++,
+    modelRotation: () => turns.at(-1) ?? { yaw: 0, pitch: 0 },
+    setModelRotation: (angles: { yaw: number; pitch: number }) => turns.push(angles),
     state,
     orbits,
+    turns,
     releases: () => releases,
   };
 }
@@ -76,14 +85,22 @@ afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
 });
 
-function setup(opts?: { rotation?: 0 | 1 | 2 | 3; video?: { w: number; h: number }; onAction?: (action: HingeAction) => void; view?: View }) {
+function setup(opts?: {
+  rotation?: 0 | 1 | 2 | 3;
+  video?: { w: number; h: number };
+  onAction?: (action: HingeAction) => void;
+  onRotated?: (outcome: "moved" | "reset") => void;
+  view?: View;
+  turnYawDeg?: number;
+}) {
   const canvas = fakeCanvas();
-  const scene = fakeScene(opts?.rotation);
+  const scene = fakeScene(opts?.rotation, opts?.turnYawDeg);
   if (opts?.view) scene.state.view = opts.view;
   const sent: ControlIntent[] = [];
   const video = opts?.video ?? { w: 100, h: 100 };
   const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => video, (intent) => sent.push(intent), {
     onAction: opts?.onAction,
+    onRotated: opts?.onRotated,
   });
   return { canvas, scene, sent, router };
 }
@@ -611,4 +628,125 @@ test("Ctrl+drag on the screen still pinches in the showcase", () => {
   const { canvas, sent } = setup({ view: SHOWCASE });
   canvas.fire("pointerdown", { pointerId: 42, button: 0, buttons: 1, ctrlKey: true, shiftKey: false, clientX: 30, clientY: 30 });
   expect(sent.map((i) => i.type === "touch" && i.pointerId)).toEqual([-2, -3]);
+});
+
+test("Alt+left on the screen turns the model instead of touching, and reports the finished turn", () => {
+  const onRotated = vi.fn();
+  const { canvas, sent, scene } = setup({ onRotated });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 40, button: 0, buttons: 1, altKey: true, ...CENTER });
+  canvas.fire("pointermove", { pointerId: 40, button: -1, buttons: 1, altKey: true, clientX: 70, clientY: 40 });
+  canvas.fire("pointerup", { pointerId: 40, button: 0, buttons: 0, altKey: true, clientX: 70, clientY: 40 });
+  expect(sent).toEqual([]);
+  expect(scene.turns).toEqual([{ yaw: 6, pitch: 3 }]);
+  expect(onRotated).toHaveBeenCalledExactlyOnceWith("moved");
+  expect(fakeWindow.hinge.beginDrag).not.toHaveBeenCalled();
+});
+
+test("right Alt turns the model too, and a drag accumulates from the angle it starts at", () => {
+  const { canvas, scene } = setup();
+  fireKey("keydown", "AltRight", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 41, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointermove", { pointerId: 41, button: -1, buttons: 1, clientX: 60, clientY: 50 });
+  canvas.fire("pointerup", { pointerId: 41, button: 0, buttons: 0, clientX: 60, clientY: 50 });
+  canvas.fire("pointerdown", { pointerId: 42, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointermove", { pointerId: 42, button: -1, buttons: 1, clientX: 60, clientY: 50 });
+  expect(scene.turns.at(-1)).toEqual({ yaw: 6, pitch: 0 });
+});
+
+test("Alt+left on the bezel in the work view turns the model instead of moving the window", () => {
+  const { canvas, scene } = setup();
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 43, button: 0, buttons: 1, ...OFF_SCREEN });
+  canvas.fire("pointermove", { pointerId: 43, button: -1, buttons: 1, clientX: 490, clientY: 500 });
+  canvas.fire("pointerup", { pointerId: 43, button: 0, buttons: 0, clientX: 490, clientY: 500 });
+  expect(fakeWindow.hinge.beginDrag).not.toHaveBeenCalled();
+  expect(fakeWindow.hinge.endDrag).not.toHaveBeenCalled();
+  expect(scene.turns).toEqual([{ yaw: -3, pitch: 0 }]);
+});
+
+test("releasing Alt mid-drag keeps turning until the button comes up; then a plain press touches again", () => {
+  const { canvas, sent, scene } = setup();
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 44, button: 0, buttons: 1, ...CENTER });
+  fireKey("keyup", "AltLeft");
+  canvas.fire("pointermove", { pointerId: 44, button: -1, buttons: 1, clientX: 60, clientY: 50 });
+  canvas.fire("pointerup", { pointerId: 44, button: 0, buttons: 0, clientX: 60, clientY: 50 });
+  expect(scene.turns).toEqual([{ yaw: 3, pitch: 0 }]);
+  expect(sent).toEqual([]);
+
+  canvas.fire("pointerdown", { pointerId: 45, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointerup", { pointerId: 45, button: 0, buttons: 0, ...CENTER });
+  expect(touchActions(sent)).toEqual(["down", "up"]);
+  expect(scene.turns).toHaveLength(1);
+});
+
+test("showcase: Alt+left off the screen turns the model and never orbits", () => {
+  const { canvas, sent, scene } = setup({ view: SHOWCASE });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 46, button: 0, buttons: 1, ...OFF_PHONE });
+  canvas.fire("pointermove", { pointerId: 46, button: -1, buttons: 1, clientX: 520, clientY: 500 });
+  canvas.fire("pointerup", { pointerId: 46, button: 0, buttons: 0, clientX: 520, clientY: 500 });
+  expect(scene.orbits).toEqual([]);
+  expect(scene.releases()).toBe(0);
+  expect(scene.turns).toEqual([{ yaw: 6, pitch: 0 }]);
+  expect(sent).toEqual([]);
+});
+
+test("Alt+double-click resets the turn and sends nothing to the phone", () => {
+  const onRotated = vi.fn();
+  const { canvas, sent } = setup({ onRotated });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  for (const pointerId of [47, 48]) {
+    canvas.fire("pointerdown", { pointerId, button: 0, buttons: 1, ...CENTER });
+    canvas.fire("pointerup", { pointerId, button: 0, buttons: 0, ...CENTER });
+  }
+  expect(onRotated.mock.calls).toEqual([["reset"]]);
+  expect(sent).toEqual([]);
+});
+
+test("MOD+d mid-turn ends the turn: later moves change nothing", () => {
+  const onAction = vi.fn();
+  const onRotated = vi.fn();
+  const { canvas, scene } = setup({ onAction, onRotated });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 49, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointermove", { pointerId: 49, button: -1, buttons: 1, clientX: 60, clientY: 50 });
+  fireKey("keydown", "KeyD", { altKey: true });
+  expect(onAction).toHaveBeenCalledWith("toggle-view");
+  canvas.fire("pointermove", { pointerId: 49, button: -1, buttons: 1, clientX: 90, clientY: 50 });
+  canvas.fire("pointerup", { pointerId: 49, button: 0, buttons: 0, clientX: 90, clientY: 50 });
+  expect(scene.turns).toEqual([{ yaw: 3, pitch: 0 }]);
+  expect(onRotated).not.toHaveBeenCalled();
+});
+
+test("a blur mid-turn ends it where it is", () => {
+  const { canvas, scene } = setup();
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 50, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointermove", { pointerId: 50, button: -1, buttons: 1, clientX: 60, clientY: 50 });
+  fakeWindow.fire("blur");
+  canvas.fire("pointermove", { pointerId: 50, button: -1, buttons: 1, clientX: 90, clientY: 50 });
+  expect(scene.turns).toEqual([{ yaw: 3, pitch: 0 }]);
+});
+
+test("a turned model is hit where it is drawn: the narrower screen maps its own u onto the stream", () => {
+  const { router } = setup({ turnYawDeg: 60 });
+  expect(router.streamPointAt(50, 50)).toEqual({ x: expect.closeTo(0.5, 6), y: expect.closeTo(0.5, 6) });
+  expect(router.streamPointAt(30, 50)).toEqual({ x: expect.closeTo(0.1, 6), y: expect.closeTo(0.5, 6) });
+  expect(router.streamPointAt(20, 50)).toBeNull();
+});
+
+test("Alt clicks further apart than 400 ms by their event times are not a double click, however quickly they are handled", () => {
+  const onRotated = vi.fn();
+  const { canvas } = setup({ onRotated });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  for (const [pointerId, timeStamp] of [
+    [51, 1000],
+    [52, 1500],
+  ]) {
+    canvas.fire("pointerdown", { pointerId, button: 0, buttons: 1, timeStamp, ...CENTER });
+    canvas.fire("pointerup", { pointerId, button: 0, buttons: 0, timeStamp: timeStamp + 50, ...CENTER });
+  }
+  expect(onRotated).not.toHaveBeenCalled();
 });

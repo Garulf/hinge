@@ -1,3 +1,4 @@
+import type { ModelAngles } from "./model-rotation";
 import type { ModifierKey } from "./modifiers";
 
 export type ShortcutModifier = ModifierKey;
@@ -7,10 +8,12 @@ export interface DeviceSettings {
   windowPosition?: { x: number; y: number };
   pxPerMm?: number;
   view?: "work" | "showcase";
+  /** The model's turn (Alt+drag), left where the user left it. */
+  rotation?: ModelAngles;
 }
 
 export interface Settings {
-  version: 2;
+  version: 3;
   colourway: string;
   videoCodec: "h264" | "h265";
   videoBitRate: number;
@@ -30,7 +33,7 @@ export interface Settings {
 
 export type SettingsPatch = Partial<Omit<Settings, "version" | "devices" | "legacyDevices">>;
 
-/** The phone last connected and what was saved for it, so its scale, view and window corner can be in place before it streams. */
+/** The phone last connected and what was saved for it, so its scale, view, turn and window corner can be in place before it streams. */
 export function startupDevice(settings: Settings): { id: string; saved: DeviceSettings } | null {
   const id = settings.lastDevice;
   if (!id) return null;

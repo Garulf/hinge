@@ -21,6 +21,7 @@ import { MediaGate } from "./media-gate";
 import { PausableTarget } from "./pausable-target";
 import { PortClient, receivePort } from "./port-client";
 import { ScaleController } from "./scale-controller";
+import { RotationMemory } from "./rotation-memory";
 import { PhoneScene, type ViewState } from "./scene/phone-scene";
 import { ViewMemory } from "./view-memory";
 import { VideoPipe } from "./video-pipe";
@@ -197,13 +198,18 @@ function applySettings(next: Settings): void {
 }
 
 let views: ViewMemory | null = null;
+const rotations = new RotationMemory({
+  set: (angles) => scene.setModelRotation(angles),
+  springToRest: () => scene.resetModelRotation(),
+  save: (id, rotation) => void window.hinge.saveDeviceSettings(id, { rotation }),
+});
 
 /**
- * Held back until the settings are in, so the first phone's saved scale and
- * view are known when its streaming status arrives; later settings changes
- * never touch scale or view, which only change on a device change. The last
- * phone's scale and view are applied at once, so the window does not jump
- * when it starts streaming.
+ * Held back until the settings are in, so the first phone's saved scale,
+ * view and turn are known when its streaming status arrives; later settings
+ * changes never touch them, which only change on a device change. The last
+ * phone's are applied at once, so the window does not jump when it starts
+ * streaming.
  */
 const settingsReady = window.hinge
   .settings()
@@ -212,6 +218,7 @@ const settingsReady = window.hinge
     if (loaded && !settings) applySettings(loaded);
     const last = loaded ? startupDevice(loaded) : null;
     if (last) scale.useDevice(last.id, last.saved.pxPerMm);
+    if (last) rotations.useDevice(last.id, last.saved.rotation);
     views = new ViewMemory(
       {
         apply: (view, { instant }) => scene.setView(view, { instant }),
@@ -241,6 +248,7 @@ function onStatus(status: SessionStatus): void {
   const saved = settings?.devices[status.deviceId];
   scale.useDevice(status.deviceId, saved?.pxPerMm);
   views?.useDevice(status.deviceId, saved?.view);
+  rotations.useDevice(status.deviceId, saved?.rotation);
 }
 
 function onSize(w: number, h: number): void {
@@ -307,6 +315,7 @@ function onAction(action: HingeAction): void {
   switch (action) {
     case "toggle-view":
       views?.toggle();
+      rotations.reset();
       break;
     case "quit":
       window.hinge.quit();
@@ -341,10 +350,11 @@ function onAction(action: HingeAction): void {
   }
 }
 
-new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }), {
+const router = new InputRouter(canvas, scene, () => videoSize, (intent) => client?.send({ kind: "control", intent }), {
   onAction,
   modifiers: () => normaliseModifiers(settings?.shortcutModifiers, defaultModifiers(window.hinge.platform)),
   paused: () => display.paused,
+  onRotated: (outcome) => (outcome === "reset" ? rotations.reset() : rotations.turned(scene.modelRotation())),
 });
 
 // Resolves dropped files to real paths and hands them to main, which picks install or push.
@@ -425,8 +435,10 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
       brightness: { cover: out?.coverBrightness ?? 0, inner: out?.innerBrightness ?? 0 },
       pxPerMm: scale.pxPerMm,
       paused: display.paused,
+      modelRotation: scene.modelRotation(),
     };
   },
   phases: () => [...phases],
+  streamPointAt: (x: number, y: number) => router.streamPointAt(x, y),
   drop: (paths: string[]) => client?.send({ kind: "drop-files", paths }),
 };

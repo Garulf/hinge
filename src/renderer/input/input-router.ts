@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
+import { RotateGesture, type Point } from "../../shared/model-rotation";
 import { ModifierTracker, type ModifierKey } from "../../shared/modifiers";
 import { WheelSteps } from "../../shared/scale";
 import { insideScreenMask, screenUvToStream } from "../../shared/screen-uv";
@@ -19,20 +20,26 @@ function typedIntoChrome(target: EventTarget | null): boolean {
   return Boolean((target as { closest?: (selector: string) => unknown } | null)?.closest?.(CHROME_FIELDS));
 }
 
+function pointOf(e: PointerEvent): Point {
+  return { x: e.clientX, y: e.clientY };
+}
+
 export interface InputRouterOptions {
   onAction?: (action: HingeAction) => void;
   /** The configured shortcut modifiers, read on every key event so a settings change applies at once. */
   modifiers?: () => readonly ModifierKey[];
   /** While the display is paused nothing but shortcuts reaches the phone, as in scrcpy. */
   paused?: () => boolean;
+  /** An Alt+drag turn of the model ended ("moved"), or an Alt+double-click asked for it to go back to rest ("reset"). */
+  onRotated?: (outcome: "moved" | "reset") => void;
 }
 
 /**
  * What a press does, fixed at pointerdown until release: a touch on the
- * phone, a window drag, a showcase orbit, or nothing (pressed while the view
- * transition ran).
+ * phone, a window drag, a showcase orbit, an Alt+drag turn of the model, or
+ * nothing (pressed while the view transition ran).
  */
-type PressMode = "touch" | "drag" | "orbit" | "ignored";
+type PressMode = "touch" | "drag" | "orbit" | "rotate" | "ignored";
 
 export class InputRouter {
   readonly #canvas: HTMLCanvasElement;
@@ -47,7 +54,11 @@ export class InputRouter {
   readonly #paused: () => boolean;
   readonly #wheelSteps = new WheelSteps();
   readonly #raycaster = new THREE.Raycaster();
+  readonly #rotate = new RotateGesture();
+  readonly #onRotated: (outcome: "moved" | "reset") => void;
   #press: PressMode | null = null;
+  /** Whether the current rotate press has moved the model, so a plain Alt+click saves nothing. */
+  #turned = false;
   /** A drag or orbit press held still while the view transition runs. */
   #heldForTransition = false;
   #lastPointer = { x: 0, y: 0 };
@@ -67,6 +78,7 @@ export class InputRouter {
     this.#touch = new TouchTracker(videoSize);
     this.#shortcuts = new ShortcutHandler(this.#modifiers, opts.modifiers ?? (() => DEFAULT_MODIFIERS));
     this.#paused = opts.paused ?? (() => false);
+    this.#onRotated = opts.onRotated ?? (() => {});
 
     canvas.addEventListener("pointerdown", (e) => this.#onPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.#onPointerMove(e));
@@ -97,6 +109,12 @@ export class InputRouter {
       this.#press = "ignored";
       return;
     }
+    if (e.button === 0 && this.#altHeld()) {
+      this.#press = "rotate";
+      this.#turned = false;
+      this.#rotate.press(pointOf(e), this.#scene.modelRotation(), e.timeStamp);
+      return;
+    }
     const hit = this.#hitOf(e);
     if (e.button === 0 && !hit) {
       if (view.t === 1 && !e.shiftKey) {
@@ -116,6 +134,14 @@ export class InputRouter {
     const dy = e.clientY - this.#lastPointer.y;
     this.#lastPointer = { x: e.clientX, y: e.clientY };
     if (this.#press === "ignored") return;
+    if (this.#press === "rotate") {
+      const angles = this.#rotate.move(pointOf(e));
+      if (angles) {
+        this.#scene.setModelRotation(angles);
+        this.#turned = true;
+      }
+      return;
+    }
     if (this.#press === "drag" || this.#press === "orbit") {
       if (this.#scene.view().active) {
         this.#pauseForTransition();
@@ -133,6 +159,10 @@ export class InputRouter {
     if (this.#canvas.hasPointerCapture(e.pointerId)) this.#canvas.releasePointerCapture(e.pointerId);
     const press = this.#press;
     this.#press = null;
+    if (press === "rotate") {
+      this.#endRotate(this.#rotate.release(pointOf(e), e.timeStamp));
+      return;
+    }
     this.#endPress(press);
     if (press === "drag" || press === "orbit" || press === "ignored") return;
     this.#dispatch({ kind: "up", button: e.button, buttons: e.buttons, hit: this.#scene.view().active ? null : this.#hitOf(e) });
@@ -155,7 +185,31 @@ export class InputRouter {
   #endPress(press: PressMode | null): void {
     if (press === "drag" && !this.#heldForTransition) window.hinge.endDrag();
     else if (press === "orbit") this.#scene.releaseOrbit();
+    else if (press === "rotate") {
+      // Cut short by a blur or a lost capture, the turn stays where it got to.
+      this.#rotate.cancel();
+      this.#endRotate("keep");
+    }
     this.#heldForTransition = false;
+  }
+
+  #endRotate(outcome: "keep" | "reset"): void {
+    const turned = this.#turned;
+    this.#turned = false;
+    if (outcome === "reset") this.#onRotated("reset");
+    else if (turned) this.#onRotated("moved");
+  }
+
+  /** The view toggle springs the turn back to rest, so the rest of this drag must not pull it away again. */
+  #stopRotateForToggle(): void {
+    if (this.#press !== "rotate") return;
+    this.#press = "ignored";
+    this.#turned = false;
+    this.#rotate.cancel();
+  }
+
+  #altHeld(): boolean {
+    return this.#modifiers.held("lalt") || this.#modifiers.held("ralt");
   }
 
   /** Main moves a dragged window on its own timer, so the drag ends outright rather than just ignoring moves. */
@@ -216,7 +270,10 @@ export class InputRouter {
       if (shortcut.claimed) e.preventDefault();
       for (const intent of shortcut.intents) this.#send(intent);
       if (shortcut.action === "pause") this.#releaseAll();
-      if (shortcut.action === "toggle-view") this.#pauseForTransition();
+      if (shortcut.action === "toggle-view") {
+        this.#stopRotateForToggle();
+        this.#pauseForTransition();
+      }
       if (shortcut.action) this.#onAction(shortcut.action);
       return;
     }
@@ -235,12 +292,17 @@ export class InputRouter {
     for (const intent of this.#touch.handle(e)) this.#send(intent);
   }
 
+  /** Where a press at this client point would touch the stream, or null off the lit screen. */
+  streamPointAt(clientX: number, clientY: number): StreamPoint | null {
+    return this.#hitOf({ clientX, clientY });
+  }
+
   /**
    * Only the lit screen takes touches: a press on the dark or folded-away
    * screen, its masked-off corners, the body or around the phone is a bezel
    * press. three raycasts the skinned inner screen in its current (bent) pose.
    */
-  #hitOf(e: PointerEvent | WheelEvent): StreamPoint | null {
+  #hitOf(e: { clientX: number; clientY: number }): StreamPoint | null {
     const screen = this.#scene.litScreen();
     if (!screen) return null;
     const rect = this.#canvas.getBoundingClientRect();

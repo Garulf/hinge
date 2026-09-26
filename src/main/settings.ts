@@ -1,14 +1,15 @@
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { clampModelAngles, MODEL_REST } from "../shared/model-rotation";
 import { defaultModifiers, normaliseModifiers } from "../shared/shortcuts";
 import type { DeviceSettings, Settings, SettingsPatch } from "../shared/settings";
 
 export type { DeviceSettings, Settings, SettingsPatch, ShortcutModifier } from "../shared/settings";
 
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
 export function defaultSettings(platform: string = process.platform): Settings {
   return {
-    version: 2,
+    version: 3,
     colourway: "jetblack",
     videoCodec: "h264",
     videoBitRate: 16_000_000,
@@ -59,9 +60,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /** Keeps only the per-phone fields with values of the right type. */
 export function sanitiseDeviceSettings(value: unknown): DeviceSettings {
   if (!isPlainObject(value)) return {};
-  const { pxPerMm, windowPosition, view } = value;
+  const { pxPerMm, windowPosition, view, rotation } = value;
   const result: DeviceSettings = {};
   if (view === "work" || view === "showcase") result.view = view;
+  if (isPlainObject(rotation) && typeof rotation.yaw === "number" && typeof rotation.pitch === "number") {
+    result.rotation = clampModelAngles({ yaw: rotation.yaw, pitch: rotation.pitch });
+  }
   if (typeof pxPerMm === "number" && Number.isFinite(pxPerMm) && pxPerMm > 0) result.pxPerMm = pxPerMm;
   if (isPlainObject(windowPosition)) {
     const { x, y } = windowPosition;
@@ -95,6 +99,7 @@ function sameModifiers(value: unknown, expected: readonly string[]): boolean {
  * the wireless port, so they move aside until each serial's identity is
  * known; the long-gone single shortcutModifier key is dropped; and on
  * Windows the old left Alt + left Super default becomes left Alt alone.
+ * 2 to 3: every phone gets the model's turn, at rest.
  */
 export function settingsMigrations(platform: string): MigrationMap {
   return {
@@ -104,6 +109,13 @@ export function settingsMigrations(platform: string): MigrationMap {
       if (isPlainObject(devices) && Object.keys(devices).length > 0) next.legacyDevices = devices;
       if (platform === "win32" && sameModifiers(rest.shortcutModifiers, ["lalt", "lsuper"])) next.shortcutModifiers = ["lalt"];
       return next;
+    },
+    2: (data) => {
+      const devices = isPlainObject(data.devices) ? data.devices : {};
+      const withRotation = Object.fromEntries(
+        Object.entries(devices).map(([id, entry]) => [id, isPlainObject(entry) ? { rotation: { ...MODEL_REST }, ...entry } : entry]),
+      );
+      return { ...data, version: 3, devices: withRotation };
     },
   };
 }

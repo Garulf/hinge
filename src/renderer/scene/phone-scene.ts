@@ -3,6 +3,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import type { MaterialLook } from "../../shared/colourways";
 import type { ScreenClass, ScreenKind } from "../../shared/fold7";
 import type { DirectorOutput, FoldDirector } from "../../shared/fold-director";
+import { MODEL_REST, ModelRotation, type ModelAngles } from "../../shared/model-rotation";
 import { Orbit } from "../../shared/orbit";
 import type { Rotation } from "../../shared/screen-uv";
 import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST } from "../../shared/showcase-camera";
@@ -161,6 +162,10 @@ export class PhoneScene implements FrameTarget {
   readonly #orbit = new Orbit(SHOWCASE_REST, SHOWCASE_LIMITS);
   readonly #shadow: ContactShadow;
   readonly #poseBox = new THREE.Box3();
+  /** The user's Alt+drag turn about the phone's centre, between the scene and the display-rotation pivot. */
+  readonly #turn = new THREE.Group();
+  readonly #modelRotation = new ModelRotation();
+  readonly #turnCentre = new THREE.Vector3();
   readonly #pivot = new THREE.Group();
   readonly #overlayScene = new THREE.Scene();
   readonly #overlayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
@@ -185,7 +190,8 @@ export class PhoneScene implements FrameTarget {
   #lastTime: number | null = null;
   #view: ViewState = { target: "work", t: 0, active: false };
   #orbitPose = { ...SHOWCASE_REST };
-  #rendered = { t: 0, yaw: SHOWCASE_REST.yaw, pitch: SHOWCASE_REST.pitch };
+  #turnPose: ModelAngles = { ...MODEL_REST };
+  #rendered = { t: 0, yaw: SHOWCASE_REST.yaw, pitch: SHOWCASE_REST.pitch, turn: { ...MODEL_REST } };
   #shadowPose: string | null = null;
   #shadowSkippedLast = false;
   #frameDirty = true;
@@ -206,7 +212,9 @@ export class PhoneScene implements FrameTarget {
     canvasParent.appendChild(this.#renderer.domElement);
 
     this.#light(software);
-    this.#scene.add(this.#pivot);
+    this.#turn.matrixAutoUpdate = false;
+    this.#turn.add(this.#pivot);
+    this.#scene.add(this.#turn);
     this.#shadow = new ContactShadow(this.#renderer, { ...SHADOW, resolution: software ? 256 : 512 });
     this.#scene.add(this.#shadow.group);
     this.#camera.position.z = 0.5;
@@ -323,6 +331,19 @@ export class PhoneScene implements FrameTarget {
 
   releaseOrbit(): void {
     this.#orbit.release(performance.now());
+  }
+
+  /** The model's Alt+drag turn, which stays where it is left. */
+  modelRotation(): ModelAngles {
+    return this.#modelRotation.angles;
+  }
+
+  setModelRotation(angles: ModelAngles): void {
+    this.#modelRotation.set(angles);
+  }
+
+  resetModelRotation(): void {
+    this.#modelRotation.reset();
   }
 
   /** The screen showing the stream, or null before the model or a stream and while the lit inner screen is folded away. */
@@ -462,6 +483,7 @@ export class PhoneScene implements FrameTarget {
     this.#view = { target: this.#transition.target, t, active };
     this.#director.setView(this.#transition.target, t);
     this.#orbitPose = this.#orbit.tick(performance.now(), dt);
+    this.#turnPose = this.#modelRotation.tick(dt);
     const out = this.#director.tick(dt);
     this.#out = out;
     const rotation = this.#routing.rotation(out.rotation);
@@ -477,7 +499,7 @@ export class PhoneScene implements FrameTarget {
 
     // The tick that settles still moved the pose (the last fade step, the
     // snap onto the target angle), so skipping starts only after it is drawn.
-    if (out.settled && this.#renderedSettled && !this.#frameDirty && !this.#layoutDirty && !this.#cameraMoved()) return;
+    if (out.settled && this.#renderedSettled && !this.#frameDirty && !this.#layoutDirty && !this.#cameraMoved() && !this.#shadowBehind()) return;
     if (this.#layoutDirty) this.#applyLayout();
     this.#frameDirty = false;
     this.#layoutDirty = false;
@@ -489,7 +511,13 @@ export class PhoneScene implements FrameTarget {
     const { t } = this.#view;
     const rendered = this.#rendered;
     if (t !== rendered.t) return true;
+    if (this.#turnPose.yaw !== rendered.turn.yaw || this.#turnPose.pitch !== rendered.turn.pitch) return true;
     return t > 0 && (this.#orbitPose.yaw !== rendered.yaw || this.#orbitPose.pitch !== rendered.pitch);
+  }
+
+  /** A software GL skips every other shadow redraw, so the frame after the pose stops moving must still catch the shadow up. */
+  #shadowBehind(): boolean {
+    return this.#view.t > 0 && this.#model !== null && this.#shadowPose !== this.#shadowPoseKey();
   }
 
   #brightness(out: DirectorOutput, screen: ScreenKind): number {
@@ -598,7 +626,7 @@ export class PhoneScene implements FrameTarget {
       t: this.#view.t,
       workCentre: { x: 0, y: 0, z: 0 },
       workHalfHeight: h / (this.#pxPerMm * 1000) / 2,
-      subjectCentre: centre,
+      subjectCentre: this.#turnCentre,
       subjectRadius: model.openRadius(),
       yawDeg: this.#orbitPose.yaw,
       pitchDeg: this.#orbitPose.pitch,
@@ -626,7 +654,26 @@ export class PhoneScene implements FrameTarget {
   }
 
   #shadowPoseKey(): string {
-    return `${this.#angle}|${this.#rotation}`;
+    return `${this.#angle}|${this.#rotation}|${this.#turnPose.yaw}|${this.#turnPose.pitch}`;
+  }
+
+  /**
+   * Turns the model about the centre of its current pose, taken with the
+   * turn undone so the centre does not wander as it turns. At rest the turn
+   * is the identity, which leaves every matrix below it bit for bit as
+   * without it.
+   */
+  #placeTurn(model: FoldModel): void {
+    const turn = this.#turn;
+    turn.matrix.identity();
+    model.poseBox(this.#poseBox).getCenter(this.#turnCentre);
+    const { yaw, pitch } = this.#turnPose;
+    if (yaw !== 0 || pitch !== 0) {
+      const c = this.#turnCentre;
+      const rotation = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-pitch), THREE.MathUtils.degToRad(yaw), 0, "XYZ"));
+      turn.matrix.makeTranslation(c.x, c.y, c.z).multiply(rotation).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+    }
+    turn.matrixWorldNeedsUpdate = true;
   }
 
   #captureShadow(): void {
@@ -635,9 +682,10 @@ export class PhoneScene implements FrameTarget {
   }
 
   #renderNow(): void {
+    if (this.#model) this.#placeTurn(this.#model);
     this.#scene.updateMatrixWorld();
     if (this.#view.t > 0 && this.#model) this.#placeShowcase(this.#model);
-    this.#rendered = { t: this.#view.t, yaw: this.#orbitPose.yaw, pitch: this.#orbitPose.pitch };
+    this.#rendered = { t: this.#view.t, yaw: this.#orbitPose.yaw, pitch: this.#orbitPose.pitch, turn: { ...this.#turnPose } };
     this.#renderer.clear();
     this.#renderer.render(this.#scene, this.activeCamera());
     this.#frames.onRendered();

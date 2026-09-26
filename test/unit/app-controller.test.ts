@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { bindSource, DeviceSource, type DeviceWatcher, type FoldMonitorStarter, type PortLike } from "../../src/main/app-controller";
+import { bindSource, DeviceSource, type DeviceWatcher, type FoldMonitorStarter, type NotificationMirrorStarter, type PortLike } from "../../src/main/app-controller";
 import type { MediaSource, MediaSink } from "../../src/main/media-source";
 import { ScrcpySession, type ScrcpyServerDeps } from "../../src/main/scrcpy-session";
 import { DEFAULT_STREAM_SETTINGS } from "../../src/main/scrcpy-init";
@@ -910,6 +910,80 @@ test("stop() stops a running fold monitor", async () => {
     host: watcher.host,
     createSession: () => new FakeSession(),
     foldMonitor,
+  });
+  const { sink } = fakeSink();
+  await source.start(sink);
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  await source.stop();
+  expect(stops).toBe(1);
+});
+
+test("starts the notification mirror alongside the fold monitor when a session connects, and stops it when torn down", async () => {
+  const watcher = fakeWatcher();
+  let starts = 0;
+  let stops = 0;
+  let seenAdb: unknown;
+  const notificationMirror: NotificationMirrorStarter = async (adb) => {
+    starts++;
+    seenAdb = adb;
+    return async () => {
+      stops++;
+    };
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    notificationMirror,
+  });
+  const openedAdb = { marker: "adb" };
+  watcher.host.open = async () => openedAdb as never;
+  const { sink } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+  expect(starts).toBe(1);
+  expect(seenAdb).toBe(openedAdb);
+
+  watcher.emit([]);
+  await flush();
+  expect(stops).toBe(1);
+});
+
+test("a notification mirror that fails to start is best-effort: mirroring still starts and the failure is logged", async () => {
+  const watcher = fakeWatcher();
+  const logs: string[] = [];
+  const notificationMirror: NotificationMirrorStarter = async () => {
+    throw new Error("shell spawn failed");
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    notificationMirror,
+    log: (line) => logs.push(line),
+  });
+  const { sink, statuses } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  expect(statuses.some((s) => s.state === "error")).toBe(false);
+  expect(logs.some((l) => l.includes("notification mirror failed to start") && l.includes("shell spawn failed"))).toBe(true);
+});
+
+test("stop() stops a running notification mirror", async () => {
+  const watcher = fakeWatcher();
+  let stops = 0;
+  const notificationMirror: NotificationMirrorStarter = async () => async () => {
+    stops++;
+  };
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => new FakeSession(),
+    notificationMirror,
   });
   const { sink } = fakeSink();
   await source.start(sink);

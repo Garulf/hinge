@@ -13,7 +13,7 @@ export interface DeviceSettings {
 }
 
 export interface Settings {
-  version: 3;
+  version: 4;
   colourway: string;
   videoCodec: "h264" | "h265";
   videoBitRate: number;
@@ -25,6 +25,8 @@ export interface Settings {
   /** A phone's identity (see deviceIdentity), or an adb serial left over from a version 1 file until that phone is seen again. */
   lastDevice: string | null;
   view: "work" | "showcase";
+  /** Mirrors the phone's notifications to the PC as they arrive; on by default. */
+  mirrorNotifications: boolean;
   /** Keyed by the phone's identity, which stays the same across USB, Wi-Fi and a changing wireless port. */
   devices: Record<string, DeviceSettings>;
   /** Version 1 entries, keyed by an adb transport serial; each moves into devices when that serial's identity is first seen. */

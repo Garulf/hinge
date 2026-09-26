@@ -548,7 +548,7 @@ function turnedTo(yaw: number, pitch: number): (s: Stats) => boolean {
   return (s) => Math.abs(s.modelRotation.yaw - yaw) < 1e-9 && Math.abs(s.modelRotation.pitch - pitch) < 1e-9;
 }
 
-test("Alt+drag turns the phone in both views and it stays turned; Alt+double-click springs it back exactly", async () => {
+test("Alt+drag in the work view switches to the showcase and keeps turning; Alt+double-click springs it back exactly", async () => {
   test.setTimeout(180_000);
   const { app, page } = await launch(resolve("test/fixtures/synthetic-fold.hrec"));
   try {
@@ -558,8 +558,9 @@ test("Alt+drag turns the phone in both views and it stays turned; Alt+double-cli
     expect(await streamPointAt(page, nearLeftEdge, mid.y)).not.toBeNull();
     const centreHit = await streamPointAt(page, mid.x, mid.y);
 
+    // Turning the live, streaming phone switches it to the showcase in the same press.
     await altDrag(page, mid, { x: 100, y: 0 });
-    await waitFor(page, "the live phone turned", turnedTo(30, 0), 10_000);
+    await waitFor(page, "the live phone turned, in the showcase", (s) => turnedTo(30, 0)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 10_000);
     await frames(page, 2);
     await page.screenshot({ path: "test-results/turn-live.png" });
     expect(await streamPointAt(page, nearLeftEdge, mid.y)).toBeNull();
@@ -568,7 +569,11 @@ test("Alt+drag turns the phone in both views and it stays turned; Alt+double-cli
     expect(Math.abs(turnedHit!.x - centreHit!.x)).toBeLessThan(0.05);
     expect(Math.abs(turnedHit!.y - centreHit!.y)).toBeLessThan(0.01);
     await altDoubleClick(page, mid);
-    await waitFor(page, "the live phone back at rest", turnedTo(0, 0), 10_000);
+    await waitFor(page, "the turn back at rest, still in the showcase", (s) => turnedTo(0, 0)(s) && s.view.target === "showcase", 10_000);
+
+    // Back to the work view (MOD+d), unaffected by any of the turning above.
+    await toggleView(page);
+    await waitFor(page, "the work view again", (s) => s.view.target === "work" && s.view.t === 0 && !s.view.active && s.laidOut, 20_000);
 
     const ended = await waitFor(
       page,
@@ -581,54 +586,34 @@ test("Alt+drag turns the phone in both views and it stays turned; Alt+double-cli
     await frames(page, 3);
     const workRest = await page.screenshot({ path: "test-results/turn-work-rest.png" });
 
+    // Entering the showcase (an Alt+double-click, which switches on its first press and resets on its second) for the straight-on rest, then turned.
+    await altDoubleClick(page, centre);
+    await waitFor(page, "the showcase settled at rest", (s) => turnedTo(0, 0)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 20_000);
+    await frames(page, 3);
+    const showcaseRest = await page.screenshot({ path: "test-results/turn-showcase-rest.png" });
+
     await altDrag(page, centre, { x: 80, y: -40 });
-    const turned = await waitFor(page, "the work view turned", turnedTo(24, 12), 10_000);
+    const turned = await waitFor(page, "the showcase turned", turnedTo(24, 12), 10_000);
     expect(turned.window).toEqual(ended.window);
     await frames(page, 3);
-    const workTurned = await page.screenshot({ path: "test-results/turn-work.png" });
-    const restBox = await opaqueBox(page, workRest);
-    const turnedBox = await opaqueBox(page, workTurned);
-    const restEdges = await edgeCoverage(page, workRest);
-    const turnedEdges = await edgeCoverage(page, workTurned);
-    await writeFile("test-results/turn-work-boxes.json", JSON.stringify({ restBox, turnedBox, restEdges, turnedEdges }, null, 2));
+    const showcaseTurned = await page.screenshot({ path: "test-results/turn-showcase.png" });
+    const restBox = await opaqueBox(page, showcaseRest);
+    const turnedBox = await opaqueBox(page, showcaseTurned);
+    const restEdges = await edgeCoverage(page, showcaseRest);
+    const turnedEdges = await edgeCoverage(page, showcaseTurned);
+    await writeFile("test-results/turn-showcase-boxes.json", JSON.stringify({ restBox, turnedBox, restEdges, turnedEdges }, null, 2));
     expect(turnedBox.w).toBeLessThan(restBox.w * 0.95);
     for (const side of ["top", "bottom", "left", "right"] as const) expect(turnedEdges[side], `phone cut off at the ${side}`).toBeLessThan(0.03);
     await page.waitForTimeout(1000);
     expect((await stats(page)).modelRotation).toEqual({ yaw: 24, pitch: 12 });
 
     await altDoubleClick(page, centre);
-    await waitFor(page, "the work view back at rest", turnedTo(0, 0), 10_000);
-    await frames(page, 3);
-    const workBack = await page.screenshot({ path: "test-results/turn-work-reset.png" });
-    expect(await differingPixels(page, workRest, workBack, 0)).toBe(0);
-
-    await toggleView(page);
-    const showcase = await waitFor(page, "the showcase view", (s) => s.view.t === 1 && !s.view.active && s.laidOut && s.settled, 20_000);
-    const stage = { x: showcase.window.w / 2, y: showcase.window.h / 2 };
-    await page.mouse.move(stage.x, stage.y);
-    await frames(page, 3);
-    const showcaseRest = await page.screenshot({ path: "test-results/turn-showcase-rest.png" });
-
-    await altDrag(page, stage, { x: 100, y: 0 });
-    await waitFor(page, "the showcase turned", turnedTo(30, 0), 10_000);
-    await frames(page, 3);
-    const showcaseTurned = await page.screenshot({ path: "test-results/turn-showcase.png" });
-    const showcaseRestBox = await opaqueBox(page, showcaseRest);
-    const showcaseTurnedBox = await opaqueBox(page, showcaseTurned);
-    await writeFile("test-results/turn-showcase-boxes.json", JSON.stringify({ showcaseRestBox, showcaseTurnedBox }, null, 2));
-    expect(showcaseTurnedBox.w).toBeLessThan(showcaseRestBox.w * 0.95);
-
-    await page.waitForTimeout(2500);
-    expect((await stats(page)).modelRotation).toEqual({ yaw: 30, pitch: 0 });
-    expect(await differingPixels(page, showcaseTurned, await page.screenshot())).toBe(0);
-
-    await altDoubleClick(page, stage);
     await waitFor(page, "the showcase back at rest", turnedTo(0, 0), 10_000);
     await frames(page, 3);
     const showcaseBack = await page.screenshot({ path: "test-results/turn-showcase-reset.png" });
     expect(await differingPixels(page, showcaseRest, showcaseBack, 0)).toBe(0);
 
-    await altDrag(page, stage, { x: -200, y: -150 });
+    await altDrag(page, centre, { x: -200, y: -150 });
     await waitFor(page, "the showcase turned far", turnedTo(-60, 45), 10_000);
     await frames(page, 3);
     const showcaseFar = await page.screenshot({ path: "test-results/turn-showcase-far.png" });
@@ -637,23 +622,29 @@ test("Alt+drag turns the phone in both views and it stays turned; Alt+double-cli
     for (const side of ["top", "bottom", "left", "right"] as const) expect(farEdges[side], `turned phone cut off at the ${side}`).toBeLessThan(0.03);
 
     const unscaled = (await stats(page)) as Stats & { pxPerMm: number };
-    await page.mouse.move(stage.x, stage.y);
+    await page.mouse.move(centre.x, centre.y);
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, 100);
     await page.keyboard.up("Alt");
     const smaller = (await waitFor(page, "a turned showcase to scale down a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm < unscaled.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
     expect(smaller.pxPerMm / unscaled.pxPerMm).toBeCloseTo(0.9, 2);
     expect(smaller.modelRotation).toEqual({ yaw: -60, pitch: 45 });
-    await toggleView(page);
-    const workAgain = await waitFor(page, "the view toggle to spring the turn back", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.settled && s.laidOut, 20_000);
 
+    // MOD+d springs the turn back to front and returns a pixel-identical work view.
+    await toggleView(page);
+    const workAgain = await waitFor(page, "the view toggle to spring the turn back", (s) => turnedTo(0, 0)(s) && s.view.target === "work" && s.view.t === 0 && !s.view.active && s.settled && s.laidOut, 20_000);
+    await frames(page, 3);
+    const workBack = await page.screenshot({ path: "test-results/turn-work-reset.png" });
+    expect(await differingPixels(page, workRest, workBack, 0)).toBe(0);
+
+    // Turning once more from the work view, and scaling up while turned keeps the turn.
     const middle = { x: workAgain.window.w / 2, y: workAgain.window.h / 2 };
     await altDrag(page, middle, { x: 60, y: 30 });
-    await waitFor(page, "the work view turned again", turnedTo(18, -9), 10_000);
+    await waitFor(page, "the showcase turned again", (s) => turnedTo(18, -9)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 10_000);
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, -100);
     await page.keyboard.up("Alt");
-    const bigger = (await waitFor(page, "a turned work view to scale up a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm > smaller.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
+    const bigger = (await waitFor(page, "a turned showcase to scale up a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm > smaller.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
     expect(bigger.pxPerMm / smaller.pxPerMm).toBeCloseTo(1 / 0.9, 2);
     expect(bigger.modelRotation).toEqual({ yaw: 18, pitch: -9 });
   } finally {

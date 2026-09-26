@@ -5,6 +5,7 @@ import type { PortLike } from "./app-controller";
 import type { MainToRenderer, RendererToMain } from "../shared/wire";
 import type { Rotation } from "../shared/screen-uv";
 import { appIconPath } from "./app-icon";
+import { NO_PAD, type Pad } from "../shared/layout";
 import { WindowPlacer } from "./window-resize";
 
 /** onMoved fires when a drag ends or the window system reports a finished move. */
@@ -79,11 +80,11 @@ function registerWindowIpc(win: BrowserWindow, onMoved: () => void): void {
     dragSize = null;
   };
 
-  ipcMain.on("hinge:set-window-size", (event, width: number, height: number, rotation: Rotation) => {
+  ipcMain.on("hinge:set-window-size", (event, width: number, height: number, rotation: Rotation, pad: Pad = NO_PAD) => {
     if (event.sender !== win.webContents || win.isFullScreen()) return;
     const current = win.getContentBounds();
     const area = screen.getDisplayMatching(win.getBounds()).workArea;
-    win.setContentBounds(placer.place(current, { w: width, h: height }, rotation, area));
+    win.setContentBounds(placer.place(current, { w: width, h: height }, rotation, area, pad));
     if (dragSize) dragSize = sizeOf(win.getBounds());
   });
 

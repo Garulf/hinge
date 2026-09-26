@@ -22,6 +22,10 @@ export interface Settings {
   audio: boolean;
   shortcutModifiers: ShortcutModifier[];
   alwaysOnTop: boolean;
+  /** How long a mouse wheel notch eases out over on the phone, in ms; 0 scrolls it in one jump. */
+  scrollSmoothing: number;
+  /** How far a wheel notch scrolls, as a multiple of Android's own mouse scroll step. */
+  scrollSpeed: number;
   /** A phone's identity (see deviceIdentity), or an adb serial left over from a version 1 file until that phone is seen again. */
   lastDevice: string | null;
   view: "work" | "showcase";

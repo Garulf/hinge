@@ -25,6 +25,12 @@ test("sanitisePatch keeps known keys with values of the right type and drops the
   expect(sanitisePatch("x")).toEqual({});
 });
 
+test("sanitisePatch takes a smoothing of 0 but no scroll speed of 0 or below", () => {
+  expect(sanitisePatch({ scrollSmoothing: 0, scrollSpeed: 1.5 })).toEqual({ scrollSmoothing: 0, scrollSpeed: 1.5 });
+  expect(sanitisePatch({ scrollSmoothing: -10, scrollSpeed: 0 })).toEqual({});
+  expect(sanitisePatch({ scrollSpeed: -1 })).toEqual({});
+});
+
 test("sanitiseDevicePatch keeps a positive pxPerMm and a numeric position only", () => {
   expect(sanitiseDevicePatch({ pxPerMm: 5.5, windowPosition: { x: 1, y: 2 }, other: 1 })).toEqual({ pxPerMm: 5.5, windowPosition: { x: 1, y: 2 } });
   expect(sanitiseDevicePatch({ pxPerMm: 0, windowPosition: { x: "1", y: 2 } })).toEqual({});

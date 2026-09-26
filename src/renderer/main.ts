@@ -3,12 +3,11 @@ import { colourwayFor, colourwaySwatches, type ColourwayFile } from "../shared/c
 import { DecodeRecovery } from "../shared/decode-recovery";
 import { bodyIsOpen, FoldDirector, type DirectorOutput } from "../shared/fold-director";
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
-import { bodySizePx, deviceAlignedSize, FOLD7_BODY, unionSize } from "../shared/layout";
+import { bodySizePx, deviceAlignedPad, deviceAlignedSize, FOLD7_BODY, NO_PAD, unionSize } from "../shared/layout";
 import { MODEL_REST } from "../shared/model-rotation";
 import type { Rotation } from "../shared/screen-uv";
 import { startupDevice, type DeviceSettings, type Settings } from "../shared/settings";
 import { defaultModifiers, normaliseModifiers, type HingeAction } from "../shared/shortcuts";
-import { viewWindowSize } from "../shared/view-window";
 import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
 import { AudioPipe } from "./audio-pipe";
@@ -67,7 +66,7 @@ const director = new FoldDirector({
   view: "work",
   requestFrames: () => client?.send({ kind: "control", intent: { type: "reset-video" } }),
 });
-const windowSizer = new WindowSizer((size, rotation) => window.hinge.setWindowSize(size.w, size.h, rotation), {
+const windowSizer = new WindowSizer((size, rotation, pad) => window.hinge.setWindowSize(size.w, size.h, rotation, pad), {
   nudgeLostResizes: window.hinge.platform === "linux",
 });
 const decodeRecovery = new DecodeRecovery();
@@ -147,7 +146,10 @@ function withPanel(size: Size, panel: Size | null, dpr: number): Size {
 
 function sizeWindow(out: DirectorOutput, rotation: Rotation, view: ViewState): void {
   const viewport = { w: innerWidth, h: innerHeight };
-  if (fullscreen) scale.fitFullscreen(rotation, viewport);
+  if (fullscreen) {
+    scale.fitFullscreen(rotation, viewport);
+    scene.setWorkSize(null);
+  }
   const pxPerMm = scale.pxPerMm;
   if (pxPerMm === null) return;
   const open = bodyIsOpen(out);
@@ -159,14 +161,10 @@ function sizeWindow(out: DirectorOutput, rotation: Rotation, view: ViewState): v
   if (fullscreen) return;
 
   const dpr = window.devicePixelRatio;
-  const panel = chrome.neededWindow();
-  const work = deviceAlignedSize(size, dpr);
-  if (view.t === 0 && !view.active) {
-    windowSizer.update(withPanel(work, panel, dpr), rotation, out.settled);
-    return;
-  }
-  const showcase = scale.showcaseSize(rotation, dpr) ?? work;
-  windowSizer.follow(withPanel(viewWindowSize(work, showcase, view.t, dpr), panel, dpr), rotation);
+  const work = withPanel(deviceAlignedSize(size, dpr), chrome.neededWindow(), dpr);
+  const showcase = view.t > 0 || view.active;
+  windowSizer.update(work, rotation, out.settled, showcase ? deviceAlignedPad(work, scene.turnRoom(), dpr) : NO_PAD);
+  scene.setWorkSize(showcase ? windowSizer.requested : null);
 }
 
 // Checked on a timer rather than per animation frame, which a busy GPU can
@@ -370,6 +368,7 @@ const router = new InputRouter(canvas, scene, () => videoSize, (intent) => clien
   paused: () => display.paused,
   onRotated: (outcome) => (outcome === "reset" ? rotations.reset() : rotations.turned(scene.modelRotation())),
   onEnterShowcase: () => views?.enterShowcase(),
+  scrolling: () => ({ smoothingMs: settings?.scrollSmoothing ?? 0, speed: settings?.scrollSpeed ?? 1 }),
 });
 
 // Resolves dropped files to real paths and hands them to main, which picks install or push.

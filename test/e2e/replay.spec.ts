@@ -2,7 +2,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { defaultPxPerMm, FOLD7_BODY, showcaseSizePx } from "../../src/shared/layout";
+import { FOLD7_BODY } from "../../src/shared/layout";
 
 type Lit = "cover" | "inner" | null;
 
@@ -233,18 +233,15 @@ test("replays the synthetic fold: closed, opening led by posture, open, landscap
     expect(Math.abs(openBounds.x + openBounds.width - (closedBounds.x + closedBounds.width))).toBeLessThanOrEqual(2);
     const openShot = await page.screenshot({ path: "test-results/open.png" });
 
+    // The showcase keeps the work view's window and the phone's size and place in it.
     await toggleView(page);
-    const area = await app.evaluate(({ BrowserWindow, screen }) => screen.getDisplayMatching(BrowserWindow.getAllWindows()[0].getBounds()).workArea);
-    const dpr = await page.evaluate(() => devicePixelRatio);
-    const showcaseWidth = showcaseSizePx(FOLD7_BODY, 0, defaultPxPerMm(FOLD7_BODY, area.height), { w: area.width, h: area.height }, dpr).w;
-    const showcase = await waitFor(
-      page,
-      "the showcase view",
-      (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active && s.laidOut && Math.abs(s.window.w - showcaseWidth) <= 4 && s.window.h === open.window.h,
-      20_000,
-    );
+    const showcase = await waitFor(page, "the showcase view", (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active && s.laidOut, 20_000);
     expect(showcase.lit).toBe("inner");
-    await page.screenshot({ path: "test-results/showcase-open.png" });
+    expect(showcase.window).toEqual(open.window);
+    expect(await windowBounds(app)).toEqual(openBounds);
+    const showcaseShot = await page.screenshot({ path: "test-results/showcase-open.png" });
+    const [openBox, showcaseBox] = [await opaqueBox(page, openShot), await opaqueBox(page, showcaseShot)];
+    for (const side of ["x", "y", "w", "h"] as const) expect(Math.abs(showcaseBox[side] - openBox[side]), `showcase phone ${side} against the work view's`).toBeLessThanOrEqual(2);
 
     await toggleView(page);
     await waitFor(page, "the work view again", (s) => s.view.target === "work" && s.view.t === 0 && !s.view.active && restingOn("inner", s) && s.window.w === open.window.w && s.window.h === open.window.h, 20_000);
@@ -466,7 +463,7 @@ test("hover menu on the top edge, transfer toasts for a drop, and a colourway ch
   }
 });
 
-/** The bounding box, in CSS px, of the phone's opaque pixels (the soft showcase shadow stays under the threshold). */
+/** The bounding box, in CSS px, of the phone's opaque pixels. */
 async function opaqueBox(page: Page, png: Buffer): Promise<{ x: number; y: number; w: number; h: number }> {
   return page.evaluate(async (base64) => {
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -630,12 +627,18 @@ test("Alt+drag in the work view switches to the showcase and keeps turning; Alt+
     // Entering the showcase (an Alt+double-click, which switches on its first press and resets on its second) for the straight-on rest, then turned.
     await altDoubleClick(page, centre);
     const showcaseRestStats = await waitFor(page, "the showcase settled at rest", (s) => turnedTo(0, 0)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 20_000);
+    expect(showcaseRestStats.window).toEqual(ended.window);
+    const showcaseRestBounds = await windowBounds(app);
     await frames(page, 3);
     const showcaseRest = await page.screenshot({ path: "test-results/turn-showcase-rest.png" });
 
     await altDrag(page, centre, { x: 80, y: -40 });
     const turned = await waitFor(page, "the showcase turned", turnedTo(24, 12), 10_000);
-    expect(turned.window).toEqual(showcaseRestStats.window);
+    // The window grows evenly around the phone for the turn, which stays where it was on screen.
+    const [restBounds, turnedBounds] = [showcaseRestBounds, await windowBounds(app)];
+    expect(turned.window.w * turned.window.h).toBeGreaterThan(showcaseRestStats.window.w * showcaseRestStats.window.h);
+    expect(Math.abs(turnedBounds.x + turnedBounds.width / 2 - (restBounds.x + restBounds.width / 2))).toBeLessThanOrEqual(1);
+    expect(Math.abs(turnedBounds.y + turnedBounds.height / 2 - (restBounds.y + restBounds.height / 2))).toBeLessThanOrEqual(1);
     await frames(page, 3);
     const showcaseTurned = await page.screenshot({ path: "test-results/turn-showcase.png" });
     const restBox = await opaqueBox(page, showcaseRest);
@@ -643,6 +646,9 @@ test("Alt+drag in the work view switches to the showcase and keeps turning; Alt+
     const restEdges = await edgeCoverage(page, showcaseRest);
     const turnedEdges = await edgeCoverage(page, showcaseTurned);
     await writeFile("test-results/turn-showcase-boxes.json", JSON.stringify({ restBox, turnedBox, restEdges, turnedEdges }, null, 2));
+    const workRestBox = await opaqueBox(page, workRest);
+    expect(Math.abs(restBox.w - workRestBox.w), "showcase phone width against the work view's").toBeLessThanOrEqual(workRestBox.w * 0.01);
+    expect(Math.abs(restBox.h - workRestBox.h), "showcase phone height against the work view's").toBeLessThanOrEqual(workRestBox.h * 0.01);
     expect(turnedBox.w).toBeLessThan(restBox.w * 0.95);
     for (const side of ["top", "bottom", "left", "right"] as const) expect(turnedEdges[side], `phone cut off at the ${side}`).toBeLessThan(0.03);
     await page.waitForTimeout(1000);

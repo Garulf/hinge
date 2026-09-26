@@ -205,16 +205,18 @@ const MODIFIER_LABELS: Record<ShortcutModifier, string> = {
   rctrl: "Right Ctrl",
 };
 
-type NumericSetting = "videoBitRate" | "maxSize" | "maxFps";
+type NumericSetting = "videoBitRate" | "maxSize" | "maxFps" | "scrollSmoothing" | "scrollSpeed";
 
 const NUMERIC_CHOICES: Record<NumericSetting, [number, string][]> = {
   videoBitRate: [4, 8, 16, 24, 32, 48].map((m) => [m * 1_000_000, `${m} Mbps`]),
   maxSize: [[0, "Full resolution"], [2520, "2520 px"], [1920, "1920 px"], [1600, "1600 px"], [1280, "1280 px"], [1024, "1024 px"]],
   maxFps: [[0, "No limit"], [30, "30 fps"], [60, "60 fps"], [90, "90 fps"], [120, "120 fps"]],
+  scrollSmoothing: [[0, "Off"], [80, "Short"], [150, "Medium"], [250, "Long"]],
+  scrollSpeed: [0.5, 0.75, 1, 1.5, 2].map((s) => [s, `${s}x`]),
 };
 
 export class SettingsPanel implements Panel {
-  readonly size = { w: 300, h: 420 };
+  readonly size = { w: 300, h: 490 };
   readonly node: HTMLElement;
   readonly #deps: SettingsPanelDeps;
   readonly #modifiers = new Map<ShortcutModifier, HTMLInputElement>();
@@ -242,7 +244,7 @@ export class SettingsPanel implements Panel {
       this.#numeric.set(key, select);
       return select;
     });
-    const [bitRate, maxSize, maxFps] = numericFields;
+    const [bitRate, maxSize, maxFps, scrollSmoothing, scrollSpeed] = numericFields;
     this.node = panelNode("Settings", [
       el("h3", { text: "Shortcut key (MOD)" }),
       modifierGrid,
@@ -257,6 +259,11 @@ export class SettingsPanel implements Panel {
         el("label", { className: "field" }, [el("span", { className: "sub", text: "Max frame rate" }), maxFps]),
       ]),
       el("p", { className: "note", text: "Stream changes apply the next time the phone connects." }),
+      el("h3", { text: "Mouse wheel" }),
+      el("div", { className: "grid" }, [
+        el("label", { className: "field" }, [el("span", { className: "sub", text: "Smoothing" }), scrollSmoothing]),
+        el("label", { className: "field" }, [el("span", { className: "sub", text: "Speed" }), scrollSpeed]),
+      ]),
       el("h3", { text: "Settings file" }),
       this.#path,
     ]);

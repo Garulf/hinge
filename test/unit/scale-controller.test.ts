@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { FOLD7_BODY, showcaseSizePx } from "../../src/shared/layout";
+import { FOLD7_BODY } from "../../src/shared/layout";
 import { ScaleController } from "../../src/renderer/scale-controller";
 
 function setup() {
@@ -91,16 +91,6 @@ test("fullscreen fits the phone to the screen, blocks scaling, and restores the 
   expect(scale.fullscreen).toBe(false);
   expect(applied.at(-1)).toBe(3);
   expect(persisted).toEqual([]);
-});
-
-test("the showcase size follows the current scale and is fitted to the work area", () => {
-  const { scale } = setup();
-  expect(scale.showcaseSize(0, 1)).toBeNull();
-  scale.setWorkArea(WORK_AREA);
-  expect(scale.showcaseSize(1, 2)).toEqual(showcaseSizePx(FOLD7_BODY, 1, BASE, WORK_AREA, 2));
-  const narrow = setup();
-  narrow.scale.setWorkArea({ w: 300, h: 1000 });
-  expect(narrow.scale.showcaseSize(0, 1)!.w).toBeLessThanOrEqual(300);
 });
 
 test("the same work area again changes nothing; a different one rebases the default", () => {

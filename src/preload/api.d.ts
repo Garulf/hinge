@@ -1,7 +1,8 @@
 import type { DeviceSettings, Settings, SettingsPatch } from "../shared/settings";
 
 export interface HingeApi {
-  setWindowSize(w: number, h: number, rotation: 0 | 1 | 2 | 3): void;
+  /** `w` by `h` is the work view's window; `pad` grows it evenly on opposite sides, around a turned phone. */
+  setWindowSize(w: number, h: number, rotation: 0 | 1 | 2 | 3, pad: { x: number; y: number }): void;
   beginDrag(): void;
   endDrag(): void;
   /** The size of the display work area the window is on, in CSS px. */

@@ -119,9 +119,9 @@ not even on the screen, and the window doesn't move.
 
 - Alt+double-click, or switching views, eases it back to straight on.
 - Touches on the screen still land where you click on the turned video.
-- The work view keeps its window size; while turned, the phone shrinks
-  just enough to stay inside it, and is back at full size when it is
-  straight again.
+- The window keeps its size in both views; while turned, the phone
+  shrinks just enough to stay inside it, and is back at full size when it
+  is straight again.
 - Each phone comes back turned the way you left it.
 - Some Linux window managers move the window on Alt+drag (Xfce, and KDE
   depending on its settings). There the drag moves the window instead of

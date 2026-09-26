@@ -22,11 +22,15 @@ function fakeTarget() {
   };
 }
 
+/** The window sits at the screen's origin unless an event gives its own screen position. */
 function fakeCanvas() {
   const base = fakeTarget();
   const captured = new Set<number>();
   return {
     ...base,
+    fire(type: string, e: Record<string, unknown> = {}) {
+      base.fire(type, { screenX: e.clientX, screenY: e.clientY, ...e });
+    },
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) as DOMRect,
     setPointerCapture: (id: number) => captured.add(id),
     releasePointerCapture: (id: number) => captured.delete(id),
@@ -648,6 +652,30 @@ test("Alt+left on the screen turns the model instead of touching, and reports th
   expect(scene.turns).toEqual([{ yaw: 6, pitch: 3 }]);
   expect(onRotated).toHaveBeenCalledExactlyOnceWith("moved");
   expect(fakeWindow.hinge.beginDrag).not.toHaveBeenCalled();
+});
+
+test("a turn follows the pointer across the screen, not the window growing and moving around the turned phone under it", () => {
+  const { canvas, scene } = setup({ view: SHOWCASE });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 47, button: 0, buttons: 1, clientX: 50, clientY: 50, screenX: 1050, screenY: 550 });
+  canvas.fire("pointermove", { pointerId: 47, button: -1, buttons: 1, clientX: 70, clientY: 80, screenX: 1050, screenY: 550 });
+  canvas.fire("pointermove", { pointerId: 47, button: -1, buttons: 1, clientX: 80, clientY: 80, screenX: 1060, screenY: 550 });
+  canvas.fire("pointerup", { pointerId: 47, button: 0, buttons: 0, clientX: 80, clientY: 80, screenX: 1060, screenY: 550 });
+  expect(scene.turns).toEqual([
+    { yaw: 0, pitch: 0 },
+    { yaw: 3, pitch: 0 },
+  ]);
+});
+
+test("showcase: an orbit follows the pointer across the screen, not the window growing around the orbited phone", () => {
+  const { canvas, scene } = setup({ view: SHOWCASE });
+  canvas.fire("pointerdown", { pointerId: 25, button: 0, buttons: 1, clientX: 500, clientY: 500, screenX: 1500, screenY: 1000 });
+  canvas.fire("pointermove", { pointerId: 25, button: -1, buttons: 1, clientX: 520, clientY: 530, screenX: 1500, screenY: 1000 });
+  canvas.fire("pointermove", { pointerId: 25, button: -1, buttons: 1, clientX: 530, clientY: 530, screenX: 1510, screenY: 1000 });
+  expect(scene.orbits).toEqual([
+    [0, 0],
+    [10, 0],
+  ]);
 });
 
 test("Alt+left in the work view requests showcase, without resetting the turn, and keeps turning the same press", () => {

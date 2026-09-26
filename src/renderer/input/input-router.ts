@@ -17,8 +17,14 @@ function typedIntoChrome(target: EventTarget | null): boolean {
   return Boolean((target as { closest?: (selector: string) => unknown } | null)?.closest?.(CHROME_FIELDS));
 }
 
-function pointOf(e: PointerEvent): Point {
-  return { x: e.clientX, y: e.clientY };
+/**
+ * Where the pointer is on the screen. A turn or orbit reads the pointer
+ * there, never in the window: the window grows and moves around a turned
+ * phone, which moves client coordinates under a pointer that has not moved,
+ * and the turn that follows would resize the window again.
+ */
+function screenPointOf(e: PointerEvent): Point {
+  return { x: e.screenX, y: e.screenY };
 }
 
 export interface InputRouterOptions {
@@ -122,7 +128,7 @@ export class InputRouter {
     // touch or an orbit needs it for the same reason when dragged off the
     // canvas.
     this.#canvas.setPointerCapture(e.pointerId);
-    this.#lastPointer = { x: e.clientX, y: e.clientY };
+    this.#lastPointer = screenPointOf(e);
     this.#heldForTransition = false;
     const view = this.#scene.view();
     if (view.active) {
@@ -134,7 +140,7 @@ export class InputRouter {
       this.#press = "rotate";
       this.#turned = false;
       if (view.target === "work") this.#onEnterShowcase();
-      this.#rotate.press(pointOf(e), this.#scene.modelRotation(), e.timeStamp);
+      this.#rotate.press(screenPointOf(e), this.#scene.modelRotation(), e.timeStamp);
       return;
     }
     this.#rotate.otherPress();
@@ -153,12 +159,13 @@ export class InputRouter {
   }
 
   #onPointerMove(e: PointerEvent): void {
-    const dx = e.clientX - this.#lastPointer.x;
-    const dy = e.clientY - this.#lastPointer.y;
-    this.#lastPointer = { x: e.clientX, y: e.clientY };
+    const point = screenPointOf(e);
+    const dx = point.x - this.#lastPointer.x;
+    const dy = point.y - this.#lastPointer.y;
+    this.#lastPointer = point;
     if (this.#press === "ignored") return;
     if (this.#press === "rotate") {
-      const angles = this.#rotate.move(pointOf(e));
+      const angles = this.#rotate.move(point);
       if (angles) {
         this.#scene.setModelRotation(angles);
         this.#turned = true;
@@ -183,7 +190,7 @@ export class InputRouter {
     const press = this.#press;
     this.#press = null;
     if (press === "rotate") {
-      this.#endRotate(this.#rotate.release(pointOf(e), e.timeStamp));
+      this.#endRotate(this.#rotate.release(screenPointOf(e), e.timeStamp));
       return;
     }
     this.#endPress(press);

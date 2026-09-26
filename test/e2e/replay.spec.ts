@@ -628,10 +628,34 @@ test("Alt+drag turns the phone in both views and it stays turned; Alt+double-cli
     const showcaseBack = await page.screenshot({ path: "test-results/turn-showcase-reset.png" });
     expect(await differingPixels(page, showcaseRest, showcaseBack, 0)).toBe(0);
 
-    await altDrag(page, stage, { x: -60, y: 0 });
-    await waitFor(page, "the showcase turned again", turnedTo(-18, 0), 10_000);
+    await altDrag(page, stage, { x: -200, y: -150 });
+    await waitFor(page, "the showcase turned far", turnedTo(-60, 45), 10_000);
+    await frames(page, 3);
+    const showcaseFar = await page.screenshot({ path: "test-results/turn-showcase-far.png" });
+    expect(await opaqueBox(page, showcaseFar)).not.toBeNull();
+    const farEdges = await edgeCoverage(page, showcaseFar);
+    for (const side of ["top", "bottom", "left", "right"] as const) expect(farEdges[side], `turned phone cut off at the ${side}`).toBeLessThan(0.03);
+
+    const unscaled = (await stats(page)) as Stats & { pxPerMm: number };
+    await page.mouse.move(stage.x, stage.y);
+    await page.keyboard.down("Alt");
+    await page.mouse.wheel(0, 100);
+    await page.keyboard.up("Alt");
+    const smaller = (await waitFor(page, "a turned showcase to scale down a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm < unscaled.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
+    expect(smaller.pxPerMm / unscaled.pxPerMm).toBeCloseTo(0.9, 2);
+    expect(smaller.modelRotation).toEqual({ yaw: -60, pitch: 45 });
     await toggleView(page);
-    await waitFor(page, "the view toggle to spring the turn back", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active, 20_000);
+    const workAgain = await waitFor(page, "the view toggle to spring the turn back", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.settled && s.laidOut, 20_000);
+
+    const middle = { x: workAgain.window.w / 2, y: workAgain.window.h / 2 };
+    await altDrag(page, middle, { x: 60, y: 30 });
+    await waitFor(page, "the work view turned again", turnedTo(18, -9), 10_000);
+    await page.keyboard.down("Alt");
+    await page.mouse.wheel(0, -100);
+    await page.keyboard.up("Alt");
+    const bigger = (await waitFor(page, "a turned work view to scale up a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm > smaller.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
+    expect(bigger.pxPerMm / smaller.pxPerMm).toBeCloseTo(1 / 0.9, 2);
+    expect(bigger.modelRotation).toEqual({ yaw: 18, pitch: -9 });
   } finally {
     await app.close();
   }

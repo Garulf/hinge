@@ -7,6 +7,7 @@ import { bindSource, DeviceSource, type NotificationMirrorStarter, type SessionF
 import { parseArgs, reportStartupError } from "./cli";
 import { createLogger, type Logger } from "./logger";
 import type { MediaSink, MediaSource } from "./media-source";
+import { launchAppOnPhone } from "./intents";
 import { resolveOutputPath } from "./output-path";
 import { createQueuedWriter } from "./queued-writer";
 import { startFoldMonitor } from "./fold-monitor";
@@ -126,7 +127,7 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
       notifier,
       isWindowFocused: () => win.isFocused(),
       focusWindow: () => focusWindow(win),
-      launchApp: () => Promise.resolve(),
+      launchApp: (pkg) => launchAppOnPhone(adb, pkg, mirrorLog),
       log: mirrorLog,
     });
 

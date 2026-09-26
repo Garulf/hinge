@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { applyIntent, type ControllerLike } from "../../src/main/intents";
+import { applyIntent, launchAppOnPhone, type ControllerLike } from "../../src/main/intents";
 
 function fake() {
   const calls: [string, unknown][] = [];
@@ -89,4 +89,56 @@ test("shortcut intents map to their controller calls", async () => {
     ["collapse-panels", undefined],
     ["rotate-device", undefined],
   ]);
+});
+
+function fakeAdb(): unknown {
+  return { marker: "adb" };
+}
+
+test("launchAppOnPhone resolves the launcher activity and starts it", async () => {
+  const commands: string[] = [];
+  const adb = fakeAdb();
+  const runShell = async (seenAdb: unknown, command: string) => {
+    expect(seenAdb).toBe(adb);
+    commands.push(command);
+    if (command.startsWith("cmd package resolve-activity")) return "com.example.chat/.MainActivity\n";
+    return "";
+  };
+  await launchAppOnPhone(adb as never, "com.example.chat", () => {
+    throw new Error("must not log on success");
+  }, { runShell: runShell as never });
+  expect(commands).toEqual([
+    "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.example.chat",
+    "am start -n com.example.chat/.MainActivity",
+  ]);
+});
+
+test("launchAppOnPhone takes the last non-empty line of resolve-activity's output as the component", async () => {
+  const commands: string[] = [];
+  const runShell = async (_adb: unknown, command: string) => {
+    commands.push(command);
+    if (command.startsWith("cmd package resolve-activity")) {
+      return "priority=0 preferredOrder=0 match=0x108000\ncom.example.chat/.MainActivity\n";
+    }
+    return "";
+  };
+  await launchAppOnPhone(fakeAdb() as never, "com.example.chat", () => {}, { runShell: runShell as never });
+  expect(commands[1]).toBe("am start -n com.example.chat/.MainActivity");
+});
+
+test("launchAppOnPhone logs, never throws, when nothing resolves", async () => {
+  const logs: string[] = [];
+  const runShell = async () => "";
+  await launchAppOnPhone(fakeAdb() as never, "com.example.unknown", (line) => logs.push(line), { runShell: runShell as never });
+  expect(logs).toHaveLength(1);
+  expect(logs[0]).toContain("com.example.unknown");
+});
+
+test("launchAppOnPhone logs, never throws, when the shell command itself rejects", async () => {
+  const logs: string[] = [];
+  const runShell = async () => {
+    throw new Error("adb offline");
+  };
+  await launchAppOnPhone(fakeAdb() as never, "com.example.chat", (line) => logs.push(line), { runShell: runShell as never });
+  expect(logs[0]).toContain("adb offline");
 });

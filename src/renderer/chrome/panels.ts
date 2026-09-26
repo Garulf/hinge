@@ -219,6 +219,7 @@ export class SettingsPanel implements Panel {
   readonly #deps: SettingsPanelDeps;
   readonly #modifiers = new Map<ShortcutModifier, HTMLInputElement>();
   readonly #audio = el("input", { attrs: { type: "checkbox" } });
+  readonly #mirrorNotifications = el("input", { attrs: { type: "checkbox" } });
   readonly #codec = el("select", {}, [el("option", { text: "H.264", attrs: { value: "h264" } }), el("option", { text: "H.265", attrs: { value: "h265" } })]);
   readonly #numeric = new Map<NumericSetting, HTMLSelectElement>();
   readonly #path = el("div", { className: "path" });
@@ -233,6 +234,7 @@ export class SettingsPanel implements Panel {
       modifierGrid.append(el("label", { className: "check" }, [box, MODIFIER_LABELS[modifier]]));
     }
     this.#audio.addEventListener("change", () => deps.save({ audio: this.#audio.checked }));
+    this.#mirrorNotifications.addEventListener("change", () => deps.save({ mirrorNotifications: this.#mirrorNotifications.checked }));
     this.#codec.addEventListener("change", () => deps.save({ videoCodec: this.#codec.value as Settings["videoCodec"] }));
     const numericFields = (Object.keys(NUMERIC_CHOICES) as NumericSetting[]).map((key) => {
       const select = el("select", {}, NUMERIC_CHOICES[key].map(([value, label]) => el("option", { text: label, attrs: { value: String(value) } })));
@@ -244,6 +246,8 @@ export class SettingsPanel implements Panel {
     this.node = panelNode("Settings", [
       el("h3", { text: "Shortcut key (MOD)" }),
       modifierGrid,
+      el("h3", { text: "Notifications" }),
+      el("label", { className: "check" }, [this.#mirrorNotifications, "Mirror phone notifications"]),
       el("h3", { text: "Stream" }),
       el("label", { className: "check" }, [this.#audio, "Play phone audio on this PC"]),
       el("div", { className: "grid" }, [
@@ -267,6 +271,7 @@ export class SettingsPanel implements Panel {
     const held = normaliseModifiers(settings.shortcutModifiers);
     for (const [modifier, box] of this.#modifiers) box.checked = held.includes(modifier);
     this.#audio.checked = settings.audio;
+    this.#mirrorNotifications.checked = settings.mirrorNotifications;
     this.#codec.value = settings.videoCodec;
     for (const [key, select] of this.#numeric) {
       const value = String(settings[key]);

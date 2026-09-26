@@ -104,12 +104,18 @@ function pressAt(page: Page, x: number, y: number): Promise<string> {
   return page.evaluate(([x, y]) => (window as unknown as { __hinge: { pressAt(x: number, y: number): string } }).__hinge.pressAt(x, y), [x, y]);
 }
 
-/** A point on the left side of the case halfway down: halfway across the bezel beside a lit screen, or a few pixels in when nothing is lit there. */
+/**
+ * A point on the left side of the case halfway down, found by walking in
+ * from the window's left edge: halfway across the bezel beside a lit
+ * screen, or a few pixels in when nothing is lit there.
+ */
 async function sideOfCase(page: Page, s: Stats): Promise<{ x: number; y: number }> {
   const y = s.window.h / 2;
-  let end = 0;
-  while (end < 12 && (await pressAt(page, end, y)) === "turn") end++;
-  const x = Math.min(end / 2, 6);
+  let start = 0;
+  while (start < 400 && (await pressAt(page, start, y)) === "move") start++;
+  let end = start;
+  while (end < start + 12 && (await pressAt(page, end, y)) === "turn") end++;
+  const x = start + Math.min((end - start) / 2, 6);
   expect(await pressAt(page, x, y), `the side of the case at ${x}, ${y}`).toBe("turn");
   return { x, y };
 }

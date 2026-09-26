@@ -151,15 +151,33 @@ shade from the top still works):
   Shadow or Mint.
 - **Pin** keeps the window above other windows.
 - **Settings** has the shortcut modifier, notification mirroring, phone
-  audio, the video codec, bit rate, size and frame rate limits, and how
-  smoothly and how far the mouse wheel scrolls the phone. Stream settings
-  apply the next time the phone connects.
+  audio, the video codec, bit rate, size and frame rate limits, and how the
+  mouse wheel scrolls the phone. Stream settings apply the next time the
+  phone connects.
 - **Close** quits.
 
 Panels open inside the window (it grows while one needs the room) and close
 with Escape or a click elsewhere. Short notices appear under the phone's top
 bezel for three seconds; the Devices panel also shows pairing and connection
 errors in its own status line.
+
+### Scrolling
+
+The mouse wheel scrolls the phone with a finger swipe by default. Each burst
+of notches is one stroke that lets go while still moving, so the phone
+finishes it with its own fling, the same glide a flick on the screen gives.
+The stroke starts under the pointer but keeps clear of the screen edges, so
+it stays away from the shade and the back and home gestures.
+
+- Settings, Mouse wheel, Scrolls with: Scroll steps sends Android scroll
+  events instead, eased over the Step smoothing time. Use it for apps that
+  scroll only with a mouse wheel, or where a swipe does something else (a
+  map pans rather than zooms, a list at the top pulls to refresh).
+- Speed scales how far a notch goes in either style; one notch at 1x is
+  Android's own mouse scroll step.
+- A touchpad's small steps always go out as scroll events, straight away.
+- While the left button holds a touch down, the wheel scrolls in steps
+  rather than adding a second finger.
 
 ### Shortcuts
 

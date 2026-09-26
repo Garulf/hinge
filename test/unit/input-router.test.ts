@@ -498,7 +498,7 @@ function setupWith(opts: {
   paused?: () => boolean;
   onAction?: (action: HingeAction) => void;
   view?: View;
-  scrolling?: () => { smoothingMs: number; speed: number };
+  scrolling?: () => { smoothingMs: number; speed: number; style?: "swipe" | "events" };
   requestFrame?: (callback: (time: number) => void) => void;
 }) {
   const canvas = fakeCanvas();
@@ -861,4 +861,61 @@ test("wheel events during an ease join it rather than each starting their own fr
   expect(frames.waiting).toBe(1);
   frames.run();
   expect(scrolled(sent)).toBeCloseTo(-2, 9);
+});
+
+const SWIPE = () => ({ smoothingMs: 150, speed: 1, style: "swipe" as const });
+const NOTCH_DOWN = { deltaX: 0, deltaY: 100, wheelDeltaX: 0, wheelDeltaY: -120, buttons: 0, timeStamp: 0, ...CENTER };
+
+function touchesOf(sent: ControlIntent[]) {
+  return sent.filter((i): i is Extract<ControlIntent, { type: "touch" }> => i.type === "touch");
+}
+
+test("with the finger swipe style, a wheel notch is a finger stroke that lifts once the notches stop", () => {
+  const frames = frameQueue();
+  const { canvas, sent } = setupWith({ scrolling: SWIPE, requestFrame: frames.request });
+  canvas.fire("wheel", NOTCH_DOWN);
+  expect(sent).toEqual([expect.objectContaining({ type: "touch", action: "down", pointerId: -2, x: 50, y: 50 })]);
+  frames.run();
+  const touches = touchesOf(sent);
+  expect(touches.at(-1)).toMatchObject({ action: "up", pointerId: -2 });
+  expect(touches.at(-1)!.y).toBeLessThan(50);
+  expect(sent.some((i) => i.type === "scroll")).toBe(false);
+  expect(frames.waiting).toBe(0);
+});
+
+test("a touchpad's small steps still go out as scroll events at once, unsmoothed, whatever the wheel style", () => {
+  const { canvas, sent } = setupWith({ scrolling: SWIPE });
+  canvas.fire("wheel", { ...NOTCH_DOWN, deltaY: 12, wheelDeltaY: -14 });
+  expect(sent).toEqual([expect.objectContaining({ type: "scroll", scrollY: -0.12 })]);
+});
+
+test("while the left button holds a touch down, the wheel sends scroll events instead of a second finger", () => {
+  const { canvas, sent } = setupWith({ scrolling: SWIPE, requestFrame: frameQueue().request });
+  canvas.fire("pointerdown", { pointerId: 1, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("wheel", { ...NOTCH_DOWN, buttons: 1 });
+  expect(sent.map((i) => i.type)).toEqual(["touch", "scroll"]);
+});
+
+test("a press on the screen during a swipe cancels the swipe's finger before touching", () => {
+  const frames = frameQueue();
+  const { canvas, sent } = setupWith({ scrolling: SWIPE, requestFrame: frames.request });
+  canvas.fire("wheel", NOTCH_DOWN);
+  frames.run(2);
+  canvas.fire("pointerdown", { pointerId: 1, button: 0, buttons: 1, ...CENTER });
+  const touches = touchesOf(sent);
+  expect(touches.at(-2)).toMatchObject({ action: "cancel", pointerId: -2 });
+  expect(touches.at(-1)).toMatchObject({ action: "down", pointerId: -1 });
+  frames.run();
+  expect(touchesOf(sent).filter((t) => t.pointerId === -2).at(-1)!.action).toBe("cancel");
+});
+
+test("a swipe in progress lets go without a fling when the display pauses", () => {
+  const frames = frameQueue();
+  let paused = false;
+  const { canvas, sent } = setupWith({ paused: () => paused, scrolling: SWIPE, requestFrame: frames.request });
+  canvas.fire("wheel", NOTCH_DOWN);
+  paused = true;
+  frames.run();
+  expect(touchesOf(sent).map((t) => t.action)).toEqual(["down", "cancel"]);
+  expect(frames.waiting).toBe(0);
 });

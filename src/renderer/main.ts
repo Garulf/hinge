@@ -342,7 +342,7 @@ const router = new InputRouter(canvas, scene, () => videoSize, (intent) => clien
   modifiers: () => normaliseModifiers(settings?.shortcutModifiers, defaultModifiers(window.hinge.platform)),
   paused: () => display.paused,
   onRotated: (outcome) => (outcome === "reset" ? rotations.reset() : rotations.turned(scene.modelRotation())),
-  scrolling: () => ({ smoothingMs: settings?.scrollSmoothing ?? 0, speed: settings?.scrollSpeed ?? 1 }),
+  scrolling: () => ({ smoothingMs: settings?.scrollSmoothing ?? 0, speed: settings?.scrollSpeed ?? 1, style: settings?.wheelStyle ?? "swipe" }),
 });
 
 // Resolves dropped files to real paths and hands them to main, which picks install or push.

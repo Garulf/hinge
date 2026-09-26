@@ -25,6 +25,12 @@ test("sanitisePatch keeps known keys with values of the right type and drops the
   expect(sanitisePatch("x")).toEqual({});
 });
 
+test("sanitisePatch takes either wheel style and nothing else", () => {
+  expect(sanitisePatch({ wheelStyle: "events" })).toEqual({ wheelStyle: "events" });
+  expect(sanitisePatch({ wheelStyle: "swipe" })).toEqual({ wheelStyle: "swipe" });
+  expect(sanitisePatch({ wheelStyle: "drag" })).toEqual({});
+});
+
 test("sanitisePatch takes a smoothing of 0 but no scroll speed of 0 or below", () => {
   expect(sanitisePatch({ scrollSmoothing: 0, scrollSpeed: 1.5 })).toEqual({ scrollSmoothing: 0, scrollSpeed: 1.5 });
   expect(sanitisePatch({ scrollSmoothing: -10, scrollSpeed: 0 })).toEqual({});

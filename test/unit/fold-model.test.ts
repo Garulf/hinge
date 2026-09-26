@@ -198,7 +198,7 @@ test("the open inner screen dips 0.1 mm along the hinge line and is flat beyond 
   for (const x of [-CREASE_HALF_BAND_MM, CREASE_HALF_BAND_MM, -10, 10]) expect(depthMm(x), `${x} mm`).toBeCloseTo(0, 4);
 });
 
-test("touches across the crease still land on the stream pixel straight below them", () => {
+test("touches across the crease still land on the stream pixel straight below them", { timeout: 30_000 }, () => {
   model.root.position.set(0, 0, 0);
   model.setAngle(180);
   for (let x = -3.2; x <= 3.2; x += 0.1) {

@@ -170,6 +170,9 @@ export class PhoneScene implements FrameTarget {
   readonly #turnRotation = new THREE.Matrix4();
   readonly #turnBack = new THREE.Matrix4();
   readonly #turnScale = new THREE.Vector3();
+  readonly #turnClip = new THREE.Matrix4();
+  #turnFit = 1;
+  readonly #unturnedBox = new THREE.Box3();
   readonly #pivot = new THREE.Group();
   readonly #overlayScene = new THREE.Scene();
   readonly #overlayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
@@ -348,6 +351,13 @@ export class PhoneScene implements FrameTarget {
 
   resetModelRotation(): void {
     this.#modelRotation.reset();
+  }
+
+  /** The turn as last drawn, for diagnostics: its angles, the fit scale, the camera's depth range and the turned pose's world box. */
+  turnState(): { angles: ModelAngles; scale: number; near: number; far: number; centre: THREE.Vector3Like; box: { min: THREE.Vector3Like; max: THREE.Vector3Like } | null } {
+    const camera = this.activeCamera() as THREE.OrthographicCamera | THREE.PerspectiveCamera;
+    const box = this.#model ? this.#unturnedBox.clone().applyMatrix4(this.#turn.matrix) : null;
+    return { angles: { ...this.#rendered.turn }, scale: this.#turnFit, near: camera.near, far: camera.far, centre: this.#turnCentre.clone(), box: box && { min: box.min.clone(), max: box.max.clone() } };
   }
 
   /** The screen showing the stream, or null before the model or a stream and while the lit inner screen is folded away. */
@@ -618,13 +628,10 @@ export class PhoneScene implements FrameTarget {
   }
 
   /**
-   * Aims the perspective camera for the blend and grounds the shadow under
-   * the current pose; the shadow map is redrawn only when the pose changed,
-   * since it moves with the model.
+   * Aims the perspective camera for the blend at the centre of the unturned
+   * pose, so neither the turn nor its fit can move what the camera looks at.
    */
-  #placeShowcase(model: FoldModel): void {
-    const box = model.poseBox(this.#poseBox);
-    const centre = box.getCenter(new THREE.Vector3());
+  #aimShowcase(model: FoldModel): void {
     const { w, h } = this.#viewport;
     const rig = blendedCamera({
       t: this.#view.t,
@@ -644,7 +651,15 @@ export class PhoneScene implements FrameTarget {
     camera.lookAt(rig.target.x, rig.target.y, rig.target.z);
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld();
+  }
 
+  /**
+   * Grounds the shadow under the current (turned) pose; the shadow map is
+   * redrawn only when the pose changed, since it moves with the model.
+   */
+  #placeShadow(model: FoldModel): void {
+    const box = model.poseBox(this.#poseBox);
+    const centre = box.getCenter(new THREE.Vector3());
     this.#shadow.place(centre.x, box.min.y, centre.z);
     if (this.#shadowPoseKey() === this.#shadowPose) return;
     // A software GL pays for the shadow's depth and blur passes on the CPU,
@@ -658,32 +673,47 @@ export class PhoneScene implements FrameTarget {
   }
 
   #shadowPoseKey(): string {
-    return `${this.#angle}|${this.#rotation}|${this.#turnPose.yaw}|${this.#turnPose.pitch}`;
+    return `${this.#angle}|${this.#rotation}|${this.#turnPose.yaw}|${this.#turnPose.pitch}|${this.#turnFit}`;
   }
 
   /**
-   * Turns the model about the centre of its current pose, taken with the
-   * turn undone so the centre does not wander as it turns. The work view's
-   * window keeps its size, so there the turned model shrinks to fit it; the
-   * showcase frames the whole turning sphere, so the shrink fades out with
-   * the blend. At rest the turn is the identity, which leaves every matrix
-   * below it bit for bit as without it.
+   * The centre of the unturned pose, taken in the turn group's own frame so
+   * the turn cannot leak into it: read through world matrices instead, the
+   * previous frame's turn fed back into the next frame's centre and, past
+   * about 45 degrees, made the phone shake and then fly off. The showcase
+   * camera is aimed at it before the turn is fitted through the camera that
+   * draws the frame.
    */
-  #placeTurn(model: FoldModel): void {
+  #placeModel(model: FoldModel): void {
     const turn = this.#turn;
     turn.matrix.identity();
     turn.matrixWorldNeedsUpdate = true;
-    const box = model.poseBox(this.#poseBox);
-    const c = box.getCenter(this.#turnCentre);
+    const box = model.poseBox(this.#unturnedBox, turn);
+    box.getCenter(this.#turnCentre);
+    if (this.#view.t > 0) this.#aimShowcase(model);
+    this.#placeTurn(box);
+  }
+
+  /**
+   * Turns the model about the centre of its unturned pose, shrunk just
+   * enough that the view (orthographic or perspective, with the showcase
+   * orbit) still shows all of it. At rest the turn is the identity, which
+   * leaves every matrix below it bit for bit as without it.
+   */
+  #placeTurn(box: THREE.Box3): void {
+    this.#turnFit = 1;
     const angles = this.#turnPose;
     if (angles.yaw === 0 && angles.pitch === 0) return;
-    const camera = this.#camera;
-    const fit = turnFitScale(box, { minX: camera.left, maxX: camera.right, minY: camera.bottom, maxY: camera.top }, angles);
-    const scale = fit + (1 - fit) * this.#view.t;
+    const camera = this.activeCamera();
+    camera.updateMatrixWorld();
+    const clip = this.#turnClip.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    const scale = turnFitScale(box, clip.elements, angles);
+    this.#turnFit = scale;
+    const c = this.#turnCentre;
     this.#turnEuler.set(THREE.MathUtils.degToRad(-angles.pitch), THREE.MathUtils.degToRad(angles.yaw), 0);
     this.#turnRotation.makeRotationFromEuler(this.#turnEuler).scale(this.#turnScale.setScalar(scale));
     this.#turnBack.makeTranslation(-c.x, -c.y, -c.z);
-    turn.matrix.makeTranslation(c.x, c.y, c.z).multiply(this.#turnRotation).multiply(this.#turnBack);
+    this.#turn.matrix.makeTranslation(c.x, c.y, c.z).multiply(this.#turnRotation).multiply(this.#turnBack);
   }
 
   #captureShadow(): void {
@@ -692,9 +722,9 @@ export class PhoneScene implements FrameTarget {
   }
 
   #renderNow(): void {
-    if (this.#model) this.#placeTurn(this.#model);
+    if (this.#model) this.#placeModel(this.#model);
     this.#scene.updateMatrixWorld();
-    if (this.#view.t > 0 && this.#model) this.#placeShowcase(this.#model);
+    if (this.#view.t > 0 && this.#model) this.#placeShadow(this.#model);
     this.#rendered = { t: this.#view.t, yaw: this.#orbitPose.yaw, pitch: this.#orbitPose.pitch, turn: { ...this.#turnPose } };
     this.#renderer.clear();
     this.#renderer.render(this.#scene, this.activeCamera());

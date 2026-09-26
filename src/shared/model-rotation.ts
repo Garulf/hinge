@@ -159,13 +159,8 @@ export interface FitBox {
   max: Vec3;
 }
 
-/** What the orthographic camera sees, in world units. */
-export interface FitFrame {
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-}
+/** A camera's projection times its view matrix, column-major like three's Matrix4.elements. */
+export type ClipMatrix = ArrayLike<number>;
 
 const rad = (deg: number) => (deg * Math.PI) / 180;
 
@@ -178,37 +173,67 @@ export function turnPoint(p: Vec3, angles: ModelAngles): Vec3 {
   return { x, y: p.y * Math.cos(tilt) - z * Math.sin(tilt), z: p.y * Math.sin(tilt) + z * Math.cos(tilt) };
 }
 
+interface Clip {
+  x: number;
+  y: number;
+  w: number;
+}
+
+function toClip(m: ClipMatrix, p: Vec3, w: 0 | 1): Clip {
+  return {
+    x: m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12] * w,
+    y: m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13] * w,
+    w: m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15] * w,
+  };
+}
+
 /**
- * The uniform scale, at most 1, that keeps the box's corners turned about
- * its centre within reach on every side: each side may reach as far from
- * the centre as the unturned box does, or the frame, whichever is further.
- * Exactly 1 at rest, and it tends to 1 as the angles go to 0.
+ * The largest s at which `centre + s * offset` stays at or inside `limit`
+ * along one clip axis, where the projected coordinate is
+ * (a + s b) / (aw + s bw) and `side` is 1 for an upper and -1 for a lower
+ * limit; Infinity when growing s never crosses it.
  */
-export function turnFitScale(box: FitBox, frame: FitFrame, angles: ModelAngles): number {
+function scaleLimit(a: number, b: number, aw: number, bw: number, limit: number, side: 1 | -1): number {
+  const k = side * (b - limit * bw);
+  if (k <= 0) return Infinity;
+  return (side * (limit * aw - a)) / k;
+}
+
+/**
+ * The uniform scale about the pose box's centre, at most 1, that keeps the
+ * box's corners, turned about that centre, inside the camera's view: each
+ * side may reach as far as the unturned box already does or the view's
+ * edge, whichever is further. Exactly 1 at rest, and it tends to 1 as the
+ * angles go to 0.
+ */
+export function turnFitScale(box: FitBox, clip: ClipMatrix, angles: ModelAngles): number {
   if (angles.yaw === 0 && angles.pitch === 0) return 1;
   const c = { x: (box.min.x + box.max.x) / 2, y: (box.min.y + box.max.y) / 2, z: (box.min.z + box.max.z) / 2 };
-  const allowed = {
-    right: Math.max(box.max.x - c.x, frame.maxX - c.x),
-    left: Math.max(c.x - box.min.x, c.x - frame.minX),
-    top: Math.max(box.max.y - c.y, frame.maxY - c.y),
-    bottom: Math.max(c.y - box.min.y, c.y - frame.minY),
-  };
-  const reach = { right: 0, left: 0, top: 0, bottom: 0 };
+  const offsets: Vec3[] = [];
   for (let i = 0; i < 8; i++) {
-    const corner = {
-      x: (i & 1 ? box.max.x : box.min.x) - c.x,
-      y: (i & 2 ? box.max.y : box.min.y) - c.y,
-      z: (i & 4 ? box.max.z : box.min.z) - c.z,
-    };
-    const q = turnPoint(corner, angles);
-    reach.right = Math.max(reach.right, q.x);
-    reach.left = Math.max(reach.left, -q.x);
-    reach.top = Math.max(reach.top, q.y);
-    reach.bottom = Math.max(reach.bottom, -q.y);
+    offsets.push({ x: (i & 1 ? box.max.x : box.min.x) - c.x, y: (i & 2 ? box.max.y : box.min.y) - c.y, z: (i & 4 ? box.max.z : box.min.z) - c.z });
+  }
+  const centre = toClip(clip, c, 1);
+  const bounds = { minX: -1, maxX: 1, minY: -1, maxY: 1 };
+  for (const offset of offsets) {
+    const d = toClip(clip, offset, 0);
+    const x = (centre.x + d.x) / (centre.w + d.w);
+    const y = (centre.y + d.y) / (centre.w + d.w);
+    bounds.minX = Math.min(bounds.minX, x);
+    bounds.maxX = Math.max(bounds.maxX, x);
+    bounds.minY = Math.min(bounds.minY, y);
+    bounds.maxY = Math.max(bounds.maxY, y);
   }
   let scale = 1;
-  for (const side of ["right", "left", "top", "bottom"] as const) {
-    if (reach[side] > allowed[side]) scale = Math.min(scale, allowed[side] / reach[side]);
+  for (const offset of offsets) {
+    const d = toClip(clip, turnPoint(offset, angles), 0);
+    scale = Math.min(
+      scale,
+      scaleLimit(centre.x, d.x, centre.w, d.w, bounds.maxX, 1),
+      scaleLimit(centre.x, d.x, centre.w, d.w, bounds.minX, -1),
+      scaleLimit(centre.y, d.y, centre.w, d.w, bounds.maxY, 1),
+      scaleLimit(centre.y, d.y, centre.w, d.w, bounds.minY, -1),
+    );
   }
-  return scale;
+  return Math.max(0, scale);
 }

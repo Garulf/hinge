@@ -437,6 +437,7 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
       pxPerMm: scale.pxPerMm,
       paused: display.paused,
       modelRotation: scene.modelRotation(),
+      turn: scene.turnState(),
     };
   },
   phases: () => [...phases],

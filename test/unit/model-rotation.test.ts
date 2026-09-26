@@ -183,27 +183,44 @@ test("turnPoint turns like the scene's Euler: -pitch about X after yaw about Y",
 
 /** The open phone in landscape, about 159 by 145 mm and 9 mm deep with the camera bump, filling its window. */
 const OPEN_LANDSCAPE = { min: { x: -0.0795, y: -0.0725, z: -0.006 }, max: { x: 0.0795, y: 0.0725, z: 0.003 } };
-const ITS_WINDOW = { minX: -0.0795, maxX: 0.0795, minY: -0.0725, maxY: 0.0725 };
 
-test("the fit is exactly 1 at rest, even for a box bigger than the frame", () => {
-  expect(turnFitScale(OPEN_LANDSCAPE, ITS_WINDOW, MODEL_REST)).toBe(1);
-  expect(turnFitScale(OPEN_LANDSCAPE, { minX: -0.01, maxX: 0.01, minY: -0.01, maxY: 0.01 }, { yaw: 0, pitch: 0 })).toBe(1);
-});
+/** What an orthographic camera looking down -Z sees: clip = projection times view, column-major like Matrix4.elements. */
+function orthoClip(frame: { minX: number; maxX: number; minY: number; maxY: number }): number[] {
+  const camera = new THREE.OrthographicCamera(frame.minX, frame.maxX, frame.maxY, frame.minY, 0.01, 1);
+  camera.position.z = 0.5;
+  camera.updateMatrixWorld();
+  return new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).toArray();
+}
 
-test("an open landscape plate turned to 24,12 shrinks to keep its turned corners inside the window", () => {
-  const s = turnFitScale(OPEN_LANDSCAPE, ITS_WINDOW, { yaw: 24, pitch: 12 });
-  expect(s).toBeLessThan(0.97);
-  expect(s).toBeGreaterThan(0.85);
-  for (const x of [OPEN_LANDSCAPE.min.x, OPEN_LANDSCAPE.max.x]) {
-    for (const y of [OPEN_LANDSCAPE.min.y, OPEN_LANDSCAPE.max.y]) {
-      for (const z of [OPEN_LANDSCAPE.min.z, OPEN_LANDSCAPE.max.z]) {
-        const centreZ = (OPEN_LANDSCAPE.min.z + OPEN_LANDSCAPE.max.z) / 2;
-        const q = turnPoint({ x, y, z: z - centreZ }, { yaw: 24, pitch: 12 });
-        expect(Math.abs(q.x * s)).toBeLessThanOrEqual(ITS_WINDOW.maxX + 1e-12);
-        expect(Math.abs(q.y * s)).toBeLessThanOrEqual(ITS_WINDOW.maxY + 1e-12);
+const ITS_WINDOW = orthoClip({ minX: -0.0795, maxX: 0.0795, minY: -0.0725, maxY: 0.0725 });
+
+function projectedCorners(box: typeof OPEN_LANDSCAPE, clip: number[], angles: { yaw: number; pitch: number }, scale: number): { x: number; y: number }[] {
+  const c = new THREE.Vector3((box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, (box.min.z + box.max.z) / 2);
+  const matrix = new THREE.Matrix4().fromArray(clip);
+  const corners: { x: number; y: number }[] = [];
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) {
+        const q = turnPoint({ x: x - c.x, y: y - c.y, z: z - c.z }, angles);
+        const p = new THREE.Vector4(c.x + q.x * scale, c.y + q.y * scale, c.z + q.z * scale, 1).applyMatrix4(matrix);
+        corners.push({ x: p.x / p.w, y: p.y / p.w });
       }
     }
   }
+  return corners;
+}
+
+test("the fit is exactly 1 at rest, even for a box bigger than the view", () => {
+  expect(turnFitScale(OPEN_LANDSCAPE, ITS_WINDOW, MODEL_REST)).toBe(1);
+  expect(turnFitScale(OPEN_LANDSCAPE, orthoClip({ minX: -0.01, maxX: 0.01, minY: -0.01, maxY: 0.01 }), { yaw: 0, pitch: 0 })).toBe(1);
+});
+
+test("an open landscape plate turned to 24,12 in the work view shrinks just enough to keep its turned corners inside the window", () => {
+  const s = turnFitScale(OPEN_LANDSCAPE, ITS_WINDOW, { yaw: 24, pitch: 12 });
+  expect(s).toBeLessThan(0.97);
+  expect(s).toBeGreaterThan(0.85);
+  const corners = projectedCorners(OPEN_LANDSCAPE, ITS_WINDOW, { yaw: 24, pitch: 12 }, s);
+  expect(Math.max(...corners.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))))).toBeCloseTo(1, 9);
 });
 
 test("the fit is never above 1, and a box with room to spare is not shrunk", () => {
@@ -212,7 +229,7 @@ test("the fit is never above 1, and a box with room to spare is not shrunk", () 
       expect(turnFitScale(OPEN_LANDSCAPE, ITS_WINDOW, { yaw, pitch })).toBeLessThanOrEqual(1);
     }
   }
-  const roomy = { minX: -0.2, maxX: 0.2, minY: -0.2, maxY: 0.2 };
+  const roomy = orthoClip({ minX: -0.2, maxX: 0.2, minY: -0.2, maxY: 0.2 });
   expect(turnFitScale(OPEN_LANDSCAPE, roomy, { yaw: 24, pitch: 12 })).toBe(1);
 });
 
@@ -226,10 +243,40 @@ test("the fit tends to 1 as the angles go to 0, so the reset spring lands withou
   expect(last).toBeGreaterThan(0.9995);
 });
 
-test("the fit allows each side the larger of the rest box and the frame, measured from the box centre", () => {
+test("each side may reach as far as the rest pose already does, or the view's edge, whichever is further", () => {
   const deep = { min: { x: 0, y: -0.05, z: -0.03 }, max: { x: 0.1, y: 0.05, z: 0.03 } };
   const tilted = { yaw: 0, pitch: 30 };
-  expect(turnFitScale(deep, { minX: 0, maxX: 0.1, minY: -0.05, maxY: 0.05 }, tilted)).toBeLessThan(0.9);
-  expect(turnFitScale(deep, { minX: 0, maxX: 0.1, minY: -0.2, maxY: 0.2 }, tilted)).toBe(1);
-  expect(turnFitScale(deep, { minX: 0, maxX: 0.1, minY: -0.05, maxY: 0.2 }, tilted)).toBeLessThan(0.9);
+  expect(turnFitScale(deep, orthoClip({ minX: 0, maxX: 0.1, minY: -0.05, maxY: 0.05 }), tilted)).toBeLessThan(0.9);
+  expect(turnFitScale(deep, orthoClip({ minX: 0, maxX: 0.1, minY: -0.2, maxY: 0.2 }), tilted)).toBe(1);
+  expect(turnFitScale(deep, orthoClip({ minX: 0, maxX: 0.1, minY: -0.05, maxY: 0.2 }), tilted)).toBeLessThan(0.9);
+});
+
+function showcaseClip(orbitYawDeg: number): number[] {
+  const camera = new THREE.PerspectiveCamera(18, 1096 / 892, 0.3, 1.3);
+  const d = 0.8;
+  camera.position.set(d * Math.sin(THREE.MathUtils.degToRad(orbitYawDeg)), d * Math.sin(THREE.MathUtils.degToRad(12)), d * Math.cos(THREE.MathUtils.degToRad(orbitYawDeg)));
+  camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld();
+  return new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).toArray();
+}
+
+test("through a perspective showcase camera a turn that fits is left alone, and one that would leave the view shrinks until it touches the edge", () => {
+  const phone = { min: { x: -0.0718, y: -0.0795, z: -0.006 }, max: { x: 0.0718, y: 0.0795, z: 0.003 } };
+  const clip = showcaseClip(-28);
+  expect(turnFitScale(phone, clip, MODEL_REST)).toBe(1);
+  expect(turnFitScale(phone, clip, { yaw: 30, pitch: 0 })).toBe(1);
+
+  const tight = showcaseClip(-28).map((v, i) => (i % 4 === 0 || i % 4 === 1 ? v * 2.2 : v));
+  const turned = { yaw: -60, pitch: 45 };
+  const s = turnFitScale(phone, tight, turned);
+  expect(s).toBeLessThan(1);
+  const corners = projectedCorners(phone, tight, turned, s);
+  const rest = projectedCorners(phone, tight, MODEL_REST, 1);
+  const bound = (pick: (p: { x: number; y: number }) => number, sign: number) => Math.max(1, ...rest.map((p) => sign * pick(p)));
+  for (const p of corners) {
+    expect(p.x).toBeLessThanOrEqual(bound((q) => q.x, 1) + 1e-9);
+    expect(-p.x).toBeLessThanOrEqual(bound((q) => q.x, -1) + 1e-9);
+    expect(p.y).toBeLessThanOrEqual(bound((q) => q.y, 1) + 1e-9);
+    expect(-p.y).toBeLessThanOrEqual(bound((q) => q.y, -1) + 1e-9);
+  }
 });

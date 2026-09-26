@@ -105,6 +105,39 @@ test("poseBox follows the rigid halves: the body's width open and closed, and de
   model.setAngle(180);
 });
 
+test("poseBox in an ancestor's frame ignores that ancestor's own transform, even while its world matrix is stale", () => {
+  const scene = new THREE.Scene();
+  const turn = new THREE.Group();
+  turn.matrixAutoUpdate = false;
+  const pivot = new THREE.Group();
+  scene.add(turn);
+  turn.add(pivot);
+  pivot.add(model.root);
+  try {
+    pivot.rotation.z = Math.PI / 2;
+    model.root.position.set(-0.07, -0.04, 0);
+    model.setAngle(180);
+    scene.updateMatrixWorld(true);
+    const unturned = model.poseBox(new THREE.Box3(), turn).clone();
+
+    const c = unturned.getCenter(new THREE.Vector3());
+    const turned = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-60), THREE.MathUtils.degToRad(75), 0, "XYZ"));
+    turn.matrix.makeTranslation(c.x, c.y, c.z).multiply(turned).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+    turn.matrixWorldNeedsUpdate = true;
+    scene.updateMatrixWorld();
+
+    turn.matrix.identity();
+    const again = model.poseBox(new THREE.Box3(), turn);
+    for (const key of ["min", "max"] as const) {
+      for (const axis of ["x", "y", "z"] as const) expect(again[key][axis], `${key}.${axis}`).toBeCloseTo(unturned[key][axis], 9);
+    }
+  } finally {
+    pivot.remove(model.root);
+    model.root.position.set(0, 0, 0);
+    model.root.updateMatrixWorld(true);
+  }
+});
+
 test("openRadius is the bounding sphere of the open body", () => {
   const radiusMm = model.openRadius() * 1000;
   const halfDiagonal = Math.hypot(FOLD7_BODY.openWidthMm, FOLD7_BODY.heightMm) / 2;

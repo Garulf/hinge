@@ -75,6 +75,8 @@ function creaseBandOf(mesh: THREE.Mesh, hinge: THREE.Object3D): CreaseBand {
 }
 
 const corner = new THREE.Vector3();
+const worldToFrame = new THREE.Matrix4();
+const toFrame = new THREE.Matrix4();
 
 function expandByCorners(target: THREE.Box3, box: THREE.Box3, matrix: THREE.Matrix4): void {
   for (let i = 0; i < 8; i++) {
@@ -154,15 +156,20 @@ export class FoldModel {
   }
 
   /**
-   * The world box of the current pose, from the two rigid halves' boxes
-   * (sixteen corners) rather than the skinned screens, so it is cheap
-   * enough to take every frame.
+   * The box of the current pose, from the two rigid halves' boxes (sixteen
+   * corners) rather than the skinned screens, so it is cheap enough to take
+   * every frame. In world space, or in the local space of an ancestor
+   * `frame`: taken through the matrices below that frame only, so the
+   * frame's own transform, even a stale world matrix of a frame whose
+   * matrix is set by hand, cannot leak into it.
    */
-  poseBox(target = new THREE.Box3()): THREE.Box3 {
+  poseBox(target = new THREE.Box3(), frame?: THREE.Object3D): THREE.Box3 {
     this.root.updateWorldMatrix(true, true);
     target.makeEmpty();
-    expandByCorners(target, this.#fixedBox, this.root.matrixWorld);
-    expandByCorners(target, this.#coverBoxInHinge, this.#hinge.matrixWorld);
+    if (frame) worldToFrame.copy(frame.matrixWorld).invert();
+    const inFrame = (matrixWorld: THREE.Matrix4) => (frame ? toFrame.multiplyMatrices(worldToFrame, matrixWorld) : matrixWorld);
+    expandByCorners(target, this.#fixedBox, inFrame(this.root.matrixWorld));
+    expandByCorners(target, this.#coverBoxInHinge, inFrame(this.#hinge.matrixWorld));
     return target;
   }
 

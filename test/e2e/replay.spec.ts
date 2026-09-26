@@ -161,6 +161,22 @@ async function sideOfCase(page: Page, y: number): Promise<{ x: number; y: number
   return { x, y };
 }
 
+/**
+ * A turn lands in one step, and the window grows around it over the next
+ * few frames: laid out, at the same size a few frames apart.
+ */
+async function windowAtRest(page: Page): Promise<Stats> {
+  const deadline = Date.now() + 10_000;
+  let previous = await waitFor(page, "the window laid out", (s) => s.laidOut, 10_000);
+  while (Date.now() < deadline) {
+    await frames(page, 3);
+    const s = await waitFor(page, "the window laid out", (s) => s.laidOut, 10_000);
+    if (s.window.w === previous.window.w && s.window.h === previous.window.h) return s;
+    previous = s;
+  }
+  throw new Error(`the window kept resizing; last ${JSON.stringify(previous.window)}`);
+}
+
 /** A plain left drag, which turns the phone from a side or corner of the case. */
 async function drag(page: Page, from: { x: number; y: number }, by: { x: number; y: number }): Promise<void> {
   await page.mouse.move(from.x, from.y);
@@ -491,7 +507,8 @@ test("hover menu on the top edge, transfer toasts for a drop, and a colourway ch
     await page.mouse.move(10, smaller.window.h / 2);
     await expect(menu).not.toHaveClass(/shown/, { timeout: 5000 });
     await drag(page, await sideOfCase(page, smaller.window.h / 2), { x: 100, y: 0 });
-    const turned = await waitFor(page, "the turned phone", (s) => s.view.t === 1 && s.laidOut && s.window.w * s.window.h > smaller.window.w * smaller.window.h, 20_000);
+    await waitFor(page, "the turned phone", (s) => s.view.t === 1 && s.window.w * s.window.h > smaller.window.w * smaller.window.h, 20_000);
+    const turned = await windowAtRest(page);
     await page.mouse.move(turned.window.w / 2, 8);
     await expect(menu).toHaveClass(/shown/, { timeout: 5000 });
     const box = (await menu.boundingBox())!;
@@ -622,8 +639,8 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
 
     // Turning the live, streaming phone by the side of its case: 30 degrees is the full 3D look.
     await drag(page, await sideOfCase(page, mid.y), { x: 100, y: 0 });
-    const liveTurned = await waitFor(page, "the live phone turned", (s) => turnedTo(30, 0)(s) && s.view.t === 1 && !s.view.active && s.laidOut, 10_000);
-    await frames(page, 2);
+    await waitFor(page, "the live phone turned", (s) => turnedTo(30, 0)(s) && s.view.t === 1 && !s.view.active, 10_000);
+    const liveTurned = await windowAtRest(page);
     await page.screenshot({ path: "test-results/turn-live.png" });
     // The window has grown around the turned phone, so its own centre is
     // where the camera looks: at the turn's centre. That ray passes through
@@ -650,7 +667,8 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     const insideLeftEdge = (await leftEdgeOfScreen(page, mid)) + 4;
     expect(await streamPointAt(page, insideLeftEdge, mid.y)).not.toBeNull();
     await altDrag(page, mid, { x: 100, y: 0 });
-    await waitFor(page, "the phone turned by Alt+drag", (s) => turnedTo(30, 0)(s) && s.laidOut, 10_000);
+    await waitFor(page, "the phone turned by Alt+drag", turnedTo(30, 0), 10_000);
+    await windowAtRest(page);
     expect(await streamPointAt(page, insideLeftEdge, mid.y)).toBeNull();
     await altDoubleClick(page, mid);
     await waitFor(page, "the turn back at rest", (s) => turnedTo(0, 0)(s) && s.view.t === 0, 10_000);
@@ -669,7 +687,8 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
 
     const side = await sideOfCase(page, centre.y);
     await drag(page, side, { x: 80, y: -40 });
-    const turned = await waitFor(page, "the phone turned", (s) => turnedTo(24, 12)(s) && s.laidOut, 10_000);
+    await waitFor(page, "the phone turned", turnedTo(24, 12), 10_000);
+    const turned = await windowAtRest(page);
     // The window grows evenly around the phone for the turn, which stays where it was on screen.
     const turnedBounds = await windowBounds(app);
     expect(turned.window.w * turned.window.h).toBeGreaterThan(ended.window.w * ended.window.h);
@@ -703,7 +722,8 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
 
     // A far turn from the right side, leftwards and up, stays inside the grown window.
     await drag(page, { x: ended.window.w - side.x, y: side.y }, { x: -200, y: -150 });
-    await waitFor(page, "the phone turned far", (s) => turnedTo(-60, 45)(s) && s.laidOut, 10_000);
+    await waitFor(page, "the phone turned far", turnedTo(-60, 45), 10_000);
+    await windowAtRest(page);
     await frames(page, 3);
     const shotFar = await page.screenshot({ path: "test-results/turn-far.png" });
     expect(await opaqueBox(page, shotFar)).not.toBeNull();

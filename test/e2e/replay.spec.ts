@@ -17,6 +17,7 @@ interface Stats {
   settled: boolean;
   brightness: { cover: number; inner: number };
   view: { target: "work" | "showcase"; t: number; active: boolean };
+  modelRotation: { yaw: number; pitch: number };
   laidOut: boolean;
 }
 
@@ -77,6 +78,7 @@ function stats(page: Page): Promise<Stats> {
         settled: false,
         brightness: { cover: 0, inner: 0 },
         view: { target: "work" as const, t: 0, active: false },
+        modelRotation: { yaw: 0, pitch: 0 },
         laidOut,
       };
     }
@@ -136,10 +138,10 @@ async function toggleView(page: Page): Promise<void> {
   await page.keyboard.up("Alt");
 }
 
-/** Fraction of pixels in which any channel differs by more than a compression step between two same-size screenshots. */
-async function differingPixels(page: Page, a: Buffer, b: Buffer): Promise<number> {
+/** Fraction of pixels in which any channel differs by more than `tolerance` (a compression step by default) between two same-size screenshots. */
+async function differingPixels(page: Page, a: Buffer, b: Buffer, tolerance = 16): Promise<number> {
   return page.evaluate(
-    async ({ a, b }) => {
+    async ({ a, b, tolerance }) => {
       const decode = async (base64: string) => {
         const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
         const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
@@ -152,11 +154,11 @@ async function differingPixels(page: Page, a: Buffer, b: Buffer): Promise<number
       if (x.width !== y.width || x.height !== y.height) return 1;
       let differing = 0;
       for (let i = 0; i < x.data.length; i += 4) {
-        if ([0, 1, 2, 3].some((c) => Math.abs(x.data[i + c] - y.data[i + c]) > 16)) differing++;
+        if ([0, 1, 2, 3].some((c) => Math.abs(x.data[i + c] - y.data[i + c]) > tolerance)) differing++;
       }
       return differing / (x.width * x.height);
     },
-    { a: a.toString("base64"), b: b.toString("base64") },
+    { a: a.toString("base64"), b: b.toString("base64"), tolerance },
   );
 }
 
@@ -459,6 +461,154 @@ test("hover menu on the top edge, transfer toasts for a drop, and a colourway ch
     expect(box.y).toBeLessThan(24);
     await page.waitForTimeout(400);
     await page.screenshot({ path: "test-results/showcase-menu.png" });
+  } finally {
+    await app.close();
+  }
+});
+
+/** The bounding box, in CSS px, of the phone's opaque pixels (the soft showcase shadow stays under the threshold). */
+async function opaqueBox(page: Page, png: Buffer): Promise<{ x: number; y: number; w: number; h: number }> {
+  return page.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    ctx.drawImage(bitmap, 0, 0);
+    const { data, width, height } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (data[(y * width + x) * 4 + 3] < 200) continue;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    const scale = bitmap.width / innerWidth;
+    return { x: minX / scale, y: minY / scale, w: (maxX - minX + 1) / scale, h: (maxY - minY + 1) / scale };
+  }, png.toString("base64"));
+}
+
+async function frames(page: Page, count: number): Promise<void> {
+  await page.evaluate(
+    (count) =>
+      new Promise<void>((resolve) => {
+        let left = count;
+        const tick = () => (--left <= 0 ? resolve() : requestAnimationFrame(tick));
+        requestAnimationFrame(tick);
+      }),
+    count,
+  );
+}
+
+function streamPointAt(page: Page, x: number, y: number): Promise<{ x: number; y: number } | null> {
+  return page.evaluate(([x, y]) => (window as unknown as { __hinge: { streamPointAt(x: number, y: number): { x: number; y: number } | null } }).__hinge.streamPointAt(x, y), [x, y]);
+}
+
+async function altDrag(page: Page, from: { x: number; y: number }, by: { x: number; y: number }): Promise<void> {
+  await page.mouse.move(from.x, from.y);
+  await page.keyboard.down("Alt");
+  await page.mouse.down();
+  await page.mouse.move(from.x + by.x, from.y + by.y, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Alt");
+}
+
+async function altDoubleClick(page: Page, at: { x: number; y: number }): Promise<void> {
+  await page.keyboard.down("Alt");
+  await page.mouse.dblclick(at.x, at.y);
+  await page.keyboard.up("Alt");
+}
+
+function turnedTo(yaw: number, pitch: number): (s: Stats) => boolean {
+  return (s) => Math.abs(s.modelRotation.yaw - yaw) < 1e-9 && Math.abs(s.modelRotation.pitch - pitch) < 1e-9;
+}
+
+test("Alt+drag turns the phone in both views and it stays turned; Alt+double-click springs it back exactly", async () => {
+  test.setTimeout(180_000);
+  const { app, page } = await launch(resolve("test/fixtures/synthetic-fold.hrec"));
+  try {
+    const open = await waitFor(page, "the open phone", (s) => restingOn("inner", s) && s.badge === null && s.rotation === 0 && Math.abs(aspect(s) - OPEN_ASPECT) < 0.02, 45_000);
+    const mid = { x: open.window.w / 2, y: open.window.h / 2 };
+    const nearLeftEdge = open.window.w * 0.04;
+    expect(await streamPointAt(page, nearLeftEdge, mid.y)).not.toBeNull();
+    const centreHit = await streamPointAt(page, mid.x, mid.y);
+
+    await altDrag(page, mid, { x: 100, y: 0 });
+    await waitFor(page, "the live phone turned", turnedTo(30, 0), 10_000);
+    await frames(page, 2);
+    await page.screenshot({ path: "test-results/turn-live.png" });
+    expect(await streamPointAt(page, nearLeftEdge, mid.y)).toBeNull();
+    const turnedHit = await streamPointAt(page, mid.x, mid.y);
+    expect(turnedHit).not.toBeNull();
+    expect(Math.abs(turnedHit!.x - centreHit!.x)).toBeLessThan(0.05);
+    expect(Math.abs(turnedHit!.y - centreHit!.y)).toBeLessThan(0.01);
+    await altDoubleClick(page, mid);
+    await waitFor(page, "the live phone back at rest", turnedTo(0, 0), 10_000);
+
+    const ended = await waitFor(
+      page,
+      "the replay to end",
+      (s) => s.lit === null && s.settled && s.laidOut && s.brightness.inner === 0 && s.brightness.cover === 0 && s.angle === 180 && s.window.w > s.window.h,
+      60_000,
+    );
+    const centre = { x: ended.window.w / 2, y: ended.window.h / 2 };
+    await page.mouse.move(centre.x, centre.y);
+    await frames(page, 3);
+    const workRest = await page.screenshot({ path: "test-results/turn-work-rest.png" });
+
+    await altDrag(page, centre, { x: 80, y: -40 });
+    const turned = await waitFor(page, "the work view turned", turnedTo(24, 12), 10_000);
+    expect(turned.window).toEqual(ended.window);
+    await frames(page, 3);
+    const workTurned = await page.screenshot({ path: "test-results/turn-work.png" });
+    const restBox = await opaqueBox(page, workRest);
+    const turnedBox = await opaqueBox(page, workTurned);
+    await writeFile("test-results/turn-work-boxes.json", JSON.stringify({ restBox, turnedBox }, null, 2));
+    expect(turnedBox.w).toBeLessThan(restBox.w * 0.95);
+    await page.waitForTimeout(1000);
+    expect((await stats(page)).modelRotation).toEqual({ yaw: 24, pitch: 12 });
+
+    await altDoubleClick(page, centre);
+    await waitFor(page, "the work view back at rest", turnedTo(0, 0), 10_000);
+    await frames(page, 3);
+    const workBack = await page.screenshot({ path: "test-results/turn-work-reset.png" });
+    expect(await differingPixels(page, workRest, workBack, 0)).toBe(0);
+
+    await toggleView(page);
+    const showcase = await waitFor(page, "the showcase view", (s) => s.view.t === 1 && !s.view.active && s.laidOut && s.settled, 20_000);
+    const stage = { x: showcase.window.w / 2, y: showcase.window.h / 2 };
+    await page.mouse.move(stage.x, stage.y);
+    await frames(page, 3);
+    const showcaseRest = await page.screenshot({ path: "test-results/turn-showcase-rest.png" });
+
+    await altDrag(page, stage, { x: 100, y: 0 });
+    await waitFor(page, "the showcase turned", turnedTo(30, 0), 10_000);
+    await frames(page, 3);
+    const showcaseTurned = await page.screenshot({ path: "test-results/turn-showcase.png" });
+    const showcaseRestBox = await opaqueBox(page, showcaseRest);
+    const showcaseTurnedBox = await opaqueBox(page, showcaseTurned);
+    await writeFile("test-results/turn-showcase-boxes.json", JSON.stringify({ showcaseRestBox, showcaseTurnedBox }, null, 2));
+    expect(showcaseTurnedBox.w).toBeLessThan(showcaseRestBox.w * 0.95);
+
+    await page.waitForTimeout(2500);
+    expect((await stats(page)).modelRotation).toEqual({ yaw: 30, pitch: 0 });
+    expect(await differingPixels(page, showcaseTurned, await page.screenshot())).toBe(0);
+
+    await altDoubleClick(page, stage);
+    await waitFor(page, "the showcase back at rest", turnedTo(0, 0), 10_000);
+    await frames(page, 3);
+    const showcaseBack = await page.screenshot({ path: "test-results/turn-showcase-reset.png" });
+    expect(await differingPixels(page, showcaseRest, showcaseBack, 0)).toBe(0);
+
+    await altDrag(page, stage, { x: -60, y: 0 });
+    await waitFor(page, "the showcase turned again", turnedTo(-18, 0), 10_000);
+    await toggleView(page);
+    await waitFor(page, "the view toggle to spring the turn back", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active, 20_000);
   } finally {
     await app.close();
   }

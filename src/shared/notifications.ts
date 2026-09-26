@@ -35,9 +35,12 @@ function extrasBlock(block: string): string | null {
   return end < 0 ? block.slice(start) : block.slice(start, end);
 }
 
+/** AOSP prints each extra as its class name and the value in brackets, e.g. `String (Sam)`, or `null`. */
 function extraField(extras: string, name: string): string {
   const match = new RegExp(`^\\s*${escapeRegExp(name)}=(.*)$`, "m").exec(extras);
-  return match ? match[1].trim() : "";
+  const raw = match ? match[1].trim() : "";
+  if (raw === "null") return "";
+  return /^[A-Za-z][\w$.]* \((.*)\)$/.exec(raw)?.[1] ?? raw;
 }
 
 function toImportance(raw: string | null): number {

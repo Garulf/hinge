@@ -36,6 +36,23 @@ test("parseNotifications recognises a group summary from its flag bit", () => {
   expect(summary.flags & 0x200).not.toBe(0);
 });
 
+test("parseNotifications unwraps extras that AOSP prints as their class name and the value in brackets", () => {
+  const block = [
+    "  NotificationRecord(0x3c4d5e6: pkg=com.example.mail user=UserHandle{0} id=7 tag=null key=0|com.example.mail|7|null|10300: Notification(channel=inbox pri=0 flags=0x10))",
+    "    pkg=com.example.mail",
+    "    key=0|com.example.mail|7|null|10300",
+    "    flags=0x10",
+    "      extras={",
+    "        android.title=String (Sam)",
+    "        android.text=SpannableString (Lunch (the usual place)?)",
+    "        android.subText=null",
+    "      }",
+  ].join("\n");
+  const [mail] = parseNotifications(block);
+  expect(mail.title).toBe("Sam");
+  expect(mail.text).toBe("Lunch (the usual place)?");
+});
+
 test("parseNotifications reads an empty title and text as empty strings, not undefined", () => {
   const blank = byKey(parseNotifications(FIXTURE), "0|com.example.chat|99|null|10201");
   expect(blank.title).toBe("");

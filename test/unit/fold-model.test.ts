@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import * as THREE from "three";
 import { beforeAll, expect, test } from "vitest";
 import { FoldModel } from "../../src/renderer/scene/fold-model";
-import { CREASE_STRENGTH, ScreenMaterial } from "../../src/renderer/scene/screen-material";
+import { ScreenMaterial } from "../../src/renderer/scene/screen-material";
 import { FOLD7_BODY } from "../../src/shared/layout";
 import { streamSampleMatrix } from "../../src/shared/screen-uv";
 
@@ -163,26 +163,79 @@ test("ScreenMaterial's glass is off by default and samples the environment's cub
   expect(material.uniforms.envMap.value).toBeNull();
 });
 
-test("the inner screen's crease band is the model's 6 mm bend band around the hinge line, in u", () => {
-  const band = model.creaseBand();
-  const activeWidthMm = 135.8;
-  expect(band.centreU).toBeGreaterThan(0.45);
-  expect(band.centreU).toBeLessThan(0.55);
-  expect(band.halfWidthU).toBeCloseTo(3 / activeWidthMm, 2);
+test("ScreenMaterial's glass takes the scene's lights, so the crease catches a key light as the body does", () => {
+  const material = new ScreenMaterial(model.inner.extras);
+  expect(material.lights).toBe(true);
+  expect(material.uniforms.directionalLights).toBeDefined();
+  expect(material.uniforms.hemisphereLights).toBeDefined();
 });
 
-test("ScreenMaterial's crease follows the view blend on a screen with a band, and is off on one without", () => {
-  const cover = new ScreenMaterial(model.cover.extras);
-  cover.setCrease(1);
-  expect(cover.uniforms.crease.value).toBe(0);
+const CREASE_DEPTH_MM = 0.1;
+const CREASE_HALF_BAND_MM = 3;
+const INNER_ACTIVE_WIDTH_MM = 135.8;
 
-  const inner = new ScreenMaterial(model.inner.extras);
-  inner.setCreaseBand(model.creaseBand());
-  expect(inner.uniforms.creaseCentreU.value).toBe(model.creaseBand().centreU);
-  inner.setCrease(0);
-  expect(inner.uniforms.crease.value).toBe(0);
-  inner.setCrease(0.5);
-  expect(inner.uniforms.crease.value).toBeCloseTo(0.5 * CREASE_STRENGTH, 12);
+function hingeWorld(): THREE.Vector3 {
+  return model.root.getObjectByName("Hinge")!.getWorldPosition(new THREE.Vector3());
+}
+
+/** Casts straight down onto the open inner screen, `xMm` across from the hinge line. */
+function hitOpenInner(xMm: number): THREE.Intersection {
+  const hinge = hingeWorld();
+  const raycaster = new THREE.Raycaster(new THREE.Vector3(hinge.x + xMm / 1000, hinge.y, 1), new THREE.Vector3(0, 0, -1));
+  const [hit] = raycaster.intersectObject(model.inner.mesh);
+  expect(hit, `hit at ${xMm} mm`).toBeDefined();
+  return hit;
+}
+
+test("the open inner screen dips 0.1 mm along the hinge line and is flat beyond its 6 mm crease band", () => {
+  model.root.position.set(0, 0, 0);
+  model.setAngle(180);
+  const surfaceZ = hitOpenInner(20).point.z;
+  const depthMm = (xMm: number) => (surfaceZ - hitOpenInner(xMm).point.z) * 1000;
+  expect(depthMm(0)).toBeCloseTo(CREASE_DEPTH_MM, 3);
+  expect(depthMm(1.5)).toBeCloseTo(CREASE_DEPTH_MM / 2, 3);
+  expect(depthMm(-1.5)).toBeCloseTo(CREASE_DEPTH_MM / 2, 3);
+  for (const x of [-CREASE_HALF_BAND_MM, CREASE_HALF_BAND_MM, -10, 10]) expect(depthMm(x), `${x} mm`).toBeCloseTo(0, 4);
+});
+
+test("touches across the crease still land on the stream pixel straight below them", () => {
+  model.root.position.set(0, 0, 0);
+  model.setAngle(180);
+  for (let x = -3.2; x <= 3.2; x += 0.1) {
+    expect(hitOpenInner(x).uv!.x, `${x.toFixed(1)} mm`).toBeCloseTo(0.5 + x / INNER_ACTIVE_WIDTH_MM, 6);
+  }
+});
+
+test("the crease folds with the screen, both sides of it bending alike", () => {
+  model.root.position.set(0, 0, 0);
+  const mesh = model.inner.mesh;
+  const positions = mesh.geometry.getAttribute("position");
+  mesh.updateWorldMatrix(true, false);
+  const hingeLocalX = hingeWorld().applyMatrix4(mesh.matrixWorld.clone().invert()).x;
+  const byOffset = new Map<string, number>();
+  for (let i = 0; i < positions.count; i++) {
+    const offsetMm = (positions.getX(i) - hingeLocalX) * 1000;
+    if (Math.abs(offsetMm) < CREASE_HALF_BAND_MM + 0.5) byOffset.set(`${offsetMm.toFixed(3)} ${positions.getY(i).toFixed(5)}`, i);
+  }
+  const fromAxis = (index: number) => {
+    const p = mesh.getVertexPosition(index, new THREE.Vector3()).applyMatrix4(mesh.matrixWorld);
+    const hinge = hingeWorld();
+    return Math.hypot(p.x - hinge.x, p.z - hinge.z);
+  };
+  let pairs = 0;
+  for (const angle of [180, 100, 30]) {
+    model.setAngle(angle);
+    for (const [key, index] of byOffset) {
+      const [offset, y] = key.split(" ");
+      if (Number(offset) <= 0) continue;
+      const mirror = byOffset.get(`${(-Number(offset)).toFixed(3)} ${y}`);
+      if (mirror === undefined) continue;
+      expect(fromAxis(index), `${angle} deg, ${key}`).toBeCloseTo(fromAxis(mirror), 9);
+      pairs++;
+    }
+  }
+  expect(pairs).toBeGreaterThan(100);
+  model.setAngle(180);
 });
 
 test("a colourway restyles the frame and back materials by name, leaving the screens alone", async () => {

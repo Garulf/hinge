@@ -9,14 +9,6 @@ export interface ScreenExtras {
 }
 
 const HINGE_AXIS = new THREE.Vector3(0, 1, 0);
-/** The width of InnerScreen's bend band across the hinge, from the model contract. */
-const CREASE_BAND_MM = 6;
-
-export interface CreaseBand {
-  centreU: number;
-  halfWidthU: number;
-}
-
 function requireNode(root: THREE.Object3D, name: string): THREE.Object3D {
   const node = root.getObjectByName(name);
   if (!node) throw new Error(`fold7.glb has no node named ${name}`);
@@ -53,27 +45,6 @@ function rigidBox(object: THREE.Object3D, frame: THREE.Object3D): THREE.Box3 {
   return box;
 }
 
-/** Fits u against x over the screen's vertices (u runs linearly across the flat active area) and reads it off at the hinge line. */
-function creaseBandOf(mesh: THREE.Mesh, hinge: THREE.Object3D): CreaseBand {
-  mesh.updateWorldMatrix(true, false);
-  const hingeX = hinge.getWorldPosition(new THREE.Vector3()).applyMatrix4(mesh.matrixWorld.clone().invert()).x;
-  const positions = mesh.geometry.getAttribute("position");
-  const uvs = mesh.geometry.getAttribute("uv");
-  let n = 0, sx = 0, su = 0, sxx = 0, sxu = 0;
-  for (let i = 0; i < positions.count; i++) {
-    const x = positions.getX(i);
-    const u = uvs.getX(i);
-    n++;
-    sx += x;
-    su += u;
-    sxx += x * x;
-    sxu += x * u;
-  }
-  const slope = (n * sxu - sx * su) / (n * sxx - sx * sx);
-  const offset = (su - slope * sx) / n;
-  return { centreU: slope * hingeX + offset, halfWidthU: Math.abs(slope) * (CREASE_BAND_MM / 1000 / 2) };
-}
-
 const corner = new THREE.Vector3();
 const worldToFrame = new THREE.Matrix4();
 const toFrame = new THREE.Matrix4();
@@ -104,7 +75,6 @@ export class FoldModel {
   readonly #skinned: THREE.SkinnedMesh[] = [];
   readonly #fixedBox: THREE.Box3;
   readonly #coverBoxInHinge: THREE.Box3;
-  readonly #creaseBand: CreaseBand;
 
   static async load(data: ArrayBuffer): Promise<FoldModel> {
     return new FoldModel(await parseGltf(data));
@@ -140,12 +110,6 @@ export class FoldModel {
     this.setAngle(180);
     this.#fixedBox = rigidBox(this.fixedHalf, this.root);
     this.#coverBoxInHinge = rigidBox(this.#coverHalf, this.#hinge);
-    this.#creaseBand = creaseBandOf(this.inner.mesh, this.#hinge);
-  }
-
-  /** Where the inner screen's crease runs, in its u coordinate. */
-  creaseBand(): CreaseBand {
-    return this.#creaseBand;
   }
 
   /**

@@ -427,7 +427,6 @@ export class PhoneScene implements FrameTarget {
     model.cover.mesh.material = this.#materials.cover;
     model.inner.mesh.material = this.#materials.inner;
     for (const screen of SCREENS) this.#materials[screen].setEnvironment(this.#scene.environment);
-    this.#materials.inner.setCreaseBand(model.creaseBand());
     const videoScreen = this.#routing.videoScreen;
     if (videoScreen) this.#materials[videoScreen].setVideo(this.#live);
 
@@ -588,10 +587,7 @@ export class PhoneScene implements FrameTarget {
       this.#badge.material.rotation = (rotation * Math.PI) / 2;
       this.#badge.material.opacity = 1 - this.#view.t;
     }
-    for (const screen of SCREENS) {
-      materials[screen].setGlass(this.#view.t);
-      materials[screen].setCrease(this.#view.t);
-    }
+    for (const screen of SCREENS) materials[screen].setGlass(this.#view.t);
   }
 
   #applyLayout(): void {

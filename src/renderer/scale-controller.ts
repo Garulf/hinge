@@ -1,4 +1,4 @@
-import { defaultPxPerMm, FOLD7_BODY, showcaseSizePx } from "../shared/layout";
+import { defaultPxPerMm, FOLD7_BODY } from "../shared/layout";
 import { fitPxPerMm, nextPxPerMm, pixelPerfectPxPerMm } from "../shared/scale";
 import type { Rotation } from "../shared/screen-uv";
 
@@ -60,13 +60,6 @@ export class ScaleController {
     if (this.#device?.id === id) return;
     this.#device = { id, saved: saved ?? null };
     if (this.#base !== null) this.#setWindowed(saved ?? this.#base);
-  }
-
-  /** The showcase window at the current scale, its long side fitted to the same work area the scale is capped by. */
-  showcaseSize(rotation: Rotation, devicePixelRatio: number): { w: number; h: number } | null {
-    const pxPerMm = this.pxPerMm;
-    if (pxPerMm === null || this.#workArea === null) return null;
-    return showcaseSizePx(FOLD7_BODY, rotation, pxPerMm, this.#workArea, devicePixelRatio);
   }
 
   step(direction: 1 | -1): boolean {

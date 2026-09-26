@@ -17,47 +17,35 @@ export const SHOWCASE_LIMITS: { yaw: [number, number]; pitch: [number, number] }
 
 const SHOWCASE_FOV_DEG = 18;
 const NEAR_ORTHO_FOV_DEG = 1;
-const SPHERE_FILL = 0.88;
 const DEPTH_MARGIN_M = 0.5;
+
+export interface Box {
+  min: Vec3;
+  max: Vec3;
+}
 
 const rad = (deg: number) => (deg * Math.PI) / 180;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-
-/**
- * Half the height the showcase lens sees at the phone's centre, for a
- * distance at which the phone's bounding sphere spans SPHERE_FILL of the
- * frame height.
- */
-function showcaseHalfHeight(radius: number): number {
-  const halfFov = rad(SHOWCASE_FOV_DEG) / 2;
-  const sphereHalfAngle = Math.atan(SPHERE_FILL * Math.tan(halfFov));
-  return (radius / Math.sin(sphereHalfAngle)) * Math.tan(halfFov);
-}
+const lerpVec = (a: Vec3, b: Vec3, t: number): Vec3 => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), z: lerp(a.z, b.z, t) });
 
 /**
  * The perspective camera between the work view (t 0) and the showcase (t 1).
- * The lens widens from a near-orthographic 1 degree to 18 while the height
- * it frames at the point it looks at eases from the work view's to the
- * showcase's, so the image leaves the orthographic work view without a jump.
+ * The lens widens from a near-orthographic 1 degree to 18 while the front of
+ * the phone keeps the work view's scale, so the phone is the same size in
+ * both views. An orbit swings the camera around the phone at that distance.
  */
 export function blendedCamera(input: {
   t: number;
   workCentre: Vec3;
   workHalfHeight: number;
-  subjectCentre: Vec3;
-  subjectRadius: number;
+  subject: Box;
   yawDeg: number;
   pitchDeg: number;
 }): CameraRig {
-  const { t } = input;
+  const { t, subject } = input;
   const fovDeg = lerp(NEAR_ORTHO_FOV_DEG, SHOWCASE_FOV_DEG, t);
-  const halfHeight = lerp(input.workHalfHeight, showcaseHalfHeight(input.subjectRadius), t);
-  const distance = halfHeight / Math.tan(rad(fovDeg) / 2);
-  const target = {
-    x: lerp(input.workCentre.x, input.subjectCentre.x, t),
-    y: lerp(input.workCentre.y, input.subjectCentre.y, t),
-    z: lerp(input.workCentre.z, input.subjectCentre.z, t),
-  };
+  const target = lerpVec(input.workCentre, lerpVec(subject.min, subject.max, 0.5), t);
+  const distance = subject.max.z - target.z + input.workHalfHeight / Math.tan(rad(fovDeg) / 2);
   const yaw = rad(input.yawDeg * t);
   const pitch = rad(input.pitchDeg * t);
   const position = {

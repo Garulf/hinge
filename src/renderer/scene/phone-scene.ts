@@ -3,20 +3,21 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import type { MaterialLook } from "../../shared/colourways";
 import type { ScreenClass, ScreenKind } from "../../shared/fold7";
 import type { DirectorOutput, FoldDirector } from "../../shared/fold-director";
-import { MODEL_REST, ModelRotation, turnFitScale, type ModelAngles } from "../../shared/model-rotation";
+import type { Pad } from "../../shared/layout";
+import { MODEL_REST, ModelRotation, type ModelAngles } from "../../shared/model-rotation";
 import { Orbit } from "../../shared/orbit";
 import type { Rotation } from "../../shared/screen-uv";
 import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST } from "../../shared/showcase-camera";
 import { ViewTransition } from "../../shared/view-transition";
 import { StatusOverlay } from "../status-overlay";
 import type { FrameTarget } from "../texture-renderer";
-import { ContactShadow } from "./contact-shadow";
 import { FoldModel, type ScreenExtras } from "./fold-model";
 import { FrameLifecycle } from "./frame-lifecycle";
 import { ScreenMaterial } from "./screen-material";
 import { ScreenRouting } from "./screen-routing";
 
 const MAX_TICK_MS = 1000;
+const TURN_ROOM_SLACK_PX = 1;
 const BADGE_SIZE_MM = { w: 9, h: 2.6 };
 const BADGE_LIFT_MM = 0.4;
 const SCREENS: ScreenKind[] = ["cover", "inner"];
@@ -106,12 +107,19 @@ function isSoftwareGl(): boolean {
   return /swiftshader|llvmpipe|softpipe|software/i.test(name);
 }
 
-/** CSS anchoring that keeps the fixed half's outer edge in place while the canvas waits to follow a window resize. */
-function anchorCanvas(canvas: HTMLCanvasElement, rotation: Rotation): void {
+/**
+ * CSS anchoring that keeps the phone in place while the canvas waits to
+ * follow a window resize: the fixed half's outer edge for a fold, or the
+ * centre while the window grows evenly around a turned phone.
+ */
+function anchorCanvas(canvas: HTMLCanvasElement, rotation: Rotation, centred: boolean): void {
   const s = canvas.style;
   s.position = "fixed";
   s.left = s.right = s.top = s.bottom = "";
-  if (rotation === 1 || rotation === 3) {
+  if (centred) {
+    s.left = s.top = "50%";
+    s.transform = "translate(-50%, -50%)";
+  } else if (rotation === 1 || rotation === 3) {
     s.left = "50%";
     s.transform = "translateX(-50%)";
     if (rotation === 1) s.top = "0";
@@ -136,8 +144,6 @@ export interface PhoneSceneOptions {
   onTick?: (out: DirectorOutput, rotation: Rotation, view: ViewState) => void;
 }
 
-const SHADOW = { size: 0.3, height: 0.08, blur: 3.5, darkness: 6, opacity: 0.35 };
-
 /**
  * The phone model in an orthographic work view at a fixed physical scale,
  * posed every animation frame by the FoldDirector, and a perspective
@@ -160,8 +166,6 @@ export class PhoneScene implements FrameTarget {
   readonly #showcaseCamera = new THREE.PerspectiveCamera();
   readonly #transition = new ViewTransition();
   readonly #orbit = new Orbit(SHOWCASE_REST, SHOWCASE_LIMITS);
-  readonly #shadow: ContactShadow;
-  readonly #poseBox = new THREE.Box3();
   /** The user's Alt+drag turn about the phone's centre, between the scene and the display-rotation pivot. */
   readonly #turn = new THREE.Group();
   readonly #modelRotation = new ModelRotation();
@@ -169,10 +173,8 @@ export class PhoneScene implements FrameTarget {
   readonly #turnEuler = new THREE.Euler(0, 0, 0, "XYZ");
   readonly #turnRotation = new THREE.Matrix4();
   readonly #turnBack = new THREE.Matrix4();
-  readonly #turnScale = new THREE.Vector3();
-  readonly #turnClip = new THREE.Matrix4();
-  #turnFit = 1;
   readonly #unturnedBox = new THREE.Box3();
+  readonly #corner = new THREE.Vector3();
   readonly #pivot = new THREE.Group();
   readonly #overlayScene = new THREE.Scene();
   readonly #overlayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
@@ -191,6 +193,9 @@ export class PhoneScene implements FrameTarget {
   #bodyCentreY = 0;
   #pxPerMm = 1;
   #viewport = { w: 1, h: 1 };
+  #workSize: { w: number; h: number } | null = null;
+  #margin: Pad = { x: 0, y: 0 };
+  #turnRoom: Pad = { x: 0, y: 0 };
   #rotation: Rotation = 0;
   #angle: number | null = null;
   #out: DirectorOutput | null = null;
@@ -199,8 +204,6 @@ export class PhoneScene implements FrameTarget {
   #orbitPose = { ...SHOWCASE_REST };
   #turnPose: ModelAngles = { ...MODEL_REST };
   #rendered = { t: 0, yaw: SHOWCASE_REST.yaw, pitch: SHOWCASE_REST.pitch, turn: { ...MODEL_REST } };
-  #shadowPose: string | null = null;
-  #shadowSkippedLast = false;
   #frameDirty = true;
   #layoutDirty = true;
   #renderedSettled = false;
@@ -222,8 +225,6 @@ export class PhoneScene implements FrameTarget {
     this.#turn.matrixAutoUpdate = false;
     this.#turn.add(this.#pivot);
     this.#scene.add(this.#turn);
-    this.#shadow = new ContactShadow(this.#renderer, { ...SHADOW, resolution: software ? 256 : 512 });
-    this.#scene.add(this.#shadow.group);
     this.#camera.position.z = 0.5;
 
     this.#overlay.mesh.renderOrder = 1;
@@ -294,6 +295,24 @@ export class PhoneScene implements FrameTarget {
     this.#layoutDirty = true;
   }
 
+  /**
+   * The window the work view would have, which the phone is laid out in; a
+   * larger window (grown around a turned phone) shows the room around it,
+   * so the phone stays where it is on screen. Null lays out in the whole
+   * window.
+   */
+  setWorkSize(size: { w: number; h: number } | null): void {
+    const same = size === this.#workSize || (size && this.#workSize && size.w === this.#workSize.w && size.h === this.#workSize.h);
+    if (same) return;
+    this.#workSize = size;
+    this.#layoutDirty = true;
+  }
+
+  /** How far, in CSS px, the drawn phone reaches past the work view's window on each side; 0 in the work view. */
+  turnRoom(): Pad {
+    return this.#turnRoom;
+  }
+
   /** A model load failure stays on screen over any later status until the app restarts. */
   setStatus(text: string | null): void {
     this.#overlay.setText(this.#fatalStatus ?? text);
@@ -353,11 +372,11 @@ export class PhoneScene implements FrameTarget {
     this.#modelRotation.reset();
   }
 
-  /** The turn as last drawn, for diagnostics: its angles, the fit scale, the camera's depth range and the turned pose's world box. */
-  turnState(): { angles: ModelAngles; scale: number; near: number; far: number; centre: THREE.Vector3Like; box: { min: THREE.Vector3Like; max: THREE.Vector3Like } | null } {
+  /** The turn as last drawn, for diagnostics: its angles, the camera's depth range and the turned pose's world box. */
+  turnState(): { angles: ModelAngles; near: number; far: number; centre: THREE.Vector3Like; box: { min: THREE.Vector3Like; max: THREE.Vector3Like } | null } {
     const camera = this.activeCamera() as THREE.OrthographicCamera | THREE.PerspectiveCamera;
     const box = this.#model ? this.#unturnedBox.clone().applyMatrix4(this.#turn.matrix) : null;
-    return { angles: { ...this.#rendered.turn }, scale: this.#turnFit, near: camera.near, far: camera.far, centre: this.#turnCentre.clone(), box: box && { min: box.min.clone(), max: box.max.clone() } };
+    return { angles: { ...this.#rendered.turn }, near: camera.near, far: camera.far, centre: this.#turnCentre.clone(), box: box && { min: box.min.clone(), max: box.max.clone() } };
   }
 
   /** The screen showing the stream, or null before the model or a stream and while the lit inner screen is folded away. */
@@ -416,15 +435,11 @@ export class PhoneScene implements FrameTarget {
     for (const o of hidden) o.visible = true;
     model.setInnerVisible(true);
     this.#applyLayout();
-    this.#captureShadow();
-    this.#shadow.setStrength(1);
     await this.#renderer.compileAsync(this.#scene, this.#camera);
     await this.#renderer.compileAsync(this.#overlayScene, this.#overlayCamera);
     for (const program of this.#renderer.info.programs ?? []) program.getUniforms();
     for (const o of hidden) o.visible = false;
     this.#overlay.mesh.visible = this.#overlay.text !== null;
-    this.#shadow.setStrength(0);
-    this.#shadowPose = null;
     this.#layoutDirty = true;
   }
 
@@ -513,7 +528,7 @@ export class PhoneScene implements FrameTarget {
 
     // The tick that settles still moved the pose (the last fade step, the
     // snap onto the target angle), so skipping starts only after it is drawn.
-    if (out.settled && this.#renderedSettled && !this.#frameDirty && !this.#layoutDirty && !this.#cameraMoved() && !this.#shadowBehind()) return;
+    if (out.settled && this.#renderedSettled && !this.#frameDirty && !this.#layoutDirty && !this.#cameraMoved()) return;
     if (this.#layoutDirty) this.#applyLayout();
     this.#frameDirty = false;
     this.#layoutDirty = false;
@@ -527,11 +542,6 @@ export class PhoneScene implements FrameTarget {
     if (t !== rendered.t) return true;
     if (this.#turnPose.yaw !== rendered.turn.yaw || this.#turnPose.pitch !== rendered.turn.pitch) return true;
     return t > 0 && (this.#orbitPose.yaw !== rendered.yaw || this.#orbitPose.pitch !== rendered.pitch);
-  }
-
-  /** A software GL skips every other shadow redraw, so the frame after the pose stops moving must still catch the shadow up. */
-  #shadowBehind(): boolean {
-    return this.#view.t > 0 && this.#model !== null && this.#shadowPose !== this.#shadowPoseKey();
   }
 
   #brightness(out: DirectorOutput, screen: ScreenKind): number {
@@ -560,23 +570,23 @@ export class PhoneScene implements FrameTarget {
       materials[screen].setGlass(this.#view.t);
       materials[screen].setCrease(this.#view.t);
     }
-    this.#shadow.setStrength(this.#view.t);
   }
 
   #applyLayout(): void {
     const { w, h } = this.#viewport;
     this.#renderer.setPixelRatio(window.devicePixelRatio);
     this.#renderer.setSize(w, h);
-    anchorCanvas(this.#renderer.domElement, this.#rotation);
+    anchorCanvas(this.#renderer.domElement, this.#rotation, this.#workSize !== null);
 
+    const work = this.#fitMargin();
     const metresPerPx = 1 / (this.#pxPerMm * 1000);
-    const halfW = (w * metresPerPx) / 2;
-    const halfH = (h * metresPerPx) / 2;
+    const halfW = (work.w * metresPerPx) / 2;
+    const halfH = (work.h * metresPerPx) / 2;
     this.#camera.left = -halfW;
     this.#camera.right = halfW;
     this.#camera.top = halfH;
     this.#camera.bottom = -halfH;
-    this.#camera.updateProjectionMatrix();
+    this.#showMargin(this.#camera);
 
     this.#pivot.rotation.z = (this.#rotation * Math.PI) / 2;
     if (this.#model) {
@@ -629,16 +639,15 @@ export class PhoneScene implements FrameTarget {
 
   /**
    * Aims the perspective camera for the blend at the centre of the unturned
-   * pose, so neither the turn nor its fit can move what the camera looks at.
+   * pose, so the turn cannot move what the camera looks at.
    */
-  #aimShowcase(model: FoldModel): void {
-    const { w, h } = this.#viewport;
+  #aimShowcase(): void {
+    const { w, h } = this.#fitMargin();
     const rig = blendedCamera({
       t: this.#view.t,
       workCentre: { x: 0, y: 0, z: 0 },
       workHalfHeight: h / (this.#pxPerMm * 1000) / 2,
-      subjectCentre: this.#turnCentre,
-      subjectRadius: model.openRadius(),
+      subject: this.#unturnedBox,
       yawDeg: this.#orbitPose.yaw,
       pitchDeg: this.#orbitPose.pitch,
     });
@@ -649,31 +658,8 @@ export class PhoneScene implements FrameTarget {
     camera.far = rig.far;
     camera.position.set(rig.position.x, rig.position.y, rig.position.z);
     camera.lookAt(rig.target.x, rig.target.y, rig.target.z);
-    camera.updateProjectionMatrix();
+    this.#showMargin(camera);
     camera.updateMatrixWorld();
-  }
-
-  /**
-   * Grounds the shadow under the current (turned) pose; the shadow map is
-   * redrawn only when the pose changed, since it moves with the model.
-   */
-  #placeShadow(model: FoldModel): void {
-    const box = model.poseBox(this.#poseBox);
-    const centre = box.getCenter(new THREE.Vector3());
-    this.#shadow.place(centre.x, box.min.y, centre.z);
-    if (this.#shadowPoseKey() === this.#shadowPose) return;
-    // A software GL pays for the shadow's depth and blur passes on the CPU,
-    // so while a fold moves the pose it is redrawn on every other frame.
-    if (this.#software && !this.#shadowSkippedLast && this.#shadowPose !== null) {
-      this.#shadowSkippedLast = true;
-      return;
-    }
-    this.#shadowSkippedLast = false;
-    this.#captureShadow();
-  }
-
-  #shadowPoseKey(): string {
-    return `${this.#angle}|${this.#rotation}|${this.#turnPose.yaw}|${this.#turnPose.pitch}|${this.#turnFit}`;
   }
 
   /**
@@ -688,45 +674,76 @@ export class PhoneScene implements FrameTarget {
     const turn = this.#turn;
     turn.matrix.identity();
     turn.matrixWorldNeedsUpdate = true;
-    const box = model.poseBox(this.#unturnedBox, turn);
-    box.getCenter(this.#turnCentre);
-    if (this.#view.t > 0) this.#aimShowcase(model);
-    this.#placeTurn(box);
+    model.poseBox(this.#unturnedBox, turn).getCenter(this.#turnCentre);
+    if (this.#view.t > 0) this.#aimShowcase();
+    this.#placeTurn();
   }
 
   /**
-   * Turns the model about the centre of its unturned pose, shrunk just
-   * enough that the showcase view (with its orbit) still shows all of it.
-   * The work view is never turned (Alt+drag switches to showcase before the
-   * angle can move off rest), so the fit is always taken through the
-   * showcase's perspective camera. At rest the turn is the identity, which
-   * leaves every matrix below it bit for bit as without it.
+   * Turns the model about the centre of its unturned pose, at full size: the
+   * window grows around it instead (see turnRoom). The work view is never
+   * turned (Alt+drag switches to showcase before the angle can move off
+   * rest). At rest the turn is the identity, which leaves every matrix below
+   * it bit for bit as without it.
    */
-  #placeTurn(box: THREE.Box3): void {
-    this.#turnFit = 1;
+  #placeTurn(): void {
     const angles = this.#turnPose;
     if (angles.yaw === 0 && angles.pitch === 0) return;
-    const camera = this.#showcaseCamera;
-    camera.updateMatrixWorld();
-    const clip = this.#turnClip.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-    const scale = turnFitScale(box, clip.elements, angles);
-    this.#turnFit = scale;
     const c = this.#turnCentre;
     this.#turnEuler.set(THREE.MathUtils.degToRad(-angles.pitch), THREE.MathUtils.degToRad(angles.yaw), 0);
-    this.#turnRotation.makeRotationFromEuler(this.#turnEuler).scale(this.#turnScale.setScalar(scale));
+    this.#turnRotation.makeRotationFromEuler(this.#turnEuler);
     this.#turnBack.makeTranslation(-c.x, -c.y, -c.z);
     this.#turn.matrix.makeTranslation(c.x, c.y, c.z).multiply(this.#turnRotation).multiply(this.#turnBack);
   }
 
-  #captureShadow(): void {
-    this.#shadow.capture(this.#scene, this.#badge ? [this.#badge] : []);
-    this.#shadowPose = this.#shadowPoseKey();
+  /**
+   * Sets the margin between the canvas and the window the phone is laid out
+   * in (the work view's, or the whole canvas when that is unset or larger)
+   * and returns that window's size.
+   */
+  #fitMargin(): { w: number; h: number } {
+    const { w, h } = this.#viewport;
+    const work = this.#workSize;
+    this.#margin = work ? { x: Math.max(0, (w - work.w) / 2), y: Math.max(0, (h - work.h) / 2) } : { x: 0, y: 0 };
+    return { w: w - 2 * this.#margin.x, h: h - 2 * this.#margin.y };
+  }
+
+  /** Projects the work view's window into the middle of the canvas, with the margin drawn around it. */
+  #showMargin(camera: THREE.OrthographicCamera | THREE.PerspectiveCamera): void {
+    const { x, y } = this.#margin;
+    if (x === 0 && y === 0) {
+      camera.clearViewOffset();
+      return;
+    }
+    const { w, h } = this.#viewport;
+    camera.setViewOffset(w - 2 * x, h - 2 * y, -x, -y, w, h);
+  }
+
+  /**
+   * How far the turned (or orbited) pose box reaches past the work view's
+   * window, per axis, taking the further of the two sides; within a pixel
+   * counts as inside, so the rest pose never asks for room.
+   */
+  #measureTurnRoom(): Pad {
+    if (this.#view.t === 0 || !this.#model) return { x: 0, y: 0 };
+    const camera = this.activeCamera();
+    const { w, h } = this.#viewport;
+    const box = this.#unturnedBox;
+    let x = 0;
+    let y = 0;
+    for (let i = 0; i < 8; i++) {
+      const corner = this.#corner.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z);
+      corner.applyMatrix4(this.#turn.matrix).project(camera);
+      x = Math.max(x, (Math.abs(corner.x) * w) / 2 - (w / 2 - this.#margin.x));
+      y = Math.max(y, (Math.abs(corner.y) * h) / 2 - (h / 2 - this.#margin.y));
+    }
+    return { x: x > TURN_ROOM_SLACK_PX ? x : 0, y: y > TURN_ROOM_SLACK_PX ? y : 0 };
   }
 
   #renderNow(): void {
     if (this.#model) this.#placeModel(this.#model);
     this.#scene.updateMatrixWorld();
-    if (this.#view.t > 0 && this.#model) this.#placeShadow(this.#model);
+    this.#turnRoom = this.#measureTurnRoom();
     this.#rendered = { t: this.#view.t, yaw: this.#orbitPose.yaw, pitch: this.#orbitPose.pitch, turn: { ...this.#turnPose } };
     this.#renderer.clear();
     this.#renderer.render(this.#scene, this.activeCamera());

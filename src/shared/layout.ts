@@ -20,40 +20,6 @@ export function bodySizePx(body: BodyDims, open: boolean, rotation: 0 | 1 | 2 | 
   return rotated ? { w: h, h: w } : { w, h };
 }
 
-const SHOWCASE_WIDTH_FACTOR = 1.35;
-
-/**
- * The work view's height and room across for the angled open phone and its
- * shadow: 1.35 times the open body's width, device-aligned like the work
- * view, but never wider (or, turned, taller) than the work area.
- */
-export function showcaseSizePx(
-  body: BodyDims,
-  rotation: 0 | 1 | 2 | 3,
-  pxPerMm: number,
-  workArea: { w: number; h: number },
-  devicePixelRatio = 1,
-): { w: number; h: number } {
-  const along = Math.round(body.heightMm * pxPerMm);
-  const across = Math.round(SHOWCASE_WIDTH_FACTOR * body.openWidthMm * pxPerMm);
-  const rotated = rotation === 1 || rotation === 3;
-  const aligned = deviceAlignedSize(rotated ? { w: along, h: across } : { w: across, h: along }, devicePixelRatio);
-  if (rotated) return { w: aligned.w, h: fitSide(aligned.h, workArea.h, devicePixelRatio) };
-  return { w: fitSide(aligned.w, workArea.w, devicePixelRatio), h: aligned.h };
-}
-
-function fitSide(cssPx: number, limit: number, devicePixelRatio: number): number {
-  if (cssPx <= limit) return cssPx;
-  for (let step = 0; step <= MAX_ALIGN_STEP_PX; step++) {
-    if (coversWholeDevicePixels(limit - step, devicePixelRatio)) return limit - step;
-  }
-  return limit;
-}
-
-export function lerpSize(a: { w: number; h: number }, b: { w: number; h: number }, t: number): { w: number; h: number } {
-  return { w: Math.round(a.w + (b.w - a.w) * t), h: Math.round(a.h + (b.h - a.h) * t) };
-}
-
 const MAX_ALIGN_STEP_PX = 16;
 const WHOLE_PX_EPSILON = 1e-6;
 
@@ -78,6 +44,26 @@ function alignedSide(cssPx: number, devicePixelRatio: number): number {
  */
 export function deviceAlignedSize(size: { w: number; h: number }, devicePixelRatio: number): { w: number; h: number } {
   return { w: alignedSide(size.w, devicePixelRatio), h: alignedSide(size.h, devicePixelRatio) };
+}
+
+/** Room around the work view's window, the same on opposite sides, in CSS px. */
+export interface Pad {
+  x: number;
+  y: number;
+}
+
+export const NO_PAD: Pad = { x: 0, y: 0 };
+
+function alignedPadSide(side: number, pad: number, devicePixelRatio: number): number {
+  for (let step = 0; step <= MAX_ALIGN_STEP_PX; step++) {
+    if (coversWholeDevicePixels(side + 2 * (pad + step), devicePixelRatio)) return pad + step;
+  }
+  return pad;
+}
+
+/** The pad in whole CSS px, grown by the few it takes for the padded window to cover whole device pixels. */
+export function deviceAlignedPad(size: { w: number; h: number }, pad: Pad, devicePixelRatio: number): Pad {
+  return { x: alignedPadSide(size.w, Math.ceil(pad.x), devicePixelRatio), y: alignedPadSide(size.h, Math.ceil(pad.y), devicePixelRatio) };
 }
 
 export interface Rect {

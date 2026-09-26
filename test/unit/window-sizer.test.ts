@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { NO_PAD, type Pad } from "../../src/shared/layout";
 import { WindowSizer, type Size } from "../../src/shared/window-sizer";
 import type { Rotation } from "../../src/shared/screen-uv";
 
@@ -114,22 +115,47 @@ test("without lost-resize nudging a mismatch is left alone", () => {
   expect(requests).toHaveLength(1);
 });
 
-test("follow requests each new size directly, growing or shrinking, and never repeats one", () => {
-  const { requests, sizer: s } = sizer();
-  s.update(CLOSED, 0, true);
-  s.follow({ w: 100, h: 158 }, 0);
-  s.follow({ w: 100, h: 158 }, 0);
-  s.follow({ w: 90, h: 158 }, 0);
-  expect(requests).toEqual([[CLOSED, 0], [{ w: 100, h: 158 }, 0], [{ w: 90, h: 158 }, 0]]);
+function padded() {
+  const requests: [Size, Rotation, Pad][] = [];
+  return { requests, sizer: new WindowSizer((size, rotation, pad) => requests.push([size, rotation, pad]), { nudgeLostResizes: true }) };
+}
+
+test("a pad is requested around the same size, growing or shrinking at once, and never repeated", () => {
+  const { requests, sizer: s } = padded();
+  s.update(OPEN, 0, true);
+  s.update(OPEN, 0, true, { x: 12, y: 30 });
+  s.update(OPEN, 0, true, { x: 12, y: 30 });
+  s.update(OPEN, 0, true, { x: 4, y: 0 });
+  s.update(OPEN, 0, true);
+  expect(requests).toEqual([
+    [OPEN, 0, NO_PAD],
+    [OPEN, 0, { x: 12, y: 30 }],
+    [OPEN, 0, { x: 4, y: 0 }],
+    [OPEN, 0, NO_PAD],
+  ]);
+  expect(s.requested).toEqual(OPEN);
 });
 
-test("after following, a fold update shrinks to its target once settled", () => {
-  const { requests, sizer: s } = sizer();
+test("a pad changing mid-fold keeps the fold's union until it settles", () => {
+  const { requests, sizer: s } = padded();
   s.update(OPEN, 0, true);
-  s.follow({ w: 200, h: 158 }, 0);
-  s.follow({ w: 150, h: 158 }, 0);
-  s.update(CLOSED, 0, false);
-  expect(requests.at(-1)).toEqual([{ w: 150, h: 158 }, 0]);
-  s.update(CLOSED, 0, true);
-  expect(requests.at(-1)).toEqual([CLOSED, 0]);
+  s.update(CLOSED, 0, false, { x: 5, y: 5 });
+  expect(requests.at(-1)).toEqual([OPEN, 0, { x: 5, y: 5 }]);
+  s.update(CLOSED, 0, true, { x: 5, y: 5 });
+  expect(requests.at(-1)).toEqual([CLOSED, 0, { x: 5, y: 5 }]);
+  expect(s.requested).toEqual(CLOSED);
+});
+
+test("a padded window counts as landed at the padded size", () => {
+  const { requests, sizer: s } = padded();
+  s.update(OPEN, 0, true, { x: 10, y: 20 });
+  s.verify({ w: OPEN.w + 20, h: OPEN.h + 40 }, 0);
+  s.verify({ w: OPEN.w + 20, h: OPEN.h + 40 }, 5000);
+  expect(requests).toHaveLength(1);
+  s.verify(OPEN, 6000);
+  s.verify(OPEN, 7000);
+  expect(requests.slice(1)).toEqual([
+    [{ w: OPEN.w + 1, h: OPEN.h }, 0, { x: 10, y: 20 }],
+    [OPEN, 0, { x: 10, y: 20 }],
+  ]);
 });

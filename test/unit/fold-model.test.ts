@@ -138,13 +138,6 @@ test("poseBox in an ancestor's frame ignores that ancestor's own transform, even
   }
 });
 
-test("openRadius is the bounding sphere of the open body", () => {
-  const radiusMm = model.openRadius() * 1000;
-  const halfDiagonal = Math.hypot(FOLD7_BODY.openWidthMm, FOLD7_BODY.heightMm) / 2;
-  expect(radiusMm).toBeGreaterThan(halfDiagonal - 1);
-  expect(radiusMm).toBeLessThan(halfDiagonal + 3);
-});
-
 test("both screens carry normals for the glass reflection", () => {
   expect(model.cover.mesh.geometry.getAttribute("normal")).toBeDefined();
   expect(model.inner.mesh.geometry.getAttribute("normal")).toBeDefined();

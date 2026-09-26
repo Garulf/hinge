@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test, type Page } from "@playwright/test";
+import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -47,6 +47,28 @@ function stats(page: Page): Promise<Stats | null> {
     const laidOut = canvas !== null && canvas.width === Math.floor(innerWidth * devicePixelRatio) && canvas.height === Math.floor(innerHeight * devicePixelRatio);
     return api ? { ...api.stats(), laidOut } : null;
   });
+}
+
+/**
+ * Waits for the window to stop resizing after a turn step (it grows around
+ * the turned phone): laid out, at the same size a few frames apart.
+ */
+async function windowAtRest(page: Page): Promise<Stats> {
+  const deadline = Date.now() + 10_000;
+  let previous = await waitFor(page, "the window laid out", (s) => s.laidOut, 10_000);
+  while (Date.now() < deadline) {
+    await frames(page, 3);
+    const s = await waitFor(page, "the window laid out", (s) => s.laidOut, 10_000);
+    if (s.window.w === previous.window.w && s.window.h === previous.window.h) return s;
+    previous = s;
+  }
+  throw new Error(`the window kept resizing; last ${JSON.stringify(previous.window)}`);
+}
+
+/** The window's centre on the screen, which a turn's room grows the window evenly around. */
+async function windowCentre(app: ElectronApplication): Promise<{ x: number; y: number }> {
+  const b = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentBounds());
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 }
 
 async function waitFor(page: Page, what: string, matches: (s: Stats) => boolean, timeoutMs: number): Promise<Stats> {
@@ -176,20 +198,21 @@ function targetFor(sweep: Sweep, k: number): { dx: number; dy: number; yaw: numb
  * a turned frame is judged against a stable baseline rather than one caught
  * mid-transition.
  */
-async function sweepInShowcase(page: Page, dir: string, records: Record[], restEdges: Edges): Promise<void> {
+async function sweepInShowcase(app: ElectronApplication, page: Page, dir: string, records: Record[], restEdges: Edges): Promise<void> {
   for (const sweep of SWEEPS) {
     const start = await waitFor(page, "rest before a sweep", (s) => s.modelRotation.yaw === 0 && s.modelRotation.pitch === 0 && !s.view.active, 10_000);
     const centre = { x: start.window.w / 2, y: start.window.h / 2 };
     await page.mouse.move(centre.x, centre.y);
     await page.keyboard.down("Alt");
     await page.mouse.down();
-    const settled = await waitFor(page, "the showcase settled for the sweep", (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 20_000);
+    await waitFor(page, "the showcase settled for the sweep", (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 20_000);
+    const restCentre = await windowCentre(app);
     let previous: Record | null = null;
     const steps = sweep.maxDeg / STEP_DEG;
     for (let k = 0; k <= steps; k++) {
       const { dx, dy, yaw, pitch } = targetFor(sweep, k);
       await page.mouse.move(centre.x + dx, centre.y + dy, { steps: 2 });
-      await frames(page, 3);
+      await windowAtRest(page);
       const first = await page.screenshot({ path: join(dir, `showcase-${sweep.name}-${String(k).padStart(2, "0")}.png`) });
       await frames(page, 4);
       const second = await page.screenshot();
@@ -202,10 +225,13 @@ async function sweepInShowcase(page: Page, dir: string, records: Record[], restE
       expect.soft(Math.abs(s.modelRotation.pitch - pitch), `${where}: pitch follows`).toBeLessThan(0.5);
       expect.soft(box, `${where}: the phone is visible`).not.toBeNull();
       expect.soft(differing, `${where}: the picture holds still`).toBe(0);
-      expect.soft(s.window, `${where}: the window keeps its size`).toEqual(settled.window);
+      const windowAt = await windowCentre(app);
+      expect.soft(Math.hypot(windowAt.x - restCentre.x, windowAt.y - restCentre.y), `${where}: the window grows evenly around the phone`).toBeLessThanOrEqual(1);
       for (const side of ["top", "bottom", "left", "right"] as const) expect.soft(edges[side], `${where}: not cut off at the ${side}`).toBeLessThanOrEqual(restEdges[side] + 0.03);
       if (previous?.box && box) {
-        const jump = Math.hypot(box.x + box.w / 2 - (previous.box.x + previous.box.w / 2), box.y + box.h / 2 - (previous.box.y + previous.box.h / 2));
+        const offset = (r: Record) => ({ x: r.box!.x + r.box!.w / 2 - r.window.w / 2, y: r.box!.y + r.box!.h / 2 - r.window.h / 2 });
+        const [now, before] = [offset(record), offset(previous)];
+        const jump = Math.hypot(now.x - before.x, now.y - before.y);
         expect.soft(jump, `${where}: the phone does not jump`).toBeLessThan(MAX_JUMP_PX);
       }
       previous = record;
@@ -262,7 +288,7 @@ for (const scaleFactor of [1, 1.25]) {
       await toggleView(page);
       await waitFor(page, "the work view again", (s) => s.view.target === "work" && s.view.t === 0 && !s.view.active && s.laidOut, 20_000);
 
-      await sweepInShowcase(page, dir, records, showcaseRestEdges);
+      await sweepInShowcase(app, page, dir, records, showcaseRestEdges);
 
       await toggleView(page);
       await waitFor(
@@ -338,7 +364,7 @@ async function liveSweep(page: Page, pose: LivePose, sweep: Sweep, part: number,
   for (let k = 0; k <= steps; k += stride) {
     const { dx, dy, yaw, pitch } = targetFor(sweep, k);
     await page.mouse.move(centre.x + dx, centre.y + dy, { steps: 2 });
-    await frames(page, 2);
+    await windowAtRest(page);
     if (!sampled(k)) continue;
     const sample: LiveSample = { k, atMs: Date.now() - poseSeenMs, yaw, pitch, shots: [], samples: [] };
     for (let i = 0; i < 4; i++) {

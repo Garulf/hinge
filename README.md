@@ -83,15 +83,15 @@ percent of the screen's height) and follows the phone as you fold it:
 ### Showcase view
 
 MOD+d (or the View button) switches between the flat work view and a 3D
-showcase view, easing the camera and the window size over 600 ms; press it
-again mid-way to turn back from where it is. Each phone comes back in the
+showcase view, easing the camera over 600 ms; press it again mid-way to
+turn back from where it is. Each phone comes back in the
 view it was last in.
 
-- The showcase looks at the phone straight on, lit by a studio environment,
-  with a soft shadow under it and a glass reflection on the screens, and
-  the inner screen's crease catches the light. It shows the phone's real
-  posture: tented, half open or flat. The window widens for it, but never
-  past the edge of the screen.
+- The showcase looks at the phone straight on at the same size as the work
+  view, lit by a studio environment with a glass reflection on the screens,
+  and the inner screen's crease catches the light. It shows the phone's real
+  posture: tented, half open or flat. The phone and the window stay exactly
+  where they were in the work view.
 - Dragging on the lit screen still touches the phone. Dragging anywhere
   else turns the phone around; two seconds after you let go it eases back.
 - Shift+drag off the screen moves the window, since a plain drag turns the
@@ -125,8 +125,8 @@ doesn't move.
 - Alt+double-click eases the turn back to straight on without changing
   view.
 - Touches on the screen still land where you click on the turned video.
-- While turned, the phone shrinks just enough to stay inside the window,
-  and is back at full size when it is straight again.
+- While turned, the phone keeps its size and place, and the window grows
+  evenly around it for as long as the turn needs the room.
 - Each phone comes back turned the way you left it; a phone that was left
   turned opens straight into the showcase rather than a turned work view.
 - Some Linux window managers move the window on Alt+drag (Xfce, and KDE

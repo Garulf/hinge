@@ -109,3 +109,34 @@ test("a window that came back a pixel off (fractional scaling) still counts as w
   current = placer.place({ ...current, width: current.width + 1 }, { w: 790, h: 870 }, 0, AREA);
   expect(current.x).toBe(48);
 });
+
+test("a pad grows the window evenly around the work view's window, which keeps its anchoring", () => {
+  const placer = new WindowPlacer();
+  const start = { x: 800, y: 100, width: 431, height: 945 };
+  let current = placer.place(start, { w: 431, h: 945 }, 0, QHD_125);
+  current = placer.place(current, { w: 431, h: 945 }, 0, QHD_125, { x: 40, y: 25 });
+  expect(current).toEqual({ x: 760, y: 75, width: 511, height: 995 });
+  current = placer.place(current, { w: 859, h: 945 }, 0, QHD_125, { x: 40, y: 25 });
+  expect(current.x + current.width - 40).toBe(start.x + start.width);
+  current = placer.place(current, { w: 431, h: 945 }, 0, QHD_125);
+  expect(current).toEqual(start);
+});
+
+test("a pad is left out of the work area clamp, so the phone inside stays put at a screen edge", () => {
+  const placer = new WindowPlacer();
+  const start = { x: 0, y: 0, width: 431, height: 945 };
+  let current = placer.place(start, { w: 431, h: 945 }, 0, QHD_125);
+  current = placer.place(current, { w: 431, h: 945 }, 0, QHD_125, { x: 30, y: 30 });
+  expect(current).toEqual({ x: -30, y: -30, width: 491, height: 1005 });
+  current = placer.place(current, { w: 431, h: 945 }, 0, QHD_125);
+  expect(current).toEqual(start);
+});
+
+test("a padded window moved by hand anchors from its work view's window, where it is now", () => {
+  const placer = new WindowPlacer();
+  let current = placer.place({ x: 800, y: 100, width: 431, height: 945 }, { w: 431, h: 945 }, 0, QHD_125);
+  current = placer.place(current, { w: 431, h: 945 }, 0, QHD_125, { x: 40, y: 25 });
+  const moved = { ...current, x: 500, y: 50 };
+  current = placer.place(moved, { w: 431, h: 945 }, 0, QHD_125);
+  expect(current).toEqual({ x: 540, y: 75, width: 431, height: 945 });
+});

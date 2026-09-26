@@ -104,7 +104,6 @@ export class FoldModel {
   readonly #skinned: THREE.SkinnedMesh[] = [];
   readonly #fixedBox: THREE.Box3;
   readonly #coverBoxInHinge: THREE.Box3;
-  readonly #openRadius: number;
   readonly #creaseBand: CreaseBand;
 
   static async load(data: ArrayBuffer): Promise<FoldModel> {
@@ -142,17 +141,11 @@ export class FoldModel {
     this.#fixedBox = rigidBox(this.fixedHalf, this.root);
     this.#coverBoxInHinge = rigidBox(this.#coverHalf, this.#hinge);
     this.#creaseBand = creaseBandOf(this.inner.mesh, this.#hinge);
-    this.#openRadius = this.#fixedBox.clone().union(rigidBox(this.#coverHalf, this.root)).getBoundingSphere(new THREE.Sphere()).radius;
   }
 
   /** Where the inner screen's crease runs, in its u coordinate. */
   creaseBand(): CreaseBand {
     return this.#creaseBand;
-  }
-
-  /** The bounding sphere radius of the open body, in metres. */
-  openRadius(): number {
-    return this.#openRadius;
   }
 
   /**

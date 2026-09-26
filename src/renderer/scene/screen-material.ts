@@ -37,6 +37,10 @@ const CREASE_TILT = 0.5;
 const CREASE_WARP = 0.6;
 /** Extra reflection along the band's middle, on top of the glass. */
 const CREASE_SHEEN = 5;
+/** Off-axis view angle, in degrees, below which the crease is invisible, as it is on the real phone seen head on. */
+const CREASE_ONSET_DEG = 40;
+/** Off-axis view angle, in degrees, at which the crease reaches full strength. */
+const CREASE_FULL_DEG = 75;
 
 const fragmentShader = /* glsl */ `
 #include <common>
@@ -63,6 +67,8 @@ const float SCREEN_REFLECTION = ${SCREEN_REFLECTION.toFixed(4)};
 const float CREASE_TILT = ${CREASE_TILT.toFixed(4)};
 const float CREASE_WARP = ${CREASE_WARP.toFixed(4)};
 const float CREASE_SHEEN = ${CREASE_SHEEN.toFixed(4)};
+const float CREASE_ONSET_COS = ${Math.cos((CREASE_ONSET_DEG * Math.PI) / 180).toFixed(4)};
+const float CREASE_FULL_COS = ${Math.cos((CREASE_FULL_DEG * Math.PI) / 180).toFixed(4)};
 
 vec3 environmentRadiance(vec3 worldDirection) {
 #ifdef ENVMAP_TYPE_CUBE_UV
@@ -91,6 +97,11 @@ vec3 screenTangent(vec3 normal) {
   return normalize(tangent);
 }
 
+float creaseVisibility(vec3 normal, vec3 viewDirection) {
+  float cosTheta = clamp(dot(normal, viewDirection), 0.0, 1.0);
+  return 1.0 - smoothstep(CREASE_FULL_COS, CREASE_ONSET_COS, cosTheta);
+}
+
 float roundedRectDistance(vec2 p, vec2 halfSize, float radius) {
   vec2 q = abs(p) - halfSize + radius;
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
@@ -108,13 +119,15 @@ void main() {
   vec3 normal = normalize(vViewNormal);
   vec2 sampleUv = vUv;
   float band = 0.0;
+  float creaseStrength = 0.0;
   if (crease > 0.0) {
     vec3 tangent = screenTangent(normal);
+    creaseStrength = crease * creaseVisibility(normal, viewDirection);
     float d = clamp((vUv.x - creaseCentreU) / creaseHalfWidthU, -1.0, 1.0);
     float across = 1.0 - d * d;
     band = across * across;
-    normal = normalize(normal - crease * CREASE_TILT * 4.0 * d * across * tangent);
-    sampleUv.x += crease * CREASE_WARP * creaseHalfWidthU * band * dot(viewDirection, tangent);
+    normal = normalize(normal - creaseStrength * CREASE_TILT * 4.0 * d * across * tangent);
+    sampleUv.x += creaseStrength * CREASE_WARP * creaseHalfWidthU * band * dot(viewDirection, tangent);
   }
   vec3 color = vec3(0.0);
   if (hasMap) {
@@ -124,7 +137,7 @@ void main() {
   color *= brightness;
   float hole = coverage(length(px - punchHolePx.xy) - punchHolePx.z);
   color = mix(color, vec3(0.0), hole);
-  float reflection = glass + crease * CREASE_SHEEN * band;
+  float reflection = glass + creaseStrength * CREASE_SHEEN * band;
   if (reflection > 0.0) {
     vec3 linear = sRGBTransferEOTF(vec4(color, 1.0)).rgb + reflection * glassReflection(normal, viewDirection);
     color = sRGBTransferOETF(vec4(linear, 1.0)).rgb;

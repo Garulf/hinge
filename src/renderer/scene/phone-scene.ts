@@ -4,11 +4,10 @@ import type { MaterialLook } from "../../shared/colourways";
 import type { ScreenClass, ScreenKind } from "../../shared/fold7";
 import type { DirectorOutput, FoldDirector } from "../../shared/fold-director";
 import type { Pad } from "../../shared/layout";
-import { MODEL_REST, ModelRotation, type ModelAngles } from "../../shared/model-rotation";
-import { Orbit } from "../../shared/orbit";
+import type { BodyPoint } from "../../shared/case-grip";
+import { MODEL_REST, ModelRotation, turnBlend, type ModelAngles } from "../../shared/model-rotation";
 import type { Rotation } from "../../shared/screen-uv";
-import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST, showcaseReach } from "../../shared/showcase-camera";
-import { ViewTransition } from "../../shared/view-transition";
+import { blendedCamera, showcaseReach } from "../../shared/showcase-camera";
 import { StatusOverlay } from "../status-overlay";
 import type { FrameTarget } from "../texture-renderer";
 import { FoldModel, type ScreenExtras } from "./fold-model";
@@ -132,9 +131,12 @@ function anchorCanvas(canvas: HTMLCanvasElement, rotation: Rotation, centred: bo
   }
 }
 
-/** Where the view transition stands: t 0 is the work view, 1 the showcase; active while it moves between them. */
+/**
+ * Where the look stands, which follows the turn: t 0 is the flat work view
+ * (straight on), 1 the showcase look; active while Center eases the turn
+ * back.
+ */
 export interface ViewState {
-  target: "work" | "showcase";
   t: number;
   active: boolean;
 }
@@ -146,8 +148,8 @@ export interface PhoneSceneOptions {
 
 /**
  * The phone model in an orthographic work view at a fixed physical scale,
- * posed every animation frame by the FoldDirector, and a perspective
- * showcase view that the view transition blends to. The live stream texture
+ * posed every animation frame by the FoldDirector; turned away from straight
+ * on it blends into a perspective showcase look. The live stream texture
  * sits on whichever screen the stream belongs to; a screen losing the stream
  * keeps a clone of its last frame until its fade-out ends.
  */
@@ -164,9 +166,7 @@ export class PhoneScene implements FrameTarget {
   readonly #scene = new THREE.Scene();
   readonly #camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1);
   readonly #showcaseCamera = new THREE.PerspectiveCamera();
-  readonly #transition = new ViewTransition();
-  readonly #orbit = new Orbit(SHOWCASE_REST, SHOWCASE_LIMITS);
-  /** The user's Alt+drag turn about the phone's centre, between the scene and the display-rotation pivot. */
+  /** The user's turn about the phone's centre, between the scene and the display-rotation pivot. */
   readonly #turn = new THREE.Group();
   readonly #modelRotation = new ModelRotation();
   readonly #turnCentre = new THREE.Vector3();
@@ -175,6 +175,10 @@ export class PhoneScene implements FrameTarget {
   readonly #turnBack = new THREE.Matrix4();
   readonly #unturnedBox = new THREE.Box3();
   readonly #corner = new THREE.Vector3();
+  readonly #pickRaycaster = new THREE.Raycaster();
+  readonly #pickRay = new THREE.Ray();
+  readonly #pickPoint = new THREE.Vector3();
+  readonly #unturn = new THREE.Matrix4();
   readonly #pivot = new THREE.Group();
   readonly #overlayScene = new THREE.Scene();
   readonly #overlayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
@@ -201,10 +205,9 @@ export class PhoneScene implements FrameTarget {
   #angle: number | null = null;
   #out: DirectorOutput | null = null;
   #lastTime: number | null = null;
-  #view: ViewState = { target: "work", t: 0, active: false };
-  #orbitPose = { ...SHOWCASE_REST };
+  #view: ViewState = { t: 0, active: false };
   #turnPose: ModelAngles = { ...MODEL_REST };
-  #rendered = { t: 0, yaw: SHOWCASE_REST.yaw, pitch: SHOWCASE_REST.pitch, turn: { ...MODEL_REST } };
+  #rendered = { t: 0, turn: { ...MODEL_REST } };
   #frameDirty = true;
   #layoutDirty = true;
   #renderedSettled = false;
@@ -314,13 +317,13 @@ export class PhoneScene implements FrameTarget {
     return this.#turnRoom;
   }
 
-  /** Whether the phone was last drawn neither turned nor orbited. */
+  /** Whether the phone was last drawn unturned. */
   straightOn(): boolean {
-    const { turn, yaw, pitch } = this.#rendered;
-    return turn.yaw === MODEL_REST.yaw && turn.pitch === MODEL_REST.pitch && yaw === SHOWCASE_REST.yaw && pitch === SHOWCASE_REST.pitch;
+    const { turn } = this.#rendered;
+    return turn.yaw === MODEL_REST.yaw && turn.pitch === MODEL_REST.pitch;
   }
 
-  /** How far, in CSS px, the phone could reach past the work view's window on each side, however it is turned or orbited. */
+  /** How far, in CSS px, the phone could reach past the work view's window on each side, however it is turned. */
   turnReserve(): Pad {
     return this.#turnReserve;
   }
@@ -348,30 +351,16 @@ export class PhoneScene implements FrameTarget {
     return this.#camera;
   }
 
-  /** The camera the last frame was drawn with: orthographic in the work view, perspective from the first step toward the showcase. */
+  /** The camera the last frame was drawn with: orthographic straight on, perspective from the first step of a turn. */
   activeCamera(): THREE.Camera {
     return this.#view.t > 0 ? this.#showcaseCamera : this.#camera;
-  }
-
-  /** The one way to change views: eases over 600 ms from wherever the blend stands, or with `instant` switches at once. */
-  setView(view: "work" | "showcase", opts?: { instant?: boolean }): void {
-    this.#transition.setTarget(view, opts);
   }
 
   view(): ViewState {
     return this.#view;
   }
 
-  /** Turns the phone with a pointer drag (in CSS px) as if it were held: the camera swings the opposite way. */
-  orbitBy(dxPx: number, dyPx: number): void {
-    this.#orbit.drag(-dxPx, dyPx);
-  }
-
-  releaseOrbit(): void {
-    this.#orbit.release(performance.now());
-  }
-
-  /** The model's Alt+drag turn, which stays where it is left. */
+  /** The model's turn, which stays where it is left until Center. */
   modelRotation(): ModelAngles {
     return this.#modelRotation.angles;
   }
@@ -382,6 +371,29 @@ export class PhoneScene implements FrameTarget {
 
   resetModelRotation(): void {
     this.#modelRotation.reset();
+  }
+
+  /**
+   * Where a ray through `ndc` (canvas coordinates, -1 to 1) meets the box of
+   * the phone's pose as last drawn, taken back through the turn so the point
+   * is on the body as it faces the window straight on; null when it misses
+   * the phone or before the model loads.
+   */
+  bodyPointAt(ndc: { x: number; y: number }): BodyPoint | null {
+    if (!this.#model) return null;
+    const box = this.#unturnedBox;
+    this.#pickRaycaster.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), this.activeCamera());
+    this.#unturn.copy(this.#turn.matrix).invert();
+    const hit = this.#pickRay.copy(this.#pickRaycaster.ray).applyMatrix4(this.#unturn).intersectBox(box, this.#pickPoint);
+    if (!hit) return null;
+    const pxPerM = this.#pxPerMm * 1000;
+    return {
+      x: (hit.x - box.min.x) * pxPerM,
+      y: (box.max.y - hit.y) * pxPerM,
+      w: (box.max.x - box.min.x) * pxPerM,
+      h: (box.max.y - box.min.y) * pxPerM,
+      pxPerMm: this.#pxPerMm,
+    };
   }
 
   /** The turn as last drawn, for diagnostics: its angles, the camera's depth range and the turned pose's world box. */
@@ -520,11 +532,10 @@ export class PhoneScene implements FrameTarget {
   #animationFrame(time: number): void {
     const dt = this.#lastTime === null ? 0 : Math.min(MAX_TICK_MS, Math.max(0, time - this.#lastTime));
     this.#lastTime = time;
-    const { t, active } = this.#transition.tick(dt);
-    this.#view = { target: this.#transition.target, t, active };
-    this.#director.setView(this.#transition.target, t);
-    this.#orbitPose = this.#orbit.tick(performance.now(), dt);
     this.#turnPose = this.#modelRotation.tick(dt);
+    const t = turnBlend(this.#turnPose);
+    this.#view = { t, active: this.#modelRotation.moving };
+    this.#director.setBlend(t);
     const out = this.#director.tick(dt);
     this.#out = out;
     const rotation = this.#routing.rotation(out.rotation);
@@ -552,8 +563,7 @@ export class PhoneScene implements FrameTarget {
     const { t } = this.#view;
     const rendered = this.#rendered;
     if (t !== rendered.t) return true;
-    if (this.#turnPose.yaw !== rendered.turn.yaw || this.#turnPose.pitch !== rendered.turn.pitch) return true;
-    return t > 0 && (this.#orbitPose.yaw !== rendered.yaw || this.#orbitPose.pitch !== rendered.pitch);
+    return this.#turnPose.yaw !== rendered.turn.yaw || this.#turnPose.pitch !== rendered.turn.pitch;
   }
 
   #brightness(out: DirectorOutput, screen: ScreenKind): number {
@@ -660,8 +670,6 @@ export class PhoneScene implements FrameTarget {
       workCentre: { x: 0, y: 0, z: 0 },
       workHalfHeight: h / (this.#pxPerMm * 1000) / 2,
       subject: this.#unturnedBox,
-      yawDeg: this.#orbitPose.yaw,
-      pitchDeg: this.#orbitPose.pitch,
     });
     const camera = this.#showcaseCamera;
     camera.fov = rig.fovDeg;
@@ -693,10 +701,9 @@ export class PhoneScene implements FrameTarget {
 
   /**
    * Turns the model about the centre of its unturned pose, at full size: the
-   * window grows around it instead (see turnRoom). The work view is never
-   * turned (Alt+drag switches to showcase before the angle can move off
-   * rest). At rest the turn is the identity, which leaves every matrix below
-   * it bit for bit as without it.
+   * window grows around it instead (see turnRoom). Any turn off rest moves
+   * the look off the work view (see turnBlend). At rest the turn is the
+   * identity, which leaves every matrix below it bit for bit as without it.
    */
   #placeTurn(): void {
     const angles = this.#turnPose;
@@ -732,7 +739,7 @@ export class PhoneScene implements FrameTarget {
   }
 
   /**
-   * How far the turned (or orbited) pose box reaches past the work view's
+   * How far the turned pose box reaches past the work view's
    * window, per axis, taking the further of the two sides; within a pixel
    * counts as inside, so the rest pose never asks for room.
    */
@@ -766,7 +773,7 @@ export class PhoneScene implements FrameTarget {
     this.#scene.updateMatrixWorld();
     this.#turnRoom = this.#measureTurnRoom();
     this.#turnReserve = this.#measureTurnReserve();
-    this.#rendered = { t: this.#view.t, yaw: this.#orbitPose.yaw, pitch: this.#orbitPose.pitch, turn: { ...this.#turnPose } };
+    this.#rendered = { t: this.#view.t, turn: { ...this.#turnPose } };
     this.#renderer.clear();
     this.#renderer.render(this.#scene, this.activeCamera());
     this.#frames.onRendered();

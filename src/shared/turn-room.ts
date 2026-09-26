@@ -6,14 +6,14 @@ function needsRoom(need: Pad): boolean {
   return need.x > 0 || need.y > 0;
 }
 
-/** need: how far the phone reaches past the work view's window now; straightOn: neither turned nor orbited. */
+/** need: how far the phone reaches past the work view's window now; straightOn: not turned. */
 export interface TurnPose {
   need: Pad;
   straightOn: boolean;
 }
 
 /**
- * The room the window keeps around a turned (or orbited) phone. Growing the
+ * The room the window keeps around a turned phone. Growing the
  * window evenly moves its top left corner, and Windows shows the page's
  * last frame at the new corner for a refresh before the resized page
  * arrives, so every resize during a turn jolts the phone on screen. The room

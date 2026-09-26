@@ -15,6 +15,9 @@ export const MODEL_REST: ModelAngles = { yaw: 0, pitch: 0 };
 /** The one remaining limit: the turn is a full 360 degree turntable in yaw, but still tips at most this far in pitch. */
 export const PITCH_LIMIT_DEG = 60;
 
+/** How far off straight on the phone has to face for the full showcase look. */
+export const FULL_LOOK_DEG = 30;
+
 const DEG_PER_PX = 0.3;
 const CLICK_SLOP_PX = 6;
 const DOUBLE_CLICK_MS = 400;
@@ -48,6 +51,25 @@ export function clampModelAngles(angles: ModelAngles): ModelAngles {
   return { yaw: wrapYaw(angles.yaw), pitch: clamp(angles.pitch, PITCH_LIMIT_DEG) };
 }
 
+/** The angle between the turned phone's screen normal and the view axis, 0 to 180 degrees. */
+export function offAxisDeg(angles: ModelAngles): number {
+  const rad = Math.PI / 180;
+  const [yaw, pitch] = [angles.yaw * rad, angles.pitch * rad];
+  const across = Math.hypot(Math.sin(yaw), Math.cos(yaw) * Math.sin(pitch));
+  return Math.atan2(across, Math.cos(yaw) * Math.cos(pitch)) / rad;
+}
+
+/**
+ * How far the look has gone from the flat work view (0) to the showcase (1)
+ * for a turn: exactly 0 straight on, so the work view there is untouched,
+ * and easing in with no slope, so the first pixels of a turn barely change
+ * the lens.
+ */
+export function turnBlend(angles: ModelAngles): number {
+  const p = Math.min(1, offAxisDeg(angles) / FULL_LOOK_DEG);
+  return p * p * (3 - 2 * p);
+}
+
 function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -60,7 +82,7 @@ interface Press {
 }
 
 /**
- * An Alt+left press: the angle follows the pointer's offset from the press
+ * A turn press (Alt+left anywhere, or left on the case's sides and corners): the angle follows the pointer's offset from the press
  * point directly (no inertia), and two clicks that stay put within 400 ms
  * are a double click.
  */
@@ -107,7 +129,7 @@ export class RotateGesture {
     this.#lastClick = null;
   }
 
-  /** A press that is not an Alt press came between: the next Alt click starts a new pair. */
+  /** A press that is not a turn press came between: the next click starts a new pair. */
   otherPress(): void {
     this.#lastClick = null;
   }

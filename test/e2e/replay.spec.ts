@@ -16,7 +16,7 @@ interface Stats {
   badge: "flex" | null;
   settled: boolean;
   brightness: { cover: number; inner: number };
-  view: { target: "work" | "showcase"; t: number; active: boolean };
+  view: { t: number; active: boolean };
   modelRotation: { yaw: number; pitch: number };
   laidOut: boolean;
 }
@@ -77,7 +77,7 @@ function stats(page: Page): Promise<Stats> {
         badge: null,
         settled: false,
         brightness: { cover: 0, inner: 0 },
-        view: { target: "work" as const, t: 0, active: false },
+        view: { t: 0, active: false },
         modelRotation: { yaw: 0, pitch: 0 },
         laidOut,
       };
@@ -132,10 +132,57 @@ async function frameIntervals(page: Page, durationMs: number): Promise<{ median:
   return { median: at(0.5), p95: at(0.95), max: sorted.at(-1) ?? 0, frames: sorted.length };
 }
 
-async function toggleView(page: Page): Promise<void> {
+/** MOD+d: turns the phone back to straight on. */
+async function center(page: Page): Promise<void> {
   await page.keyboard.down("Alt");
   await page.keyboard.press("KeyD");
   await page.keyboard.up("Alt");
+}
+
+type Press = "touch" | "turn" | "move";
+
+function pressAt(page: Page, x: number, y: number): Promise<Press> {
+  return page.evaluate(([x, y]) => (window as unknown as { __hinge: { pressAt(x: number, y: number): Press } }).__hinge.pressAt(x, y), [x, y]);
+}
+
+/**
+ * A point on the left side of the case at height `y`, found by walking in
+ * from the window's left edge past any room around a turned phone: halfway
+ * across the bezel beside a lit screen, or a few pixels in when nothing is
+ * lit there.
+ */
+async function sideOfCase(page: Page, y: number): Promise<{ x: number; y: number }> {
+  let start = 0;
+  while (start < 400 && (await pressAt(page, start, y)) === "move") start++;
+  let end = start;
+  while (end < start + 12 && (await pressAt(page, end, y)) === "turn") end++;
+  const x = start + Math.min((end - start) / 2, 6);
+  expect(await pressAt(page, x, y), `the side of the case at ${x}, ${y}`).toBe("turn");
+  return { x, y };
+}
+
+/**
+ * A turn lands in one step, and the window grows around it over the next
+ * few frames: laid out, at the same size a few frames apart.
+ */
+async function windowAtRest(page: Page): Promise<Stats> {
+  const deadline = Date.now() + 10_000;
+  let previous = await waitFor(page, "the window laid out", (s) => s.laidOut, 10_000);
+  while (Date.now() < deadline) {
+    await frames(page, 3);
+    const s = await waitFor(page, "the window laid out", (s) => s.laidOut, 10_000);
+    if (s.window.w === previous.window.w && s.window.h === previous.window.h) return s;
+    previous = s;
+  }
+  throw new Error(`the window kept resizing; last ${JSON.stringify(previous.window)}`);
+}
+
+/** A plain left drag, which turns the phone from a side or corner of the case. */
+async function drag(page: Page, from: { x: number; y: number }, by: { x: number; y: number }): Promise<void> {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + by.x, from.y + by.y, { steps: 5 });
+  await page.mouse.up();
 }
 
 /** Fraction of pixels in which any channel differs by more than `tolerance` (a compression step by default) between two same-size screenshots. */
@@ -233,20 +280,30 @@ test("replays the synthetic fold: closed, opening led by posture, open, landscap
     expect(Math.abs(openBounds.x + openBounds.width - (closedBounds.x + closedBounds.width))).toBeLessThanOrEqual(2);
     const openShot = await page.screenshot({ path: "test-results/open.png" });
 
-    // The showcase keeps the work view's window and the phone's size and place in it.
-    await toggleView(page);
-    const showcase = await waitFor(page, "the showcase view", (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active && s.laidOut, 20_000);
-    expect(showcase.lit).toBe("inner");
-    expect(showcase.window).toEqual(open.window);
-    expect(await windowBounds(app)).toEqual(openBounds);
-    const showcaseShot = await page.screenshot({ path: "test-results/showcase-open.png" });
-    const [openBox, showcaseBox] = [await opaqueBox(page, openShot), await opaqueBox(page, showcaseShot)];
-    for (const side of ["x", "y", "w", "h"] as const) expect(Math.abs(showcaseBox[side] - openBox[side]), `showcase phone ${side} against the work view's`).toBeLessThanOrEqual(2);
+    // The case's top and bottom move the window, its sides and corners turn
+    // the phone, and the lit screen between them is the phone's.
+    const middle = open.window.h / 2;
+    const side = await sideOfCase(page, middle);
+    expect(side.x).toBeGreaterThan(1);
+    expect(await pressAt(page, open.window.w - side.x, middle)).toBe("turn");
+    expect(await pressAt(page, open.window.w / 2, middle)).toBe("touch");
+    expect(await pressAt(page, open.window.w * 0.3, 2)).toBe("move");
+    expect(await pressAt(page, open.window.w * 0.7, open.window.h - 2)).toBe("move");
+    for (const [x, y] of [
+      [2, 2],
+      [open.window.w - 2, 2],
+      [2, open.window.h - 2],
+      [open.window.w - 2, open.window.h - 2],
+    ]) {
+      expect(await pressAt(page, x, y), `the corner at ${x}, ${y}`).toBe("turn");
+    }
 
-    await toggleView(page);
-    await waitFor(page, "the work view again", (s) => s.view.target === "work" && s.view.t === 0 && !s.view.active && restingOn("inner", s) && s.window.w === open.window.w && s.window.h === open.window.h, 20_000);
+    // Center while straight on changes nothing.
+    await center(page);
+    await frames(page, 3);
+    await waitFor(page, "the open phone after Center", (s) => restingOn("inner", s) && !s.view.active && s.view.t === 0, 20_000);
     expect(await windowBounds(app)).toEqual(openBounds);
-    const workAgainShot = await page.screenshot({ path: "test-results/open-after-showcase.png" });
+    const workAgainShot = await page.screenshot({ path: "test-results/open-after-center.png" });
     expect(await differingPixels(page, openShot, workAgainShot)).toBeLessThan(0.005);
 
     // Posture leads the inner stream by 300 ms, less than a software GL's
@@ -449,15 +506,16 @@ test("hover menu on the top edge, transfer toasts for a drop, and a colourway ch
 
     await page.mouse.move(10, smaller.window.h / 2);
     await expect(menu).not.toHaveClass(/shown/, { timeout: 5000 });
-    await toggleView(page);
-    const showcase = await waitFor(page, "the showcase view", (s) => s.view.t === 1 && !s.view.active && s.laidOut && s.window.w * s.window.h > smaller.window.w * smaller.window.h, 20_000);
-    await page.mouse.move(showcase.window.w / 2, 8);
+    await drag(page, await sideOfCase(page, smaller.window.h / 2), { x: 100, y: 0 });
+    await waitFor(page, "the turned phone", (s) => s.view.t === 1 && s.window.w * s.window.h > smaller.window.w * smaller.window.h, 20_000);
+    const turned = await windowAtRest(page);
+    await page.mouse.move(turned.window.w / 2, 8);
     await expect(menu).toHaveClass(/shown/, { timeout: 5000 });
     const box = (await menu.boundingBox())!;
-    expect(Math.abs(box.x + box.width / 2 - showcase.window.w / 2)).toBeLessThanOrEqual(2);
+    expect(Math.abs(box.x + box.width / 2 - turned.window.w / 2)).toBeLessThanOrEqual(2);
     expect(box.y).toBeLessThan(24);
     await page.waitForTimeout(400);
-    await page.screenshot({ path: "test-results/showcase-menu.png" });
+    await page.screenshot({ path: "test-results/turned-menu.png" });
   } finally {
     await app.close();
   }
@@ -526,21 +584,11 @@ function streamPointAt(page: Page, x: number, y: number): Promise<{ x: number; y
   return page.evaluate(([x, y]) => (window as unknown as { __hinge: { streamPointAt(x: number, y: number): { x: number; y: number } | null } }).__hinge.streamPointAt(x, y), [x, y]);
 }
 
-/** Puts the pointer on a point of the screen, wherever the window has moved to under it, as a real mouse would be. */
-async function moveOnScreen(app: ElectronApplication, page: Page, point: { x: number; y: number }): Promise<void> {
-  const origin = await windowBounds(app);
-  await page.mouse.move(point.x - origin.x, point.y - origin.y);
-}
-
-/** An Alt+drag from a point in the window, by a distance travelled on the screen: the window grows and moves around the turning phone meanwhile. */
-async function altDrag(app: ElectronApplication, page: Page, from: { x: number; y: number }, by: { x: number; y: number }): Promise<void> {
-  const origin = await windowBounds(app);
-  const start = { x: origin.x + from.x, y: origin.y + from.y };
+async function altDrag(page: Page, from: { x: number; y: number }, by: { x: number; y: number }): Promise<void> {
   await page.mouse.move(from.x, from.y);
   await page.keyboard.down("Alt");
   await page.mouse.down();
-  const steps = 5;
-  for (let i = 1; i <= steps; i++) await moveOnScreen(app, page, { x: start.x + (by.x * i) / steps, y: start.y + (by.y * i) / steps });
+  await page.mouse.move(from.x + by.x, from.y + by.y, { steps: 5 });
   await page.mouse.up();
   await page.keyboard.up("Alt");
 }
@@ -568,15 +616,11 @@ async function leftEdgeOfScreen(page: Page, from: { x: number; y: number }): Pro
   return on;
 }
 
-function sameSize(a: { w: number; h: number }, b: { w: number; h: number }): boolean {
-  return a.w === b.w && a.h === b.h;
-}
-
 function turnedTo(yaw: number, pitch: number): (s: Stats) => boolean {
   return (s) => Math.abs(s.modelRotation.yaw - yaw) < 1e-9 && Math.abs(s.modelRotation.pitch - pitch) < 1e-9;
 }
 
-test("Alt+drag in the work view switches to the showcase and keeps turning; Alt+double-click springs it back exactly", async () => {
+test("dragging a side of the case turns the phone into the 3D look, and Center brings back the exact work view", async () => {
   test.setTimeout(180_000);
   const { app, page } = await launch(resolve("test/fixtures/synthetic-fold.hrec"));
   try {
@@ -593,44 +637,41 @@ test("Alt+drag in the work view switches to the showcase and keeps turning; Alt+
     const restTurn = (open as TurnStats).turn;
     const screenDepthM = restTurn.box.max.z - restTurn.centre.z;
 
-    // Turning the live, streaming phone switches it to the showcase in the same press.
-    await altDrag(app, page, mid, { x: 100, y: 0 });
-    const liveTurned = await waitFor(page, "the live phone turned, in the showcase", (s) => turnedTo(30, 0)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active && s.laidOut, 10_000);
-    await frames(page, 2);
+    // Turning the live, streaming phone by the side of its case: 30 degrees is the full 3D look.
+    await drag(page, await sideOfCase(page, mid.y), { x: 100, y: 0 });
+    await waitFor(page, "the live phone turned", (s) => turnedTo(30, 0)(s) && s.view.t === 1 && !s.view.active, 10_000);
+    const liveTurned = await windowAtRest(page);
     await page.screenshot({ path: "test-results/turn-live.png" });
-    // The showcase window is a different size from the work view's, so its
-    // own centre is where the camera looks: at the turn's centre. That ray
-    // passes through the pivot and meets the screen, standing screenDepthM in
-    // front of it, screenDepthM * tan 30 degrees to the left of the stream
-    // point the work view's centre touched. Measured on a real GPU the
-    // prediction is within 0.0002 of the hit; 0.002 allows for the glass
-    // sitting up to half a millimetre below the body's front face.
-    const showcaseMid = { x: liveTurned.window.w / 2, y: liveTurned.window.h / 2 };
-    const turnedHit = await streamPointAt(page, showcaseMid.x, showcaseMid.y);
+    // The window has grown around the turned phone, so its own centre is
+    // where the camera looks: at the turn's centre. That ray passes through
+    // the pivot and meets the screen, standing screenDepthM in front of it,
+    // screenDepthM * tan 30 degrees to the left of the stream point the work
+    // view's centre touched. Measured on a real GPU the prediction is within
+    // 0.0002 of the hit; 0.002 allows for the glass sitting up to half a
+    // millimetre below the body's front face.
+    const turnedMid = { x: liveTurned.window.w / 2, y: liveTurned.window.h / 2 };
+    const turnedHit = await streamPointAt(page, turnedMid.x, turnedMid.y);
     expect(turnedHit).not.toBeNull();
     const parallax = (screenDepthM * Math.tan((30 * Math.PI) / 180)) / screenWidthM;
     expect(Math.abs(turnedHit!.x - (centreHit.x - parallax))).toBeLessThan(0.002);
     expect(Math.abs(turnedHit!.y - centreHit.y)).toBeLessThan(0.002);
-    await altDoubleClick(page, showcaseMid);
-    // The window gives back the turn's room once the phone is back straight on.
-    const restAgain = await waitFor(page, "the turn back at rest, still in the showcase, in the work view's window", (s) => turnedTo(0, 0)(s) && s.view.target === "showcase" && sameSize(s.window, open.window) && s.laidOut, 10_000);
-    const restMid = { x: restAgain.window.w / 2, y: restAgain.window.h / 2 };
+    // The turn stays where it was left; there is no ease back on its own.
+    await page.waitForTimeout(2500);
+    expect((await stats(page)).modelRotation).toEqual({ yaw: 30, pitch: 0 });
+    await center(page);
+    await waitFor(page, "the phone straight on again", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.laidOut, 10_000);
 
-    // A touch just inside the resting screen's left edge misses the screen once it is turned edge-in.
-    const insideLeftEdge = (await leftEdgeOfScreen(page, restMid)) + 4;
-    expect(await streamPointAt(page, insideLeftEdge, restMid.y)).not.toBeNull();
-    const restOrigin = await windowBounds(app);
-    await altDrag(app, page, restMid, { x: 100, y: 0 });
-    await waitFor(page, "the showcase turned again", (s) => turnedTo(30, 0)(s) && s.laidOut, 10_000);
-    const turnedOrigin = await windowBounds(app);
-    const [grownX, grownY] = [restOrigin.x - turnedOrigin.x, restOrigin.y - turnedOrigin.y];
-    expect(await streamPointAt(page, insideLeftEdge + grownX, restMid.y + grownY)).toBeNull();
-    await altDoubleClick(page, showcaseMid);
-    await waitFor(page, "the turn back at rest again", (s) => turnedTo(0, 0)(s) && s.view.target === "showcase" && sameSize(s.window, open.window) && s.laidOut, 10_000);
-
-    // Back to the work view (MOD+d), unaffected by any of the turning above.
-    await toggleView(page);
-    await waitFor(page, "the work view again", (s) => s.view.target === "work" && s.view.t === 0 && !s.view.active && s.laidOut, 20_000);
+    // Alt+drag still turns from anywhere, the screen included: a touch just
+    // inside the resting screen's left edge misses the screen once it is
+    // turned edge-in, and Alt+double-click centres it.
+    const insideLeftEdge = (await leftEdgeOfScreen(page, mid)) + 4;
+    expect(await streamPointAt(page, insideLeftEdge, mid.y)).not.toBeNull();
+    await altDrag(page, mid, { x: 100, y: 0 });
+    await waitFor(page, "the phone turned by Alt+drag", turnedTo(30, 0), 10_000);
+    await windowAtRest(page);
+    expect(await streamPointAt(page, insideLeftEdge, mid.y)).toBeNull();
+    await altDoubleClick(page, mid);
+    await waitFor(page, "the turn back at rest", (s) => turnedTo(0, 0)(s) && s.view.t === 0, 10_000);
 
     const ended = await waitFor(
       page,
@@ -639,60 +680,54 @@ test("Alt+drag in the work view switches to the showcase and keeps turning; Alt+
       60_000,
     );
     const centre = { x: ended.window.w / 2, y: ended.window.h / 2 };
+    const endedBounds = await windowBounds(app);
     await page.mouse.move(centre.x, centre.y);
     await frames(page, 3);
     const workRest = await page.screenshot({ path: "test-results/turn-work-rest.png" });
 
-    // Entering the showcase (an Alt+double-click, which switches on its first press and resets on its second) for the straight-on rest, then turned.
-    await altDoubleClick(page, centre);
-    const showcaseRestStats = await waitFor(page, "the showcase settled at rest", (s) => turnedTo(0, 0)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 20_000);
-    expect(showcaseRestStats.window).toEqual(ended.window);
-    const showcaseRestBounds = await windowBounds(app);
-    await frames(page, 3);
-    const showcaseRest = await page.screenshot({ path: "test-results/turn-showcase-rest.png" });
-
-    await altDrag(app, page, centre, { x: 80, y: -40 });
-    const turned = await waitFor(page, "the showcase turned", turnedTo(24, 12), 10_000);
+    const side = await sideOfCase(page, centre.y);
+    await drag(page, side, { x: 80, y: -40 });
+    await waitFor(page, "the phone turned", turnedTo(24, 12), 10_000);
+    const turned = await windowAtRest(page);
     // The window grows evenly around the phone for the turn, which stays where it was on screen.
-    const [restBounds, turnedBounds] = [showcaseRestBounds, await windowBounds(app)];
-    expect(turned.window.w * turned.window.h).toBeGreaterThan(showcaseRestStats.window.w * showcaseRestStats.window.h);
-    expect(Math.abs(turnedBounds.x + turnedBounds.width / 2 - (restBounds.x + restBounds.width / 2))).toBeLessThanOrEqual(1);
-    expect(Math.abs(turnedBounds.y + turnedBounds.height / 2 - (restBounds.y + restBounds.height / 2))).toBeLessThanOrEqual(1);
+    const turnedBounds = await windowBounds(app);
+    expect(turned.window.w * turned.window.h).toBeGreaterThan(ended.window.w * ended.window.h);
+    expect(Math.abs(turnedBounds.x + turnedBounds.width / 2 - (endedBounds.x + endedBounds.width / 2))).toBeLessThanOrEqual(1);
+    expect(Math.abs(turnedBounds.y + turnedBounds.height / 2 - (endedBounds.y + endedBounds.height / 2))).toBeLessThanOrEqual(1);
     await frames(page, 3);
-    const showcaseTurned = await page.screenshot({ path: "test-results/turn-showcase.png" });
-    const restBox = await opaqueBox(page, showcaseRest);
-    const turnedBox = await opaqueBox(page, showcaseTurned);
-    const restEdges = await edgeCoverage(page, showcaseRest);
-    const turnedEdges = await edgeCoverage(page, showcaseTurned);
-    await writeFile("test-results/turn-showcase-boxes.json", JSON.stringify({ restBox, turnedBox, restEdges, turnedEdges }, null, 2));
-    const workRestBox = await opaqueBox(page, workRest);
-    expect(Math.abs(restBox.w - workRestBox.w), "showcase phone width against the work view's").toBeLessThanOrEqual(workRestBox.w * 0.01);
-    expect(Math.abs(restBox.h - workRestBox.h), "showcase phone height against the work view's").toBeLessThanOrEqual(workRestBox.h * 0.01);
+    const shotTurned = await page.screenshot({ path: "test-results/turn-turned.png" });
+    const restBox = await opaqueBox(page, workRest);
+    const turnedBox = await opaqueBox(page, shotTurned);
+    const turnedEdges = await edgeCoverage(page, shotTurned);
+    await writeFile("test-results/turn-boxes.json", JSON.stringify({ restBox, turnedBox, turnedEdges }, null, 2));
     expect(turnedBox.w).toBeLessThan(restBox.w * 0.95);
     for (const side of ["top", "bottom", "left", "right"] as const) expect(turnedEdges[side], `phone cut off at the ${side}`).toBeLessThan(0.03);
-    await page.waitForTimeout(1000);
-    expect((await stats(page)).modelRotation).toEqual({ yaw: 24, pitch: 12 });
 
-    await altDoubleClick(page, centre);
-    await waitFor(page, "the showcase back at rest, in the work view's window", (s) => turnedTo(0, 0)(s) && sameSize(s.window, showcaseRestStats.window) && s.laidOut, 10_000);
+    // A double-click on the side of the (turned) case centres it, and straight on is the work view to the pixel.
+    const turnedSide = await sideOfCase(page, turned.window.h / 2);
+    await page.mouse.dblclick(turnedSide.x, turnedSide.y);
+    await waitFor(page, "the phone centred by a double-click", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.settled && s.laidOut && s.window.w === ended.window.w && s.window.h === ended.window.h, 10_000);
     await frames(page, 3);
-    const showcaseBack = await page.screenshot({ path: "test-results/turn-showcase-reset.png" });
-    expect(await differingPixels(page, showcaseRest, showcaseBack, 0)).toBe(0);
+    const doubleClickBack = await page.screenshot({ path: "test-results/turn-double-click-reset.png" });
+    expect(await differingPixels(page, workRest, doubleClickBack, 0)).toBe(0);
 
-    // MOD+d springs the turn back to front and returns a pixel-identical work view, before any scaling.
-    await toggleView(page);
-    await waitFor(page, "the work view again, front-on", (s) => turnedTo(0, 0)(s) && s.view.target === "work" && s.view.t === 0 && !s.view.active && s.settled && s.laidOut && sameSize(s.window, ended.window), 20_000);
+    // Center springs a turn back to front and returns a pixel-identical work view, before any scaling.
+    await drag(page, side, { x: 80, y: -40 });
+    await waitFor(page, "the phone turned again", turnedTo(24, 12), 10_000);
+    await center(page);
+    await waitFor(page, "the phone centred", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.settled && s.laidOut && s.window.w === ended.window.w && s.window.h === ended.window.h, 20_000);
     await frames(page, 3);
     const workBack = await page.screenshot({ path: "test-results/turn-work-reset.png" });
     expect(await differingPixels(page, workRest, workBack, 0)).toBe(0);
 
-    await altDrag(app, page, centre, { x: -200, y: -150 });
-    await waitFor(page, "the showcase settled for the far turn", (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 20_000);
-    await waitFor(page, "the showcase turned far", turnedTo(-60, 45), 10_000);
+    // A far turn from the right side, leftwards and up, stays inside the grown window.
+    await drag(page, { x: ended.window.w - side.x, y: side.y }, { x: -200, y: -150 });
+    await waitFor(page, "the phone turned far", turnedTo(-60, 45), 10_000);
+    await windowAtRest(page);
     await frames(page, 3);
-    const showcaseFar = await page.screenshot({ path: "test-results/turn-showcase-far.png" });
-    expect(await opaqueBox(page, showcaseFar)).not.toBeNull();
-    const farEdges = await edgeCoverage(page, showcaseFar);
+    const shotFar = await page.screenshot({ path: "test-results/turn-far.png" });
+    expect(await opaqueBox(page, shotFar)).not.toBeNull();
+    const farEdges = await edgeCoverage(page, shotFar);
     for (const side of ["top", "bottom", "left", "right"] as const) expect(farEdges[side], `turned phone cut off at the ${side}`).toBeLessThan(0.03);
 
     const unscaled = (await stats(page)) as Stats & { pxPerMm: number };
@@ -700,22 +735,20 @@ test("Alt+drag in the work view switches to the showcase and keeps turning; Alt+
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, 100);
     await page.keyboard.up("Alt");
-    const smaller = (await waitFor(page, "a turned showcase to scale down a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm < unscaled.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
+    const smaller = (await waitFor(page, "a turned phone to scale down a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm < unscaled.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
     expect(smaller.pxPerMm / unscaled.pxPerMm).toBeCloseTo(0.9, 2);
     expect(smaller.modelRotation).toEqual({ yaw: -60, pitch: 45 });
 
-    // MOD+d springs the turn back to front again (a pixel-identical work view was already checked above, before any scaling).
-    await toggleView(page);
-    const workAgain = await waitFor(page, "the view toggle to spring the turn back", (s) => turnedTo(0, 0)(s) && s.view.target === "work" && s.view.t === 0 && !s.view.active && s.settled && s.laidOut, 20_000);
+    await center(page);
+    const workAgain = await waitFor(page, "Center to spring the turn back", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.settled && s.laidOut, 20_000);
 
-    // Turning once more from the work view, and scaling up while turned keeps the turn.
-    const middle = { x: workAgain.window.w / 2, y: workAgain.window.h / 2 };
-    await altDrag(app, page, middle, { x: 60, y: 30 });
-    await waitFor(page, "the showcase turned again", (s) => turnedTo(18, -9)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 10_000);
+    // Turning once more, and scaling up while turned keeps the turn.
+    await drag(page, await sideOfCase(page, workAgain.window.h / 2), { x: 60, y: 30 });
+    await waitFor(page, "the phone turned again", (s) => turnedTo(18, -9)(s), 10_000);
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, -100);
     await page.keyboard.up("Alt");
-    const bigger = (await waitFor(page, "a turned showcase to scale up a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm > smaller.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
+    const bigger = (await waitFor(page, "a turned phone to scale up a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm > smaller.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
     expect(bigger.pxPerMm / smaller.pxPerMm).toBeCloseTo(1 / 0.9, 2);
     expect(bigger.modelRotation).toEqual({ yaw: 18, pitch: -9 });
   } finally {

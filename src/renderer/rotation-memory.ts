@@ -9,7 +9,7 @@ export interface RotationMemoryDeps {
   save(id: string, angles: ModelAngles): void;
 }
 
-/** The model's Alt+drag turn, remembered per phone. */
+/** The model's turn, remembered per phone. */
 export class RotationMemory {
   readonly #deps: RotationMemoryDeps;
   #device: string | null = null;

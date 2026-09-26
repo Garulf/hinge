@@ -21,7 +21,6 @@ export function defaultSettings(platform: string = process.platform): Settings {
     scrollSmoothing: 150,
     scrollSpeed: 1,
     lastDevice: null,
-    view: "work",
     mirrorNotifications: true,
     devices: {},
   };
@@ -34,7 +33,6 @@ type PatchKey = keyof SettingsPatch;
 const isNonNegative = (v: unknown): boolean => typeof v === "number" && Number.isFinite(v) && v >= 0;
 const isBoolean = (v: unknown): boolean => typeof v === "boolean";
 const isPositive = (v: unknown): boolean => typeof v === "number" && Number.isFinite(v) && v > 0;
-const isView = (v: unknown): boolean => v === "work" || v === "showcase";
 
 const FIELD_CHECKS: Record<PatchKey, (value: unknown) => boolean> = {
   colourway: (v) => typeof v === "string",
@@ -48,7 +46,6 @@ const FIELD_CHECKS: Record<PatchKey, (value: unknown) => boolean> = {
   scrollSmoothing: isNonNegative,
   scrollSpeed: isPositive,
   lastDevice: (v) => v === null || typeof v === "string",
-  view: isView,
   mirrorNotifications: isBoolean,
 };
 
@@ -67,9 +64,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /** Keeps only the per-phone fields with values of the right type. */
 export function sanitiseDeviceSettings(value: unknown): DeviceSettings {
   if (!isPlainObject(value)) return {};
-  const { pxPerMm, windowPosition, view, rotation } = value;
+  const { pxPerMm, windowPosition, rotation } = value;
   const result: DeviceSettings = {};
-  if (view === "work" || view === "showcase") result.view = view;
   if (isPlainObject(rotation) && typeof rotation.yaw === "number" && typeof rotation.pitch === "number") {
     result.rotation = clampModelAngles({ yaw: rotation.yaw, pitch: rotation.pitch });
   }

@@ -16,8 +16,16 @@ function distance(a: { x: number; y: number; z: number }, b: { x: number; y: num
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
-test("the showcase rest pose is yaw -28 and pitch 12 degrees", () => {
-  expect(SHOWCASE_REST).toEqual({ yaw: -28, pitch: 12 });
+test("the showcase rest pose is straight on: yaw and pitch both 0", () => {
+  expect(SHOWCASE_REST).toEqual({ yaw: 0, pitch: 0 });
+});
+
+test("at rest the showcase camera looks straight down the phone's normal, offset along +Z with no yaw or pitch", () => {
+  const rig = blendedCamera({ ...BASE, t: 1 });
+  expect(rig.position.x).toBeCloseTo(BASE.subjectCentre.x, 9);
+  expect(rig.position.y).toBeCloseTo(BASE.subjectCentre.y, 9);
+  expect(rig.position.z).toBeGreaterThan(BASE.subjectCentre.z);
+  expect(rig.target).toEqual(BASE.subjectCentre);
 });
 
 test("just after t 0 the camera is a near-orthographic 1 degree lens far down +Z, framing what the work view frames", () => {
@@ -41,9 +49,9 @@ test("at t 1 the camera looks at the phone from the rest angle with an 18 degree
   const sphereHalfAngle = Math.asin(BASE.subjectRadius / d);
   expect(Math.tan(sphereHalfAngle) / Math.tan(deg(9))).toBeCloseTo(0.88, 6);
   const dir = { x: (rig.position.x - rig.target.x) / d, y: (rig.position.y - rig.target.y) / d, z: (rig.position.z - rig.target.z) / d };
-  expect(dir.x).toBeCloseTo(Math.sin(deg(-28)) * Math.cos(deg(12)), 6);
-  expect(dir.y).toBeCloseTo(Math.sin(deg(12)), 6);
-  expect(dir.z).toBeCloseTo(Math.cos(deg(-28)) * Math.cos(deg(12)), 6);
+  expect(dir.x).toBeCloseTo(Math.sin(deg(SHOWCASE_REST.yaw)) * Math.cos(deg(SHOWCASE_REST.pitch)), 6);
+  expect(dir.y).toBeCloseTo(Math.sin(deg(SHOWCASE_REST.pitch)), 6);
+  expect(dir.z).toBeCloseTo(Math.cos(deg(SHOWCASE_REST.yaw)) * Math.cos(deg(SHOWCASE_REST.pitch)), 6);
   expect(rig.near).toBeGreaterThan(0);
   expect(rig.near).toBeLessThan(d - BASE.subjectRadius);
   expect(rig.far).toBeGreaterThan(d + BASE.subjectRadius);

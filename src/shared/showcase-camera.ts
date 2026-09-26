@@ -12,7 +12,7 @@ export interface CameraRig {
   far: number;
 }
 
-export const SHOWCASE_REST = { yaw: -28, pitch: 12 };
+export const SHOWCASE_REST = { yaw: 0, pitch: 0 };
 export const SHOWCASE_LIMITS: { yaw: [number, number]; pitch: [number, number] } = { yaw: [-60, 60], pitch: [-10, 45] };
 
 const SHOWCASE_FOV_DEG = 18;

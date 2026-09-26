@@ -87,11 +87,11 @@ showcase view, easing the camera and the window size over 600 ms; press it
 again mid-way to turn back from where it is. Each phone comes back in the
 view it was last in.
 
-- The showcase looks at the phone from a three-quarter angle, slightly from
-  above, lit by a studio environment, with a soft shadow under it and a
-  glass reflection on the screens, and the inner screen's crease catches
-  the light. It shows the phone's real posture: tented, half open or flat.
-  The window widens for it, but never past the edge of the screen.
+- The showcase looks at the phone straight on, lit by a studio environment,
+  with a soft shadow under it and a glass reflection on the screens, and
+  the inner screen's crease catches the light. It shows the phone's real
+  posture: tented, half open or flat. The window widens for it, but never
+  past the edge of the screen.
 - Dragging on the lit screen still touches the phone. Dragging anywhere
   else turns the phone around; two seconds after you let go it eases back.
 - Shift+drag off the screen moves the window, since a plain drag turns the
@@ -111,18 +111,24 @@ view it was last in.
 ### Turning the phone
 
 Hold Alt (left or right) and drag with the left button anywhere on the
-phone to turn it, in either view: sideways to turn it left or right (up to
-75 degrees), up or down to tilt its top away or toward you (up to 60). It
-follows the pointer while you drag and stays where you leave it; the next
-drag carries on from there. Nothing reaches the phone during an Alt drag,
-not even on the screen, and the window doesn't move.
+phone to turn it: sideways spins it all the way round, a full 360 degree
+turntable, and up or down tilts its top away or toward you (up to 60
+degrees either way). It follows the pointer while you drag and stays
+where you leave it; the next drag carries on from there. Nothing reaches
+the phone during an Alt drag, not even on the screen, and the window
+doesn't move.
 
-- Alt+double-click, or switching views, eases it back to straight on.
+- Starting a turn from the work view switches straight to the showcase,
+  in the same drag, so there's always a live phone to see it turn. Going
+  back to the work view (MOD+d, or the View button) springs the turn back
+  to straight on.
+- Alt+double-click eases the turn back to straight on without changing
+  view.
 - Touches on the screen still land where you click on the turned video.
-- The window keeps its size in both views; while turned, the phone
-  shrinks just enough to stay inside it, and is back at full size when it
-  is straight again.
-- Each phone comes back turned the way you left it.
+- While turned, the phone shrinks just enough to stay inside the window,
+  and is back at full size when it is straight again.
+- Each phone comes back turned the way you left it; a phone that was left
+  turned opens straight into the showcase rather than a turned work view.
 - Some Linux window managers move the window on Alt+drag (Xfce, and KDE
   depending on its settings). There the drag moves the window instead of
   turning the phone, unless you change the window manager's move modifier.

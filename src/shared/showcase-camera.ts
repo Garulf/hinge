@@ -15,7 +15,7 @@ export interface CameraRig {
 export const SHOWCASE_REST = { yaw: -28, pitch: 12 };
 export const SHOWCASE_LIMITS: { yaw: [number, number]; pitch: [number, number] } = { yaw: [-60, 60], pitch: [-10, 45] };
 
-const SHOWCASE_FOV_DEG = 30;
+const SHOWCASE_FOV_DEG = 18;
 const NEAR_ORTHO_FOV_DEG = 1;
 const SPHERE_FILL = 0.88;
 const DEPTH_MARGIN_M = 0.5;
@@ -36,7 +36,7 @@ function showcaseHalfHeight(radius: number): number {
 
 /**
  * The perspective camera between the work view (t 0) and the showcase (t 1).
- * The lens widens from a near-orthographic 1 degree to 30 while the height
+ * The lens widens from a near-orthographic 1 degree to 18 while the height
  * it frames at the point it looks at eases from the work view's to the
  * showcase's, so the image leaves the orthographic work view without a jump.
  */

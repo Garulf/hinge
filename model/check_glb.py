@@ -35,6 +35,7 @@ TRIANGLE_BUDGET = (60_000, 100_000)
 MAX_FILE_BYTES = 5 * 1024 * 1024
 BBOX_TOLERANCE_MM = 0.2
 UV_TOLERANCE = 1e-4
+CREASE_TOLERANCE_MM = 1e-3
 SCREEN_EXTRAS = {
     "CoverScreen": {"pixelSize": list(P.spec.cover_pixels), "material": "screen_cover", "u_toward": -1},
     "InnerScreen": {"pixelSize": list(P.spec.inner_pixels), "material": "screen_inner", "u_toward": +1},
@@ -365,6 +366,30 @@ def check_crease(model, report):
         if p[0] <= -half_band and cover_weight < 1 - 1e-4:
             bad += 1
     report.check("crease weights outside the band", bad == 0, f"{bad} vertices with wrong weights")
+    check_crease_depth(positions, half_band, report)
+    active_w = P.spec.inner_active_width_mm
+    drift = max(abs(uv[0] - (p[0] + active_w / 2) / active_w) for p, uv in zip(positions, uvs))
+    report.check("inner screen u follows x through the crease", drift < UV_TOLERANCE, f"largest drift {drift:.2e}")
+
+
+def check_crease_depth(positions, half_band, report):
+    surface = P.spec.body_open_thickness_mm - P.est.inner_screen_recess_mm
+    depths = [(abs(p[0]), surface - p[2]) for p in positions]
+    off_flat = max((abs(d) for x, d in depths if x >= half_band), default=0.0)
+    deepest = max(d for _, d in depths)
+    at_hinge = [d for x, d in depths if x < 1e-3]
+    ok = (
+        off_flat < CREASE_TOLERANCE_MM
+        and abs(deepest - P.spec.crease_depth_mm) < CREASE_TOLERANCE_MM
+        and bool(at_hinge)
+        and all(abs(d - deepest) < CREASE_TOLERANCE_MM for d in at_hinge)
+    )
+    report.check(
+        "crease depth",
+        ok,
+        f"{deepest:.3f} mm deep on the hinge line (expected {P.spec.crease_depth_mm}), "
+        f"{off_flat:.4f} mm off flat outside the band",
+    )
 
 
 def check_sides(model, report):

@@ -41,7 +41,9 @@ screen. The file is in the rest pose, fully open (fold angle 180 degrees).
   the same rest transform, so the same quaternion drives the rigid cover half and
   the skinned crease.
 - `InnerScreen` is one skinned mesh; its 6 mm crease band bends between the
-  bones. `HingeFill` is a small skinned strip under the crease in the spine
+  bones and dips `crease_depth_mm` (0.1 mm) into a shallow groove along the
+  hinge line, deepest on the line. UVs are projected straight down, so the
+  groove leaves u linear in X. `HingeFill` is a small skinned strip under the crease in the spine
   material; it closes the hinge slot when the phone is shut, so keep it visible
   even while `InnerScreen` is hidden.
 - Screen UVs (`screen_inner`, `screen_cover` primitives) span 0..1 over the

@@ -44,6 +44,21 @@ test("the same phone streaming again keeps what is on screen", () => {
   expect(applied).toEqual(["work", "showcase"]);
 });
 
+test("enterShowcase switches from work, eased, and saves it for the phone on screen", () => {
+  const { memory, applied, saved } = setup();
+  memory.useDevice("A", undefined);
+  memory.enterShowcase();
+  expect(applied).toEqual(["work", "showcase"]);
+  expect(saved).toEqual([["A", "showcase"]]);
+});
+
+test("enterShowcase already in showcase changes and saves nothing", () => {
+  const { memory, applied, saved } = setup("showcase");
+  memory.enterShowcase();
+  expect(applied).toEqual(["showcase"]);
+  expect(saved).toEqual([]);
+});
+
 test("a restored view lands at once while a toggled one eases", () => {
   const calls: [ViewMode, boolean][] = [];
   const memory = new ViewMemory({ apply: (v, opts) => calls.push([v, opts.instant]), save: () => {} }, "showcase");

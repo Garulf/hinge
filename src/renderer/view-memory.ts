@@ -29,6 +29,13 @@ export class ViewMemory {
     return this.#view;
   }
 
+  /** Turning the phone in the work view switches to showcase, animated, without touching an already-showcase view. */
+  enterShowcase(): void {
+    if (this.#view === "showcase") return;
+    this.#show("showcase", false);
+    this.#deps.save(this.#device, this.#view);
+  }
+
   /** A phone started streaming: a different phone gets its own saved view, or the last one chosen; the same phone keeps what is on screen. */
   useDevice(id: string, saved: ViewMode | undefined): void {
     if (this.#device === id) return;

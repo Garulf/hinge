@@ -32,6 +32,8 @@ export interface InputRouterOptions {
   paused?: () => boolean;
   /** An Alt+drag turn of the model ended ("moved"), or an Alt+double-click asked for it to go back to rest ("reset"). */
   onRotated?: (outcome: "moved" | "reset") => void;
+  /** An Alt+left press starts turning the model while the work view is showing: switches to showcase without resetting the turn. */
+  onEnterShowcase?: () => void;
 }
 
 /**
@@ -56,6 +58,7 @@ export class InputRouter {
   readonly #raycaster = new THREE.Raycaster();
   readonly #rotate = new RotateGesture();
   readonly #onRotated: (outcome: "moved" | "reset") => void;
+  readonly #onEnterShowcase: () => void;
   #press: PressMode | null = null;
   /** Whether the current rotate press has moved the model, so a plain Alt+click saves nothing. */
   #turned = false;
@@ -79,6 +82,7 @@ export class InputRouter {
     this.#shortcuts = new ShortcutHandler(this.#modifiers, opts.modifiers ?? (() => DEFAULT_MODIFIERS));
     this.#paused = opts.paused ?? (() => false);
     this.#onRotated = opts.onRotated ?? (() => {});
+    this.#onEnterShowcase = opts.onEnterShowcase ?? (() => {});
 
     canvas.addEventListener("pointerdown", (e) => this.#onPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.#onPointerMove(e));
@@ -113,6 +117,7 @@ export class InputRouter {
     if (e.button === 0 && this.#altHeld()) {
       this.#press = "rotate";
       this.#turned = false;
+      if (view.target === "work") this.#onEnterShowcase();
       this.#rotate.press(pointOf(e), this.#scene.modelRotation(), e.timeStamp);
       return;
     }

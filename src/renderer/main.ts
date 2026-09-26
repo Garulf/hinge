@@ -4,8 +4,9 @@ import { DecodeRecovery } from "../shared/decode-recovery";
 import { bodyIsOpen, FoldDirector, type DirectorOutput } from "../shared/fold-director";
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
 import { bodySizePx, deviceAlignedSize, FOLD7_BODY, unionSize } from "../shared/layout";
+import { MODEL_REST } from "../shared/model-rotation";
 import type { Rotation } from "../shared/screen-uv";
-import { startupDevice, type Settings } from "../shared/settings";
+import { startupDevice, type DeviceSettings, type Settings } from "../shared/settings";
 import { defaultModifiers, normaliseModifiers, type HingeAction } from "../shared/shortcuts";
 import { viewWindowSize } from "../shared/view-window";
 import { WindowSizer } from "../shared/window-sizer";
@@ -25,6 +26,18 @@ import { RotationMemory } from "./rotation-memory";
 import { PhoneScene, type ViewState } from "./scene/phone-scene";
 import { ViewMemory } from "./view-memory";
 import { VideoPipe } from "./video-pipe";
+
+/**
+ * The view a phone's saved settings open in: a saved turn that is not
+ * front-facing always opens in the showcase, never a turned phone in the
+ * work view; otherwise the phone's own saved view (or undefined, which
+ * ViewMemory reads as "keep whatever is on screen").
+ */
+function viewForDevice(saved: DeviceSettings | undefined): "work" | "showcase" | undefined {
+  const rotation = saved?.rotation;
+  if (rotation && (rotation.yaw !== MODEL_REST.yaw || rotation.pitch !== MODEL_REST.pitch)) return "showcase";
+  return saved?.view;
+}
 
 function statusText(status: SessionStatus): string | null {
   switch (status.state) {
@@ -228,9 +241,9 @@ const settingsReady = window.hinge
           if (id) void window.hinge.saveDeviceSettings(id, { view });
         },
       },
-      last?.saved.view ?? loaded?.view ?? "work",
+      viewForDevice(last?.saved) ?? loaded?.view ?? "work",
     );
-    if (last) views.useDevice(last.id, last.saved.view);
+    if (last) views.useDevice(last.id, viewForDevice(last.saved));
   });
 window.hinge.onSettings(applySettings);
 
@@ -248,7 +261,7 @@ function onStatus(status: SessionStatus): void {
   currentDeviceId = status.deviceId;
   const saved = settings?.devices[status.deviceId];
   scale.useDevice(status.deviceId, saved?.pxPerMm);
-  views?.useDevice(status.deviceId, saved?.view);
+  views?.useDevice(status.deviceId, viewForDevice(saved));
   rotations.useDevice(status.deviceId, saved?.rotation);
 }
 
@@ -356,6 +369,7 @@ const router = new InputRouter(canvas, scene, () => videoSize, (intent) => clien
   modifiers: () => normaliseModifiers(settings?.shortcutModifiers, defaultModifiers(window.hinge.platform)),
   paused: () => display.paused,
   onRotated: (outcome) => (outcome === "reset" ? rotations.reset() : rotations.turned(scene.modelRotation())),
+  onEnterShowcase: () => views?.enterShowcase(),
 });
 
 // Resolves dropped files to real paths and hands them to main, which picks install or push.

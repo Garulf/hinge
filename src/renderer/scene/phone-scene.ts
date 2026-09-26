@@ -696,15 +696,17 @@ export class PhoneScene implements FrameTarget {
 
   /**
    * Turns the model about the centre of its unturned pose, shrunk just
-   * enough that the view (orthographic or perspective, with the showcase
-   * orbit) still shows all of it. At rest the turn is the identity, which
+   * enough that the showcase view (with its orbit) still shows all of it.
+   * The work view is never turned (Alt+drag switches to showcase before the
+   * angle can move off rest), so the fit is always taken through the
+   * showcase's perspective camera. At rest the turn is the identity, which
    * leaves every matrix below it bit for bit as without it.
    */
   #placeTurn(box: THREE.Box3): void {
     this.#turnFit = 1;
     const angles = this.#turnPose;
     if (angles.yaw === 0 && angles.pitch === 0) return;
-    const camera = this.activeCamera();
+    const camera = this.#showcaseCamera;
     camera.updateMatrixWorld();
     const clip = this.#turnClip.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     const scale = turnFitScale(box, clip.elements, angles);

@@ -92,6 +92,7 @@ function setup(opts?: {
   video?: { w: number; h: number };
   onAction?: (action: HingeAction) => void;
   onRotated?: (outcome: "moved" | "reset") => void;
+  onEnterShowcase?: () => void;
   view?: View;
   turnYawDeg?: number;
   lens?: "ortho" | "perspective";
@@ -104,6 +105,7 @@ function setup(opts?: {
   const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => video, (intent) => sent.push(intent), {
     onAction: opts?.onAction,
     onRotated: opts?.onRotated,
+    onEnterShowcase: opts?.onEnterShowcase,
   });
   return { canvas, scene, sent, router };
 }
@@ -644,6 +646,33 @@ test("Alt+left on the screen turns the model instead of touching, and reports th
   expect(scene.turns).toEqual([{ yaw: 6, pitch: 3 }]);
   expect(onRotated).toHaveBeenCalledExactlyOnceWith("moved");
   expect(fakeWindow.hinge.beginDrag).not.toHaveBeenCalled();
+});
+
+test("Alt+left in the work view requests showcase, without resetting the turn, and keeps turning the same press", () => {
+  const onEnterShowcase = vi.fn();
+  const { canvas, scene } = setup({ onEnterShowcase });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 60, button: 0, buttons: 1, altKey: true, ...CENTER });
+  expect(onEnterShowcase).toHaveBeenCalledOnce();
+  canvas.fire("pointermove", { pointerId: 60, button: -1, buttons: 1, altKey: true, clientX: 70, clientY: 40 });
+  canvas.fire("pointerup", { pointerId: 60, button: 0, buttons: 0, altKey: true, clientX: 70, clientY: 40 });
+  expect(scene.turns).toEqual([{ yaw: 6, pitch: 3 }]);
+});
+
+test("Alt+left already in the showcase does not ask to enter it again", () => {
+  const onEnterShowcase = vi.fn();
+  const { canvas } = setup({ onEnterShowcase, view: SHOWCASE });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("pointerdown", { pointerId: 61, button: 0, buttons: 1, altKey: true, ...OFF_PHONE });
+  expect(onEnterShowcase).not.toHaveBeenCalled();
+});
+
+test("a plain left press in the work view does not ask to enter the showcase", () => {
+  const onEnterShowcase = vi.fn();
+  const { canvas } = setup({ onEnterShowcase });
+  canvas.fire("pointerdown", { pointerId: 62, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointerup", { pointerId: 62, button: 0, buttons: 0, ...CENTER });
+  expect(onEnterShowcase).not.toHaveBeenCalled();
 });
 
 test("right Alt turns the model too, and a drag accumulates from the angle it starts at", () => {

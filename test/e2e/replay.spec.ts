@@ -544,6 +544,23 @@ async function altDoubleClick(page: Page, at: { x: number; y: number }): Promise
   await page.keyboard.up("Alt");
 }
 
+interface TurnStats extends Stats {
+  pxPerMm: number;
+  turn: { centre: { x: number; y: number; z: number }; box: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } } };
+}
+
+/** The leftmost client x on the row through `from` that touches the stream, found by halving between the window's edge and `from`. */
+async function leftEdgeOfScreen(page: Page, from: { x: number; y: number }): Promise<number> {
+  let off = 0;
+  let on = from.x;
+  while (on - off > 0.5) {
+    const x = (off + on) / 2;
+    if (await streamPointAt(page, x, from.y)) on = x;
+    else off = x;
+  }
+  return on;
+}
+
 function turnedTo(yaw: number, pitch: number): (s: Stats) => boolean {
   return (s) => Math.abs(s.modelRotation.yaw - yaw) < 1e-9 && Math.abs(s.modelRotation.pitch - pitch) < 1e-9;
 }
@@ -554,26 +571,46 @@ test("Alt+drag in the work view switches to the showcase and keeps turning; Alt+
   try {
     const open = await waitFor(page, "the open phone", (s) => restingOn("inner", s) && s.badge === null && s.rotation === 0 && Math.abs(aspect(s) - OPEN_ASPECT) < 0.02, 45_000);
     const mid = { x: open.window.w / 2, y: open.window.h / 2 };
-    const nearLeftEdge = open.window.w * 0.04;
-    expect(await streamPointAt(page, nearLeftEdge, mid.y)).not.toBeNull();
+    const centreHit = (await streamPointAt(page, mid.x, mid.y))!;
+    expect(centreHit).not.toBeNull();
+    // The work view is orthographic at a known scale, so two probes a known
+    // distance apart give the screen's width; the pose box at rest gives how
+    // far the screen stands in front of the turn's centre.
+    const probePx = 100;
+    const [probeLeft, probeRight] = await Promise.all([streamPointAt(page, mid.x - probePx, mid.y), streamPointAt(page, mid.x + probePx, mid.y)]);
+    const screenWidthM = (2 * probePx) / ((open as TurnStats).pxPerMm * 1000) / (probeRight!.x - probeLeft!.x);
+    const restTurn = (open as TurnStats).turn;
+    const screenDepthM = restTurn.box.max.z - restTurn.centre.z;
 
     // Turning the live, streaming phone switches it to the showcase in the same press.
     await altDrag(page, mid, { x: 100, y: 0 });
-    await waitFor(page, "the live phone turned, in the showcase", (s) => turnedTo(30, 0)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 10_000);
+    const liveTurned = await waitFor(page, "the live phone turned, in the showcase", (s) => turnedTo(30, 0)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active && s.laidOut, 10_000);
     await frames(page, 2);
     await page.screenshot({ path: "test-results/turn-live.png" });
-    expect(await streamPointAt(page, nearLeftEdge, mid.y)).toBeNull();
-    const turnedHit = await streamPointAt(page, mid.x, mid.y);
+    // The showcase window is a different size from the work view's, so its
+    // own centre is where the camera looks: at the turn's centre. That ray
+    // passes through the pivot and meets the screen, standing screenDepthM in
+    // front of it, screenDepthM * tan 30 degrees to the left of the stream
+    // point the work view's centre touched. Measured on a real GPU the
+    // prediction is within 0.0002 of the hit; 0.002 allows for the glass
+    // sitting up to half a millimetre below the body's front face.
+    const showcaseMid = { x: liveTurned.window.w / 2, y: liveTurned.window.h / 2 };
+    const turnedHit = await streamPointAt(page, showcaseMid.x, showcaseMid.y);
     expect(turnedHit).not.toBeNull();
-    // The showcase's perspective camera reads a turned screen's UV less
-    // literally than the work view's orthographic one did, but the window's
-    // centre still maps inside the stream, not off toward an edge.
-    expect(turnedHit!.x).toBeGreaterThan(0.1);
-    expect(turnedHit!.x).toBeLessThan(0.9);
-    expect(turnedHit!.y).toBeGreaterThan(0.1);
-    expect(turnedHit!.y).toBeLessThan(0.9);
-    await altDoubleClick(page, mid);
+    const parallax = (screenDepthM * Math.tan((30 * Math.PI) / 180)) / screenWidthM;
+    expect(Math.abs(turnedHit!.x - (centreHit.x - parallax))).toBeLessThan(0.002);
+    expect(Math.abs(turnedHit!.y - centreHit.y)).toBeLessThan(0.002);
+    await altDoubleClick(page, showcaseMid);
     await waitFor(page, "the turn back at rest, still in the showcase", (s) => turnedTo(0, 0)(s) && s.view.target === "showcase", 10_000);
+
+    // A touch just inside the resting screen's left edge misses the screen once it is turned edge-in.
+    const insideLeftEdge = (await leftEdgeOfScreen(page, showcaseMid)) + 4;
+    expect(await streamPointAt(page, insideLeftEdge, showcaseMid.y)).not.toBeNull();
+    await altDrag(page, showcaseMid, { x: 100, y: 0 });
+    await waitFor(page, "the showcase turned again", turnedTo(30, 0), 10_000);
+    expect(await streamPointAt(page, insideLeftEdge, showcaseMid.y)).toBeNull();
+    await altDoubleClick(page, showcaseMid);
+    await waitFor(page, "the turn back at rest again", (s) => turnedTo(0, 0)(s) && s.view.target === "showcase", 10_000);
 
     // Back to the work view (MOD+d), unaffected by any of the turning above.
     await toggleView(page);

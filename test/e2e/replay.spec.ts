@@ -177,11 +177,24 @@ async function windowAtRest(page: Page): Promise<Stats> {
   throw new Error(`the window kept resizing; last ${JSON.stringify(previous.window)}`);
 }
 
-/** A plain left drag, which turns the phone from a side or corner of the case. */
-async function drag(page: Page, from: { x: number; y: number }, by: { x: number; y: number }): Promise<void> {
+/** Puts the pointer on a point of the screen, wherever the window has moved to under it, as a real mouse would be. */
+async function moveOnScreen(app: ElectronApplication, page: Page, point: { x: number; y: number }): Promise<void> {
+  const origin = await windowBounds(app);
+  await page.mouse.move(point.x - origin.x, point.y - origin.y);
+}
+
+/**
+ * A plain left drag from a point in the window, by a distance travelled on
+ * the screen, which turns the phone from a side or corner of the case: the
+ * window grows and moves around the turning phone meanwhile.
+ */
+async function drag(app: ElectronApplication, page: Page, from: { x: number; y: number }, by: { x: number; y: number }): Promise<void> {
+  const origin = await windowBounds(app);
+  const start = { x: origin.x + from.x, y: origin.y + from.y };
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
-  await page.mouse.move(from.x + by.x, from.y + by.y, { steps: 5 });
+  const steps = 5;
+  for (let i = 1; i <= steps; i++) await moveOnScreen(app, page, { x: start.x + (by.x * i) / steps, y: start.y + (by.y * i) / steps });
   await page.mouse.up();
 }
 
@@ -506,7 +519,7 @@ test("hover menu on the top edge, transfer toasts for a drop, and a colourway ch
 
     await page.mouse.move(10, smaller.window.h / 2);
     await expect(menu).not.toHaveClass(/shown/, { timeout: 5000 });
-    await drag(page, await sideOfCase(page, smaller.window.h / 2), { x: 100, y: 0 });
+    await drag(app, page, await sideOfCase(page, smaller.window.h / 2), { x: 100, y: 0 });
     await waitFor(page, "the turned phone", (s) => s.view.t === 1 && s.window.w * s.window.h > smaller.window.w * smaller.window.h, 20_000);
     const turned = await windowAtRest(page);
     await page.mouse.move(turned.window.w / 2, 8);
@@ -584,12 +597,10 @@ function streamPointAt(page: Page, x: number, y: number): Promise<{ x: number; y
   return page.evaluate(([x, y]) => (window as unknown as { __hinge: { streamPointAt(x: number, y: number): { x: number; y: number } | null } }).__hinge.streamPointAt(x, y), [x, y]);
 }
 
-async function altDrag(page: Page, from: { x: number; y: number }, by: { x: number; y: number }): Promise<void> {
-  await page.mouse.move(from.x, from.y);
+/** The same drag with Alt held, which turns the phone from anywhere on it. */
+async function altDrag(app: ElectronApplication, page: Page, from: { x: number; y: number }, by: { x: number; y: number }): Promise<void> {
   await page.keyboard.down("Alt");
-  await page.mouse.down();
-  await page.mouse.move(from.x + by.x, from.y + by.y, { steps: 5 });
-  await page.mouse.up();
+  await drag(app, page, from, by);
   await page.keyboard.up("Alt");
 }
 
@@ -638,7 +649,7 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     const screenDepthM = restTurn.box.max.z - restTurn.centre.z;
 
     // Turning the live, streaming phone by the side of its case: 30 degrees is the full 3D look.
-    await drag(page, await sideOfCase(page, mid.y), { x: 100, y: 0 });
+    await drag(app, page, await sideOfCase(page, mid.y), { x: 100, y: 0 });
     await waitFor(page, "the live phone turned", (s) => turnedTo(30, 0)(s) && s.view.t === 1 && !s.view.active, 10_000);
     const liveTurned = await windowAtRest(page);
     await page.screenshot({ path: "test-results/turn-live.png" });
@@ -659,18 +670,24 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     await page.waitForTimeout(2500);
     expect((await stats(page)).modelRotation).toEqual({ yaw: 30, pitch: 0 });
     await center(page);
-    await waitFor(page, "the phone straight on again", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.laidOut, 10_000);
+    // The window gives back the turn's room once the phone is straight on.
+    await waitFor(page, "the phone straight on again, room given back", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.laidOut && s.window.w * s.window.h < liveTurned.window.w * liveTurned.window.h, 10_000);
+    const straight = await windowAtRest(page);
+    const restMid = { x: straight.window.w / 2, y: straight.window.h / 2 };
 
     // Alt+drag still turns from anywhere, the screen included: a touch just
     // inside the resting screen's left edge misses the screen once it is
     // turned edge-in, and Alt+double-click centres it.
-    const insideLeftEdge = (await leftEdgeOfScreen(page, mid)) + 4;
-    expect(await streamPointAt(page, insideLeftEdge, mid.y)).not.toBeNull();
-    await altDrag(page, mid, { x: 100, y: 0 });
+    const insideLeftEdge = (await leftEdgeOfScreen(page, restMid)) + 4;
+    expect(await streamPointAt(page, insideLeftEdge, restMid.y)).not.toBeNull();
+    const restOrigin = await windowBounds(app);
+    await altDrag(app, page, restMid, { x: 100, y: 0 });
     await waitFor(page, "the phone turned by Alt+drag", turnedTo(30, 0), 10_000);
     await windowAtRest(page);
-    expect(await streamPointAt(page, insideLeftEdge, mid.y)).toBeNull();
-    await altDoubleClick(page, mid);
+    const turnedOrigin = await windowBounds(app);
+    const [grownX, grownY] = [restOrigin.x - turnedOrigin.x, restOrigin.y - turnedOrigin.y];
+    expect(await streamPointAt(page, insideLeftEdge + grownX, restMid.y + grownY)).toBeNull();
+    await altDoubleClick(page, { x: restMid.x + grownX, y: restMid.y + grownY });
     await waitFor(page, "the turn back at rest", (s) => turnedTo(0, 0)(s) && s.view.t === 0, 10_000);
 
     const ended = await waitFor(
@@ -686,7 +703,7 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     const workRest = await page.screenshot({ path: "test-results/turn-work-rest.png" });
 
     const side = await sideOfCase(page, centre.y);
-    await drag(page, side, { x: 80, y: -40 });
+    await drag(app, page, side, { x: 80, y: -40 });
     await waitFor(page, "the phone turned", turnedTo(24, 12), 10_000);
     const turned = await windowAtRest(page);
     // The window grows evenly around the phone for the turn, which stays where it was on screen.
@@ -712,7 +729,7 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     expect(await differingPixels(page, workRest, doubleClickBack, 0)).toBe(0);
 
     // Center springs a turn back to front and returns a pixel-identical work view, before any scaling.
-    await drag(page, side, { x: 80, y: -40 });
+    await drag(app, page, side, { x: 80, y: -40 });
     await waitFor(page, "the phone turned again", turnedTo(24, 12), 10_000);
     await center(page);
     await waitFor(page, "the phone centred", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.settled && s.laidOut && s.window.w === ended.window.w && s.window.h === ended.window.h, 20_000);
@@ -721,7 +738,7 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     expect(await differingPixels(page, workRest, workBack, 0)).toBe(0);
 
     // A far turn from the right side, leftwards and up, stays inside the grown window.
-    await drag(page, { x: ended.window.w - side.x, y: side.y }, { x: -200, y: -150 });
+    await drag(app, page, { x: ended.window.w - side.x, y: side.y }, { x: -200, y: -150 });
     await waitFor(page, "the phone turned far", turnedTo(-60, 45), 10_000);
     await windowAtRest(page);
     await frames(page, 3);
@@ -743,7 +760,7 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     const workAgain = await waitFor(page, "Center to spring the turn back", (s) => turnedTo(0, 0)(s) && s.view.t === 0 && !s.view.active && s.settled && s.laidOut, 20_000);
 
     // Turning once more, and scaling up while turned keeps the turn.
-    await drag(page, await sideOfCase(page, workAgain.window.h / 2), { x: 60, y: 30 });
+    await drag(app, page, await sideOfCase(page, workAgain.window.h / 2), { x: 60, y: 30 });
     await waitFor(page, "the phone turned again", (s) => turnedTo(18, -9)(s), 10_000);
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, -100);

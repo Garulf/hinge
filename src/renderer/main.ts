@@ -8,6 +8,7 @@ import { MODEL_REST } from "../shared/model-rotation";
 import type { Rotation } from "../shared/screen-uv";
 import { startupDevice, type DeviceSettings, type Settings } from "../shared/settings";
 import { defaultModifiers, normaliseModifiers, type HingeAction } from "../shared/shortcuts";
+import { TurnRoom } from "../shared/turn-room";
 import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
 import { AudioPipe } from "./audio-pipe";
@@ -69,6 +70,7 @@ const director = new FoldDirector({
 const windowSizer = new WindowSizer((size, rotation, pad) => window.hinge.setWindowSize(size.w, size.h, rotation, pad), {
   nudgeLostResizes: window.hinge.platform === "linux",
 });
+const heldRoom = new TurnRoom();
 const decodeRecovery = new DecodeRecovery();
 const colourways = colourwayFile as ColourwayFile;
 let cls: ScreenClass | null = null;
@@ -163,7 +165,9 @@ function sizeWindow(out: DirectorOutput, rotation: Rotation, view: ViewState): v
   const dpr = window.devicePixelRatio;
   const work = withPanel(deviceAlignedSize(size, dpr), chrome.neededWindow(), dpr);
   const showcase = view.t > 0 || view.active;
-  windowSizer.update(work, rotation, out.settled, showcase ? deviceAlignedPad(work, scene.turnRoom(), dpr) : NO_PAD);
+  if (!showcase) heldRoom.release();
+  const room = showcase ? deviceAlignedPad(work, heldRoom.update(scene.turnRoom(), scene.turnReserve(), performance.now()), dpr) : NO_PAD;
+  windowSizer.update(work, rotation, out.settled, room);
   scene.setWorkSize(showcase ? windowSizer.requested : null);
 }
 

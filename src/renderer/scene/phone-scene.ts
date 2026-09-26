@@ -7,7 +7,7 @@ import type { Pad } from "../../shared/layout";
 import { MODEL_REST, ModelRotation, type ModelAngles } from "../../shared/model-rotation";
 import { Orbit } from "../../shared/orbit";
 import type { Rotation } from "../../shared/screen-uv";
-import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST } from "../../shared/showcase-camera";
+import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST, showcaseReach } from "../../shared/showcase-camera";
 import { ViewTransition } from "../../shared/view-transition";
 import { StatusOverlay } from "../status-overlay";
 import type { FrameTarget } from "../texture-renderer";
@@ -196,6 +196,7 @@ export class PhoneScene implements FrameTarget {
   #workSize: { w: number; h: number } | null = null;
   #margin: Pad = { x: 0, y: 0 };
   #turnRoom: Pad = { x: 0, y: 0 };
+  #turnReserve: Pad = { x: 0, y: 0 };
   #rotation: Rotation = 0;
   #angle: number | null = null;
   #out: DirectorOutput | null = null;
@@ -311,6 +312,11 @@ export class PhoneScene implements FrameTarget {
   /** How far, in CSS px, the drawn phone reaches past the work view's window on each side; 0 in the work view. */
   turnRoom(): Pad {
     return this.#turnRoom;
+  }
+
+  /** How far, in CSS px, the phone could reach past the work view's window on each side, however it is turned or orbited. */
+  turnReserve(): Pad {
+    return this.#turnReserve;
   }
 
   /** A model load failure stays on screen over any later status until the app restarts. */
@@ -740,10 +746,20 @@ export class PhoneScene implements FrameTarget {
     return { x: x > TURN_ROOM_SLACK_PX ? x : 0, y: y > TURN_ROOM_SLACK_PX ? y : 0 };
   }
 
+  /** Measured against the work view's window as asked for, not the page's size, which lags a resize. */
+  #measureTurnReserve(): Pad {
+    if (!this.#model) return { x: 0, y: 0 };
+    const work = this.#workSize ?? this.#viewport;
+    const pxPerMetre = this.#pxPerMm * 1000;
+    const reach = showcaseReach(this.#unturnedBox, work.h / pxPerMetre / 2) * pxPerMetre;
+    return { x: Math.max(0, reach - work.w / 2), y: Math.max(0, reach - work.h / 2) };
+  }
+
   #renderNow(): void {
     if (this.#model) this.#placeModel(this.#model);
     this.#scene.updateMatrixWorld();
     this.#turnRoom = this.#measureTurnRoom();
+    this.#turnReserve = this.#measureTurnReserve();
     this.#rendered = { t: this.#view.t, yaw: this.#orbitPose.yaw, pitch: this.#orbitPose.pitch, turn: { ...this.#turnPose } };
     this.#renderer.clear();
     this.#renderer.render(this.#scene, this.activeCamera());

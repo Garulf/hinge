@@ -1,5 +1,6 @@
+import * as THREE from "three";
 import { expect, test } from "vitest";
-import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST, type Vec3 } from "../../src/shared/showcase-camera";
+import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST, showcaseReach, type Vec3 } from "../../src/shared/showcase-camera";
 
 const deg = (d: number) => (d * Math.PI) / 180;
 
@@ -95,4 +96,32 @@ test("the camera moves smoothly across the blend: no step between close values o
       previous = rig;
     }
   }
+});
+
+test("the showcase's reach bounds every corner of the phone however it is turned or orbited, and a turn can come close to it", () => {
+  const reach = showcaseReach(SUBJECT, BASE.workHalfHeight);
+  const aspect = 1.1;
+  const corners = [0, 1, 2, 3, 4, 5, 6, 7].map(
+    (i) => new THREE.Vector3(i & 1 ? SUBJECT.max.x : SUBJECT.min.x, i & 2 ? SUBJECT.max.y : SUBJECT.min.y, i & 4 ? SUBJECT.max.z : SUBJECT.min.z),
+  );
+  const centre = new THREE.Vector3(CENTRE.x, CENTRE.y, CENTRE.z);
+  let furthest = 0;
+  for (const orbit of [SHOWCASE_REST, { yaw: SHOWCASE_LIMITS.yaw[1], pitch: SHOWCASE_LIMITS.pitch[1] }, { yaw: SHOWCASE_LIMITS.yaw[0], pitch: SHOWCASE_LIMITS.pitch[0] }]) {
+    const rig = blendedCamera({ ...BASE, t: 1, yawDeg: orbit.yaw, pitchDeg: orbit.pitch });
+    const camera = new THREE.PerspectiveCamera(rig.fovDeg, aspect, rig.near, rig.far);
+    camera.position.set(rig.position.x, rig.position.y, rig.position.z);
+    camera.lookAt(rig.target.x, rig.target.y, rig.target.z);
+    camera.updateMatrixWorld();
+    for (let yaw = -180; yaw < 180; yaw += 5) {
+      for (let pitch = -60; pitch <= 60; pitch += 5) {
+        const turn = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(deg(-pitch), deg(yaw), 0, "XYZ"));
+        for (const corner of corners) {
+          const ndc = corner.clone().sub(centre).applyMatrix4(turn).add(centre).project(camera);
+          furthest = Math.max(furthest, Math.abs(ndc.x) * aspect * BASE.workHalfHeight, Math.abs(ndc.y) * BASE.workHalfHeight);
+        }
+      }
+    }
+  }
+  expect(furthest).toBeLessThanOrEqual(reach);
+  expect(furthest).toBeGreaterThan(0.95 * reach);
 });

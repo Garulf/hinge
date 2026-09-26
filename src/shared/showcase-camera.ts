@@ -55,3 +55,18 @@ export function blendedCamera(input: {
   };
   return { position, target, fovDeg, near: Math.max(0.01, distance - DEPTH_MARGIN_M), far: distance + DEPTH_MARGIN_M };
 }
+
+/**
+ * How far from the middle of the window, in the units of workHalfHeight,
+ * the showcase can draw any point of the subject however it is turned about
+ * its centre or orbited: the image of the smallest sphere around that
+ * centre holding the subject's box, seen from the showcase camera.
+ */
+export function showcaseReach(subject: Box, workHalfHeight: number): number {
+  const centre = lerpVec(subject.min, subject.max, 0.5);
+  const radius = Math.hypot(subject.max.x - centre.x, subject.max.y - centre.y, subject.max.z - centre.z);
+  const halfFov = rad(SHOWCASE_FOV_DEG) / 2;
+  const distance = subject.max.z - centre.z + workHalfHeight / Math.tan(halfFov);
+  const angle = Math.asin(Math.min(1, radius / distance));
+  return (workHalfHeight * Math.tan(angle)) / Math.tan(halfFov);
+}

@@ -125,8 +125,10 @@ doesn't move.
 - Alt+double-click eases the turn back to straight on without changing
   view.
 - Touches on the screen still land where you click on the turned video.
-- While turned, the phone keeps its size and place, and the window grows
-  evenly around it for as long as the turn needs the room.
+- While turned, the phone keeps its size and place. The window grows
+  evenly around it once, as the turn starts, by as much as any turn could
+  need, so it never resizes under the phone mid-turn, and shrinks back
+  once the phone is straight on again.
 - Each phone comes back turned the way you left it; a phone that was left
   turned opens straight into the showcase rather than a turned work view.
 - Some Linux window managers move the window on Alt+drag (Xfce, and KDE

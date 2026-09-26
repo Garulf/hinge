@@ -92,6 +92,11 @@ export class RotateGesture {
     this.#lastClick = null;
   }
 
+  /** A press that is not an Alt press came between: the next Alt click starts a new pair. */
+  otherPress(): void {
+    this.#lastClick = null;
+  }
+
   #track(press: Press, point: Point): void {
     if (distance(point, press.point) > CLICK_SLOP_PX) press.moved = true;
   }
@@ -140,4 +145,70 @@ export class ModelRotation {
     spring.target = value;
     spring.velocity = 0;
   }
+}
+
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** The box of the unturned pose, in world units. */
+export interface FitBox {
+  min: Vec3;
+  max: Vec3;
+}
+
+/** What the orthographic camera sees, in world units. */
+export interface FitFrame {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+const rad = (deg: number) => (deg * Math.PI) / 180;
+
+/** A point turned about the origin as the scene turns the model: yaw about Y, then -pitch about X. */
+export function turnPoint(p: Vec3, angles: ModelAngles): Vec3 {
+  const yaw = rad(angles.yaw);
+  const tilt = rad(-angles.pitch);
+  const x = p.x * Math.cos(yaw) + p.z * Math.sin(yaw);
+  const z = -p.x * Math.sin(yaw) + p.z * Math.cos(yaw);
+  return { x, y: p.y * Math.cos(tilt) - z * Math.sin(tilt), z: p.y * Math.sin(tilt) + z * Math.cos(tilt) };
+}
+
+/**
+ * The uniform scale, at most 1, that keeps the box's corners turned about
+ * its centre within reach on every side: each side may reach as far from
+ * the centre as the unturned box does, or the frame, whichever is further.
+ * Exactly 1 at rest, and it tends to 1 as the angles go to 0.
+ */
+export function turnFitScale(box: FitBox, frame: FitFrame, angles: ModelAngles): number {
+  if (angles.yaw === 0 && angles.pitch === 0) return 1;
+  const c = { x: (box.min.x + box.max.x) / 2, y: (box.min.y + box.max.y) / 2, z: (box.min.z + box.max.z) / 2 };
+  const allowed = {
+    right: Math.max(box.max.x - c.x, frame.maxX - c.x),
+    left: Math.max(c.x - box.min.x, c.x - frame.minX),
+    top: Math.max(box.max.y - c.y, frame.maxY - c.y),
+    bottom: Math.max(c.y - box.min.y, c.y - frame.minY),
+  };
+  const reach = { right: 0, left: 0, top: 0, bottom: 0 };
+  for (let i = 0; i < 8; i++) {
+    const corner = {
+      x: (i & 1 ? box.max.x : box.min.x) - c.x,
+      y: (i & 2 ? box.max.y : box.min.y) - c.y,
+      z: (i & 4 ? box.max.z : box.min.z) - c.z,
+    };
+    const q = turnPoint(corner, angles);
+    reach.right = Math.max(reach.right, q.x);
+    reach.left = Math.max(reach.left, -q.x);
+    reach.top = Math.max(reach.top, q.y);
+    reach.bottom = Math.max(reach.bottom, -q.y);
+  }
+  let scale = 1;
+  for (const side of ["right", "left", "top", "bottom"] as const) {
+    if (reach[side] > allowed[side]) scale = Math.min(scale, allowed[side] / reach[side]);
+  }
+  return scale;
 }

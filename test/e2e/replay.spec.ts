@@ -493,6 +493,26 @@ async function opaqueBox(page: Page, png: Buffer): Promise<{ x: number; y: numbe
   }, png.toString("base64"));
 }
 
+/**
+ * The fraction of each outermost row and column of the window that is
+ * opaque: a phone cut off by the window's edge runs along it, while one
+ * inside it touches the edge at a corner at most.
+ */
+async function edgeCoverage(page: Page, png: Buffer): Promise<{ top: number; bottom: number; left: number; right: number }> {
+  return page.evaluate(async (base64) => {
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    ctx.drawImage(bitmap, 0, 0);
+    const { data, width, height } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+    const opaque = (x: number, y: number) => data[(y * width + x) * 4 + 3] >= 200;
+    const row = (y: number) => Array.from({ length: width }, (_, x) => opaque(x, y)).filter(Boolean).length / width;
+    const column = (x: number) => Array.from({ length: height }, (_, y) => opaque(x, y)).filter(Boolean).length / height;
+    return { top: row(0), bottom: row(height - 1), left: column(0), right: column(width - 1) };
+  }, png.toString("base64"));
+}
+
 async function frames(page: Page, count: number): Promise<void> {
   await page.evaluate(
     (count) =>
@@ -568,8 +588,11 @@ test("Alt+drag turns the phone in both views and it stays turned; Alt+double-cli
     const workTurned = await page.screenshot({ path: "test-results/turn-work.png" });
     const restBox = await opaqueBox(page, workRest);
     const turnedBox = await opaqueBox(page, workTurned);
-    await writeFile("test-results/turn-work-boxes.json", JSON.stringify({ restBox, turnedBox }, null, 2));
+    const restEdges = await edgeCoverage(page, workRest);
+    const turnedEdges = await edgeCoverage(page, workTurned);
+    await writeFile("test-results/turn-work-boxes.json", JSON.stringify({ restBox, turnedBox, restEdges, turnedEdges }, null, 2));
     expect(turnedBox.w).toBeLessThan(restBox.w * 0.95);
+    for (const side of ["top", "bottom", "left", "right"] as const) expect(turnedEdges[side], `phone cut off at the ${side}`).toBeLessThan(0.03);
     await page.waitForTimeout(1000);
     expect((await stats(page)).modelRotation).toEqual({ yaw: 24, pitch: 12 });
 

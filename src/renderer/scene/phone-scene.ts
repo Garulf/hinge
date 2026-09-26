@@ -3,7 +3,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import type { MaterialLook } from "../../shared/colourways";
 import type { ScreenClass, ScreenKind } from "../../shared/fold7";
 import type { DirectorOutput, FoldDirector } from "../../shared/fold-director";
-import { MODEL_REST, ModelRotation, type ModelAngles } from "../../shared/model-rotation";
+import { MODEL_REST, ModelRotation, turnFitScale, type ModelAngles } from "../../shared/model-rotation";
 import { Orbit } from "../../shared/orbit";
 import type { Rotation } from "../../shared/screen-uv";
 import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST } from "../../shared/showcase-camera";
@@ -166,6 +166,10 @@ export class PhoneScene implements FrameTarget {
   readonly #turn = new THREE.Group();
   readonly #modelRotation = new ModelRotation();
   readonly #turnCentre = new THREE.Vector3();
+  readonly #turnEuler = new THREE.Euler(0, 0, 0, "XYZ");
+  readonly #turnRotation = new THREE.Matrix4();
+  readonly #turnBack = new THREE.Matrix4();
+  readonly #turnScale = new THREE.Vector3();
   readonly #pivot = new THREE.Group();
   readonly #overlayScene = new THREE.Scene();
   readonly #overlayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10, 10);
@@ -659,21 +663,27 @@ export class PhoneScene implements FrameTarget {
 
   /**
    * Turns the model about the centre of its current pose, taken with the
-   * turn undone so the centre does not wander as it turns. At rest the turn
-   * is the identity, which leaves every matrix below it bit for bit as
-   * without it.
+   * turn undone so the centre does not wander as it turns. The work view's
+   * window keeps its size, so there the turned model shrinks to fit it; the
+   * showcase frames the whole turning sphere, so the shrink fades out with
+   * the blend. At rest the turn is the identity, which leaves every matrix
+   * below it bit for bit as without it.
    */
   #placeTurn(model: FoldModel): void {
     const turn = this.#turn;
     turn.matrix.identity();
-    model.poseBox(this.#poseBox).getCenter(this.#turnCentre);
-    const { yaw, pitch } = this.#turnPose;
-    if (yaw !== 0 || pitch !== 0) {
-      const c = this.#turnCentre;
-      const rotation = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-pitch), THREE.MathUtils.degToRad(yaw), 0, "XYZ"));
-      turn.matrix.makeTranslation(c.x, c.y, c.z).multiply(rotation).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
-    }
     turn.matrixWorldNeedsUpdate = true;
+    const box = model.poseBox(this.#poseBox);
+    const c = box.getCenter(this.#turnCentre);
+    const angles = this.#turnPose;
+    if (angles.yaw === 0 && angles.pitch === 0) return;
+    const camera = this.#camera;
+    const fit = turnFitScale(box, { minX: camera.left, maxX: camera.right, minY: camera.bottom, maxY: camera.top }, angles);
+    const scale = fit + (1 - fit) * this.#view.t;
+    this.#turnEuler.set(THREE.MathUtils.degToRad(-angles.pitch), THREE.MathUtils.degToRad(angles.yaw), 0);
+    this.#turnRotation.makeRotationFromEuler(this.#turnEuler).scale(this.#turnScale.setScalar(scale));
+    this.#turnBack.makeTranslation(-c.x, -c.y, -c.z);
+    turn.matrix.makeTranslation(c.x, c.y, c.z).multiply(this.#turnRotation).multiply(this.#turnBack);
   }
 
   #captureShadow(): void {

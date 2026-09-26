@@ -1,5 +1,6 @@
+import * as THREE from "three";
 import { expect, test } from "vitest";
-import { clampModelAngles, MODEL_REST, ModelRotation, RotateGesture } from "../../src/shared/model-rotation";
+import { clampModelAngles, MODEL_REST, ModelRotation, RotateGesture, turnFitScale, turnPoint } from "../../src/shared/model-rotation";
 
 test("the angle follows the pointer's offset from the press point at 0.3 degrees per pixel, up tilting the top away", () => {
   const gesture = new RotateGesture();
@@ -154,4 +155,81 @@ test("setting the angle mid-reset stops the spring there", () => {
   rotation.set({ yaw: 10, pitch: 10 });
   expect(rotation.moving).toBe(false);
   expect(rotation.tick(500)).toEqual({ yaw: 10, pitch: 10 });
+});
+
+test("another kind of press between two Alt clicks breaks the double click", () => {
+  const gesture = new RotateGesture();
+  gesture.press({ x: 0, y: 0 }, MODEL_REST, 0);
+  gesture.release({ x: 0, y: 0 }, 20);
+  gesture.otherPress();
+  gesture.press({ x: 0, y: 0 }, MODEL_REST, 100);
+  expect(gesture.release({ x: 0, y: 0 }, 120)).toBe("keep");
+});
+
+test("turnPoint turns like the scene's Euler: -pitch about X after yaw about Y", () => {
+  const angles = { yaw: 24, pitch: 12 };
+  const matrix = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-angles.pitch), THREE.MathUtils.degToRad(angles.yaw), 0, "XYZ"));
+  for (const p of [
+    { x: 0.08, y: 0.07, z: 0.003 },
+    { x: -0.02, y: 0.05, z: -0.006 },
+  ]) {
+    const expected = new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(matrix);
+    const turned = turnPoint(p, angles);
+    expect(turned.x).toBeCloseTo(expected.x, 12);
+    expect(turned.y).toBeCloseTo(expected.y, 12);
+    expect(turned.z).toBeCloseTo(expected.z, 12);
+  }
+});
+
+/** The open phone in landscape, about 159 by 145 mm and 9 mm deep with the camera bump, filling its window. */
+const OPEN_LANDSCAPE = { min: { x: -0.0795, y: -0.0725, z: -0.006 }, max: { x: 0.0795, y: 0.0725, z: 0.003 } };
+const ITS_WINDOW = { minX: -0.0795, maxX: 0.0795, minY: -0.0725, maxY: 0.0725 };
+
+test("the fit is exactly 1 at rest, even for a box bigger than the frame", () => {
+  expect(turnFitScale(OPEN_LANDSCAPE, ITS_WINDOW, MODEL_REST)).toBe(1);
+  expect(turnFitScale(OPEN_LANDSCAPE, { minX: -0.01, maxX: 0.01, minY: -0.01, maxY: 0.01 }, { yaw: 0, pitch: 0 })).toBe(1);
+});
+
+test("an open landscape plate turned to 24,12 shrinks to keep its turned corners inside the window", () => {
+  const s = turnFitScale(OPEN_LANDSCAPE, ITS_WINDOW, { yaw: 24, pitch: 12 });
+  expect(s).toBeLessThan(0.97);
+  expect(s).toBeGreaterThan(0.85);
+  for (const x of [OPEN_LANDSCAPE.min.x, OPEN_LANDSCAPE.max.x]) {
+    for (const y of [OPEN_LANDSCAPE.min.y, OPEN_LANDSCAPE.max.y]) {
+      for (const z of [OPEN_LANDSCAPE.min.z, OPEN_LANDSCAPE.max.z]) {
+        const centreZ = (OPEN_LANDSCAPE.min.z + OPEN_LANDSCAPE.max.z) / 2;
+        const q = turnPoint({ x, y, z: z - centreZ }, { yaw: 24, pitch: 12 });
+        expect(Math.abs(q.x * s)).toBeLessThanOrEqual(ITS_WINDOW.maxX + 1e-12);
+        expect(Math.abs(q.y * s)).toBeLessThanOrEqual(ITS_WINDOW.maxY + 1e-12);
+      }
+    }
+  }
+});
+
+test("the fit is never above 1, and a box with room to spare is not shrunk", () => {
+  for (let yaw = -75; yaw <= 75; yaw += 15) {
+    for (let pitch = -60; pitch <= 60; pitch += 15) {
+      expect(turnFitScale(OPEN_LANDSCAPE, ITS_WINDOW, { yaw, pitch })).toBeLessThanOrEqual(1);
+    }
+  }
+  const roomy = { minX: -0.2, maxX: 0.2, minY: -0.2, maxY: 0.2 };
+  expect(turnFitScale(OPEN_LANDSCAPE, roomy, { yaw: 24, pitch: 12 })).toBe(1);
+});
+
+test("the fit tends to 1 as the angles go to 0, so the reset spring lands without a jump", () => {
+  let last = 0;
+  for (const k of [1, 0.5, 0.1, 0.01, 0.001]) {
+    const s = turnFitScale(OPEN_LANDSCAPE, ITS_WINDOW, { yaw: 24 * k, pitch: 12 * k });
+    expect(s).toBeGreaterThanOrEqual(last);
+    last = s;
+  }
+  expect(last).toBeGreaterThan(0.9995);
+});
+
+test("the fit allows each side the larger of the rest box and the frame, measured from the box centre", () => {
+  const deep = { min: { x: 0, y: -0.05, z: -0.03 }, max: { x: 0.1, y: 0.05, z: 0.03 } };
+  const tilted = { yaw: 0, pitch: 30 };
+  expect(turnFitScale(deep, { minX: 0, maxX: 0.1, minY: -0.05, maxY: 0.05 }, tilted)).toBeLessThan(0.9);
+  expect(turnFitScale(deep, { minX: 0, maxX: 0.1, minY: -0.2, maxY: 0.2 }, tilted)).toBe(1);
+  expect(turnFitScale(deep, { minX: 0, maxX: 0.1, minY: -0.05, maxY: 0.2 }, tilted)).toBeLessThan(0.9);
 });

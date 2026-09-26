@@ -31,7 +31,7 @@ interface Stats {
   settled: boolean;
   angle: number | null;
   brightness: { cover: number; inner: number };
-  view: { target: string; t: number; active: boolean };
+  view: { t: number; active: boolean };
   modelRotation: { yaw: number; pitch: number };
   turn?: unknown;
   rotation: number;
@@ -93,10 +93,25 @@ async function frames(page: Page, count: number): Promise<void> {
   );
 }
 
-async function toggleView(page: Page): Promise<void> {
+/** MOD+d: turns the phone back to straight on. */
+async function center(page: Page): Promise<void> {
   await page.keyboard.down("Alt");
   await page.keyboard.press("KeyD");
   await page.keyboard.up("Alt");
+}
+
+function pressAt(page: Page, x: number, y: number): Promise<string> {
+  return page.evaluate(([x, y]) => (window as unknown as { __hinge: { pressAt(x: number, y: number): string } }).__hinge.pressAt(x, y), [x, y]);
+}
+
+/** A point on the left side of the case halfway down: halfway across the bezel beside a lit screen, or a few pixels in when nothing is lit there. */
+async function sideOfCase(page: Page, s: Stats): Promise<{ x: number; y: number }> {
+  const y = s.window.h / 2;
+  let end = 0;
+  while (end < 12 && (await pressAt(page, end, y)) === "turn") end++;
+  const x = Math.min(end / 2, 6);
+  expect(await pressAt(page, x, y), `the side of the case at ${x}, ${y}`).toBe("turn");
+  return { x, y };
 }
 
 /** The opaque bounding box in CSS px, how much of each outermost row and column is opaque, and how many pixels differ from `other`. */
@@ -191,36 +206,31 @@ function targetFor(sweep: Sweep, k: number): { dx: number; dy: number; yaw: numb
 }
 
 /**
- * Every sweep here turns the phone by Alt+dragging from the work view: the
- * first press switches it to the showcase (the only view that can still be
- * turned), and later sweeps in the same run start already there. `restEdges`
- * is the showcase's own straight-on rest framing, measured once up front, so
- * a turned frame is judged against a stable baseline rather than one caught
- * mid-transition.
+ * Every sweep here turns the phone by dragging the left side of its case,
+ * starting straight on, and Center brings it back after each. `restEdges` is
+ * the straight-on framing, measured once up front.
  */
-async function sweepInShowcase(app: ElectronApplication, page: Page, dir: string, records: Record[], restEdges: Edges): Promise<void> {
+async function sweepFromSide(app: ElectronApplication, page: Page, dir: string, records: Record[], restEdges: Edges): Promise<void> {
   for (const sweep of SWEEPS) {
-    const start = await waitFor(page, "rest before a sweep", (s) => s.modelRotation.yaw === 0 && s.modelRotation.pitch === 0 && !s.view.active, 10_000);
-    const centre = { x: start.window.w / 2, y: start.window.h / 2 };
-    await page.mouse.move(centre.x, centre.y);
-    await page.keyboard.down("Alt");
-    await page.mouse.down();
-    await waitFor(page, "the showcase settled for the sweep", (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 20_000);
+    await waitFor(page, "rest before a sweep", (s) => s.modelRotation.yaw === 0 && s.modelRotation.pitch === 0 && !s.view.active, 10_000);
+    const side = await sideOfCase(page, await windowAtRest(page));
     const restCentre = await windowCentre(app);
+    await page.mouse.move(side.x, side.y);
+    await page.mouse.down();
     let previous: Record | null = null;
     const steps = sweep.maxDeg / STEP_DEG;
     for (let k = 0; k <= steps; k++) {
       const { dx, dy, yaw, pitch } = targetFor(sweep, k);
-      await page.mouse.move(centre.x + dx, centre.y + dy, { steps: 2 });
+      await page.mouse.move(side.x + dx, side.y + dy, { steps: 2 });
       await windowAtRest(page);
-      const first = await page.screenshot({ path: join(dir, `showcase-${sweep.name}-${String(k).padStart(2, "0")}.png`) });
+      const first = await page.screenshot({ path: join(dir, `turn-${sweep.name}-${String(k).padStart(2, "0")}.png`) });
       await frames(page, 4);
       const second = await page.screenshot();
       const s = (await stats(page))!;
       const { box, edges, differing } = await measure(page, first, second);
-      const record: Record = { view: "showcase", sweep: sweep.name, target: { yaw, pitch }, angles: s.modelRotation, window: s.window, box, edges, shake: differing, turn: s.turn };
+      const record: Record = { view: "ended", sweep: sweep.name, target: { yaw, pitch }, angles: s.modelRotation, window: s.window, box, edges, shake: differing, turn: s.turn };
       records.push(record);
-      const where = `showcase ${sweep.name} at ${JSON.stringify({ yaw, pitch })}`;
+      const where = `${sweep.name} at ${JSON.stringify({ yaw, pitch })}`;
       expect.soft(Math.abs(s.modelRotation.yaw - yaw), `${where}: yaw follows`).toBeLessThan(0.5);
       expect.soft(Math.abs(s.modelRotation.pitch - pitch), `${where}: pitch follows`).toBeLessThan(0.5);
       expect.soft(box, `${where}: the phone is visible`).not.toBeNull();
@@ -237,15 +247,12 @@ async function sweepInShowcase(app: ElectronApplication, page: Page, dir: string
       previous = record;
     }
     await page.mouse.up();
-    await page.keyboard.up("Alt");
-    await page.keyboard.down("Alt");
-    await page.mouse.dblclick(centre.x, centre.y);
-    await page.keyboard.up("Alt");
+    await center(page);
   }
 }
 
 for (const scaleFactor of [1, 1.25]) {
-  test(`sweeping the Alt+drag turn over the full 360 degree yaw range keeps the phone visible, still and inside the window (scale ${scaleFactor})`, async () => {
+  test(`sweeping a turn by the case's side over the full 360 degree yaw range keeps the phone visible, still and inside the window (scale ${scaleFactor})`, async () => {
     test.skip(softwareGl && scaleFactor !== 1, "one scale factor is enough on a software GL");
     test.setTimeout(600_000);
     const userData = await mkdtemp(join(tmpdir(), "hinge-e2e-"));
@@ -273,28 +280,15 @@ for (const scaleFactor of [1, 1.25]) {
       );
       await frames(page, 5);
       const workRestBefore = await page.screenshot({ path: join(dir, "work-rest-before.png") });
+      const { box: restBox, edges: restEdges } = await measure(page, workRestBefore, null);
+      expect(restBox).not.toBeNull();
 
-      // The showcase's own rest, straight on, captured before any turn ever happens.
-      await toggleView(page);
-      const showcaseRestStats = await waitFor(page, "the showcase at rest", (s) => s.view.t === 1 && !s.view.active && s.settled && s.laidOut, 20_000);
-      await frames(page, 5);
-      const showcaseRestShot = await page.screenshot({ path: join(dir, "showcase-rest.png") });
-      const { box: showcaseRestBox, edges: showcaseRestEdges } = await measure(page, showcaseRestShot, null);
-      expect(showcaseRestBox).not.toBeNull();
-      const restCentreX = showcaseRestBox!.x + showcaseRestBox!.w / 2;
-      expect(Math.abs(restCentreX - showcaseRestStats.window.w / 2)).toBeLessThan(showcaseRestStats.window.w * 0.02);
+      await sweepFromSide(app, page, dir, records, restEdges);
 
-      // Back to the work view, so the sweep's first press exercises switching into the showcase.
-      await toggleView(page);
-      await waitFor(page, "the work view again", (s) => s.view.target === "work" && s.view.t === 0 && !s.view.active && s.laidOut, 20_000);
-
-      await sweepInShowcase(app, page, dir, records, showcaseRestEdges);
-
-      await toggleView(page);
       await waitFor(
         page,
         "the work view after the sweep, front-on",
-        (s) => s.view.target === "work" && s.view.t === 0 && !s.view.active && s.settled && s.laidOut && s.modelRotation.yaw === 0 && s.modelRotation.pitch === 0,
+        (s) => s.view.t === 0 && !s.view.active && s.settled && s.laidOut && s.modelRotation.yaw === 0 && s.modelRotation.pitch === 0,
         20_000,
       );
       await frames(page, 5);
@@ -352,18 +346,16 @@ interface LiveSample {
  */
 async function liveSweep(page: Page, pose: LivePose, sweep: Sweep, part: number, dir: string, records: Record[], poseSeenMs: number): Promise<void> {
   const start = (await stats(page))!;
-  const centre = { x: start.window.w / 2, y: start.window.h / 2 };
-  await page.mouse.move(centre.x, centre.y);
-  await page.keyboard.down("Alt");
+  const side = await sideOfCase(page, start);
+  await page.mouse.move(side.x, side.y);
   await page.mouse.down();
-  await waitFor(page, "the showcase settled for the live sweep", (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active && s.laidOut, 20_000);
   const taken: LiveSample[] = [];
   const steps = sweep.maxDeg / STEP_DEG;
   const stride = Math.max(1, Math.round(15 / STEP_DEG));
   const sampled = (k: number) => Math.min(pose.parts - 1, Math.floor((k / (steps + stride)) * pose.parts)) === part;
   for (let k = 0; k <= steps; k += stride) {
     const { dx, dy, yaw, pitch } = targetFor(sweep, k);
-    await page.mouse.move(centre.x + dx, centre.y + dy, { steps: 2 });
+    await page.mouse.move(side.x + dx, side.y + dy, { steps: 2 });
     await windowAtRest(page);
     if (!sampled(k)) continue;
     const sample: LiveSample = { k, atMs: Date.now() - poseSeenMs, yaw, pitch, shots: [], samples: [] };
@@ -377,7 +369,6 @@ async function liveSweep(page: Page, pose: LivePose, sweep: Sweep, part: number,
     taken.push(sample);
   }
   await page.mouse.up();
-  await page.keyboard.up("Alt");
 
   for (const { k, atMs, yaw, pitch, shots, samples } of taken) {
     const boxes = await Promise.all(shots.map((png) => boxOf(page, png)));

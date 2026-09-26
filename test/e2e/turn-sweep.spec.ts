@@ -65,6 +65,24 @@ async function windowAtRest(page: Page): Promise<Stats> {
   throw new Error(`the window kept resizing; last ${JSON.stringify(previous.window)}`);
 }
 
+function contentBounds(app: ElectronApplication): Promise<{ x: number; y: number; width: number; height: number }> {
+  return app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentBounds());
+}
+
+/** Puts the pointer on a point of the screen, wherever the window has moved to under it, as a real mouse would be. */
+async function moveOnScreen(app: ElectronApplication, page: Page, point: { x: number; y: number }, steps = 1): Promise<void> {
+  const origin = await contentBounds(app);
+  await page.mouse.move(point.x - origin.x, point.y - origin.y, { steps });
+}
+
+/** Waits for the window to give back a turn's room, which it does once the phone has been straight on for a moment. */
+async function windowBackTo(app: ElectronApplication, rest: { x: number; y: number; width: number; height: number }): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  let now = await contentBounds(app);
+  while (Date.now() < deadline && JSON.stringify(now) !== JSON.stringify(rest)) now = await contentBounds(app);
+  expect(now, "the window gives the room back once the phone is straight on").toEqual(rest);
+}
+
 /** The window's centre on the screen, which a turn's room grows the window evenly around. */
 async function windowCentre(app: ElectronApplication): Promise<{ x: number; y: number }> {
   const b = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentBounds());
@@ -202,6 +220,8 @@ async function sweepInShowcase(app: ElectronApplication, page: Page, dir: string
   for (const sweep of SWEEPS) {
     const start = await waitFor(page, "rest before a sweep", (s) => s.modelRotation.yaw === 0 && s.modelRotation.pitch === 0 && !s.view.active, 10_000);
     const centre = { x: start.window.w / 2, y: start.window.h / 2 };
+    const origin = await contentBounds(app);
+    const onScreen = { x: origin.x + centre.x, y: origin.y + centre.y };
     await page.mouse.move(centre.x, centre.y);
     await page.keyboard.down("Alt");
     await page.mouse.down();
@@ -211,7 +231,7 @@ async function sweepInShowcase(app: ElectronApplication, page: Page, dir: string
     const steps = sweep.maxDeg / STEP_DEG;
     for (let k = 0; k <= steps; k++) {
       const { dx, dy, yaw, pitch } = targetFor(sweep, k);
-      await page.mouse.move(centre.x + dx, centre.y + dy, { steps: 2 });
+      await moveOnScreen(app, page, { x: onScreen.x + dx, y: onScreen.y + dy }, 2);
       await windowAtRest(page);
       const first = await page.screenshot({ path: join(dir, `showcase-${sweep.name}-${String(k).padStart(2, "0")}.png`) });
       await frames(page, 4);
@@ -238,9 +258,11 @@ async function sweepInShowcase(app: ElectronApplication, page: Page, dir: string
     }
     await page.mouse.up();
     await page.keyboard.up("Alt");
+    const released = await contentBounds(app);
     await page.keyboard.down("Alt");
-    await page.mouse.dblclick(centre.x, centre.y);
+    await page.mouse.dblclick(onScreen.x - released.x, onScreen.y - released.y);
     await page.keyboard.up("Alt");
+    await windowBackTo(app, origin);
   }
 }
 
@@ -307,6 +329,81 @@ for (const scaleFactor of [1, 1.25]) {
   });
 }
 
+interface DragSample {
+  dx: number;
+  yaw: number;
+  pitch: number;
+  bounds: { x: number; y: number; width: number; height: number };
+}
+
+/**
+ * Pointer offsets on the screen for a drag out to the right and back past
+ * the start to the left, a frame apart: the two directions in which the
+ * window growing under a pointer read in window coordinates once ran the
+ * turn away and made it shake.
+ */
+const DRAG_OFFSETS_PX = [...Array.from({ length: 12 }, (_, i) => 15 * (i + 1)), ...Array.from({ length: 24 }, (_, i) => 180 - 15 * (i + 1))];
+
+for (const scaleFactor of [1, 1.25]) {
+  test(`an Alt+drag turns by the pointer's travel on the screen and never resizes the window mid-turn (scale ${scaleFactor})`, async () => {
+    test.skip(softwareGl && scaleFactor !== 1, "one scale factor is enough on a software GL");
+    test.setTimeout(300_000);
+    const userData = await mkdtemp(join(tmpdir(), "hinge-e2e-"));
+    const args = [
+      resolve("out/main/index.js"),
+      "--replay",
+      resolve("test/fixtures/synthetic-fold.hrec"),
+      "--user-data",
+      userData,
+      `--force-device-scale-factor=${scaleFactor}`,
+      ...(softwareGl ? ["--use-gl=angle", "--use-angle=swiftshader"] : []),
+      "--no-sandbox",
+    ];
+    const app = await electron.launch({ args });
+    const page = await app.firstWindow();
+    const samples: DragSample[] = [];
+    try {
+      const open = await waitFor(page, "the replay to end, open", (s) => s.lit === null && s.settled && s.laidOut && s.angle === 180 && s.window.w > s.window.h, 90_000);
+      const rest = await contentBounds(app);
+      const centre = { x: open.window.w / 2, y: open.window.h / 2 };
+      const onScreen = { x: rest.x + centre.x, y: rest.y + centre.y };
+      await page.mouse.move(centre.x, centre.y);
+      await page.keyboard.down("Alt");
+      await page.mouse.down();
+      await waitFor(page, "the showcase settled for the drag", (s) => s.view.target === "showcase" && s.view.t === 1 && !s.view.active, 20_000);
+      for (const dx of DRAG_OFFSETS_PX) {
+        await moveOnScreen(app, page, { x: onScreen.x + dx, y: onScreen.y });
+        await frames(page, 1);
+        const s = (await stats(page))!;
+        samples.push({ dx, yaw: s.modelRotation.yaw, pitch: s.modelRotation.pitch, bounds: await contentBounds(app) });
+      }
+      await page.mouse.up();
+      await page.keyboard.up("Alt");
+
+      for (const { dx, yaw, pitch } of samples) {
+        expect.soft(Math.abs(yaw - 0.3 * dx), `at ${dx} px: the yaw follows the pointer on the screen`).toBeLessThan(0.5);
+        expect.soft(Math.abs(pitch), `at ${dx} px: a sideways drag does not tip the phone`).toBeLessThan(0.5);
+      }
+      const grown = samples.findIndex((sample) => sample.bounds.width !== rest.width || sample.bounds.height !== rest.height);
+      expect(grown, "the window grows for the turn").toBeGreaterThanOrEqual(0);
+      const room = samples[grown].bounds;
+      for (const { dx, bounds } of samples.slice(grown)) expect.soft(bounds, `at ${dx} px: the window holds still while the phone turns`).toEqual(room);
+      expect(Math.abs(room.x + room.width / 2 - (rest.x + rest.width / 2)), "the window grows evenly around the phone").toBeLessThanOrEqual(1);
+      expect(Math.abs(room.y + room.height / 2 - (rest.y + rest.height / 2)), "the window grows evenly around the phone").toBeLessThanOrEqual(1);
+
+      await page.keyboard.down("Alt");
+      await page.mouse.dblclick(onScreen.x - room.x, onScreen.y - room.y);
+      await page.keyboard.up("Alt");
+      await waitFor(page, "the turn back at rest", (s) => s.modelRotation.yaw === 0 && s.modelRotation.pitch === 0, 10_000);
+      await windowBackTo(app, rest);
+    } finally {
+      await mkdir("test-results", { recursive: true });
+      await writeFile(`test-results/turn-drag-${scaleFactor}.json`, JSON.stringify(samples, null, 1));
+      await app.close();
+    }
+  });
+}
+
 /** The opaque box of a screenshot, in CSS px; the live video changes colours but never alpha. */
 async function boxOf(page: Page, png: Buffer): Promise<Box | null> {
   return (await measure(page, png, null)).box;
@@ -350,9 +447,11 @@ interface LiveSample {
  * Only the steps of `part` (of `pose.parts`) are sampled; the drag still
  * passes through the earlier ones on its way there.
  */
-async function liveSweep(page: Page, pose: LivePose, sweep: Sweep, part: number, dir: string, records: Record[], poseSeenMs: number): Promise<void> {
+async function liveSweep(app: ElectronApplication, page: Page, pose: LivePose, sweep: Sweep, part: number, dir: string, records: Record[], poseSeenMs: number): Promise<void> {
   const start = (await stats(page))!;
   const centre = { x: start.window.w / 2, y: start.window.h / 2 };
+  const origin = await contentBounds(app);
+  const onScreen = { x: origin.x + centre.x, y: origin.y + centre.y };
   await page.mouse.move(centre.x, centre.y);
   await page.keyboard.down("Alt");
   await page.mouse.down();
@@ -363,7 +462,7 @@ async function liveSweep(page: Page, pose: LivePose, sweep: Sweep, part: number,
   const sampled = (k: number) => Math.min(pose.parts - 1, Math.floor((k / (steps + stride)) * pose.parts)) === part;
   for (let k = 0; k <= steps; k += stride) {
     const { dx, dy, yaw, pitch } = targetFor(sweep, k);
-    await page.mouse.move(centre.x + dx, centre.y + dy, { steps: 2 });
+    await moveOnScreen(app, page, { x: onScreen.x + dx, y: onScreen.y + dy }, 2);
     await windowAtRest(page);
     if (!sampled(k)) continue;
     const sample: LiveSample = { k, atMs: Date.now() - poseSeenMs, yaw, pitch, shots: [], samples: [] };
@@ -417,7 +516,7 @@ for (const pose of LIVE_POSES) {
         const records: Record[] = [];
         try {
           await waitFor(page, `the ${pose.name} pose streaming`, pose.matches, 45_000);
-          await liveSweep(page, pose, sweep, part, dir, records, Date.now());
+          await liveSweep(app, page, pose, sweep, part, dir, records, Date.now());
         } finally {
           await writeFile(join(dir, `records-${pose.name}-${sweep.name}-${part + 1}.json`), JSON.stringify(records, null, 1));
           await app.close();

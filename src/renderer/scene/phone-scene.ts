@@ -314,6 +314,12 @@ export class PhoneScene implements FrameTarget {
     return this.#turnRoom;
   }
 
+  /** Whether the phone was last drawn neither turned nor orbited. */
+  straightOn(): boolean {
+    const { turn, yaw, pitch } = this.#rendered;
+    return turn.yaw === MODEL_REST.yaw && turn.pitch === MODEL_REST.pitch && yaw === SHOWCASE_REST.yaw && pitch === SHOWCASE_REST.pitch;
+  }
+
   /** How far, in CSS px, the phone could reach past the work view's window on each side, however it is turned or orbited. */
   turnReserve(): Pad {
     return this.#turnReserve;

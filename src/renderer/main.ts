@@ -166,7 +166,7 @@ function sizeWindow(out: DirectorOutput, rotation: Rotation, view: ViewState): v
   const work = withPanel(deviceAlignedSize(size, dpr), chrome.neededWindow(), dpr);
   const showcase = view.t > 0 || view.active;
   if (!showcase) heldRoom.release();
-  const room = showcase ? deviceAlignedPad(work, heldRoom.update(scene.turnRoom(), scene.turnReserve(), performance.now()), dpr) : NO_PAD;
+  const room = showcase ? deviceAlignedPad(work, heldRoom.update({ need: scene.turnRoom(), straightOn: scene.straightOn() }, scene.turnReserve(), performance.now()), dpr) : NO_PAD;
   windowSizer.update(work, rotation, out.settled, room);
   scene.setWorkSize(showcase ? windowSizer.requested : null);
 }

@@ -6,33 +6,41 @@ function needsRoom(need: Pad): boolean {
   return need.x > 0 || need.y > 0;
 }
 
+/** need: how far the phone reaches past the work view's window now; straightOn: neither turned nor orbited. */
+export interface TurnPose {
+  need: Pad;
+  straightOn: boolean;
+}
+
 /**
  * The room the window keeps around a turned (or orbited) phone. Growing the
  * window evenly moves its top left corner, and Windows shows the page's
  * last frame at the new corner for a refresh before the resized page
  * arrives, so every resize during a turn jolts the phone on screen. The room
  * is therefore taken all at once, as much as any turn could need, on the
- * first frame a turn needs any, held while the phone turns, and given back
- * only once the phone has fitted the work view's window for a while.
+ * first frame a turn needs any, held for as long as the phone is turned,
+ * and given back once it has been straight on for a moment.
  */
 export class TurnRoom {
   #held: Pad = NO_PAD;
-  #fitSinceMs: number | null = null;
+  #straightSinceMs: number | null = null;
 
-  /** need: how far the phone reaches past the work view's window now; reserve: the furthest any turn could reach. */
-  update(need: Pad, reserve: Pad, nowMs: number): Pad {
-    if (needsRoom(need)) {
-      this.#fitSinceMs = null;
-      this.#held = { x: Math.max(need.x, reserve.x), y: Math.max(need.y, reserve.y) };
-    } else if (needsRoom(this.#held)) {
-      this.#fitSinceMs ??= nowMs;
-      if (nowMs - this.#fitSinceMs >= GIVE_BACK_AFTER_MS) this.release();
+  /** reserve: the furthest past the work view's window any turn could reach. */
+  update(pose: TurnPose, reserve: Pad, nowMs: number): Pad {
+    const holding = needsRoom(this.#held);
+    if (!holding && !needsRoom(pose.need)) return this.#held;
+    if (!pose.straightOn || needsRoom(pose.need)) {
+      this.#straightSinceMs = null;
+      this.#held = { x: Math.max(pose.need.x, reserve.x), y: Math.max(pose.need.y, reserve.y) };
+      return this.#held;
     }
+    this.#straightSinceMs ??= nowMs;
+    if (nowMs - this.#straightSinceMs >= GIVE_BACK_AFTER_MS) this.release();
     return this.#held;
   }
 
   release(): void {
     this.#held = NO_PAD;
-    this.#fitSinceMs = null;
+    this.#straightSinceMs = null;
   }
 }

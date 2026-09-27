@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
 export default defineConfig({
@@ -6,5 +7,14 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: { rollupOptions: { output: { format: "cjs", entryFileNames: "[name].cjs" } } },
   },
-  renderer: {},
+  renderer: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(import.meta.dirname, "src/renderer/index.html"),
+          popout: resolve(import.meta.dirname, "src/renderer/popout.html"),
+        },
+      },
+    },
+  },
 });

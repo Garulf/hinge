@@ -102,13 +102,20 @@ function isAltGrText(e: KeyEventLike): boolean {
 export class ShortcutHandler {
   readonly #modifiers: Pick<ModifierTracker, "held">;
   readonly #accepted: () => readonly ModifierKey[];
+  readonly #allows: (code: string, shift: boolean) => boolean;
   readonly #heldKeys = new Map<string, number>();
   #lastPress: { code: string; shift: boolean } | null = null;
   #pressCount = 0;
 
-  constructor(modifiers: Pick<ModifierTracker, "held">, accepted: () => readonly ModifierKey[] = () => DEFAULT_MODIFIERS) {
+  /** A MOD combo that `allows` refuses is treated as unmapped. */
+  constructor(
+    modifiers: Pick<ModifierTracker, "held">,
+    accepted: () => readonly ModifierKey[] = () => DEFAULT_MODIFIERS,
+    allows: (code: string, shift: boolean) => boolean = () => true,
+  ) {
     this.#modifiers = modifiers;
     this.#accepted = accepted;
+    this.#allows = allows;
   }
 
   modHeld(): boolean {
@@ -134,7 +141,7 @@ export class ShortcutHandler {
     }
 
     if (!this.modHeld() || isAltGrText(e)) return null;
-    const binding = bindingFor(e.code, e.shiftKey);
+    const binding = this.#allows(e.code, e.shiftKey) ? bindingFor(e.code, e.shiftKey) : undefined;
     if (!binding) return { intents: [], action: null, claimed: false };
     if (!down) return NOTHING;
 

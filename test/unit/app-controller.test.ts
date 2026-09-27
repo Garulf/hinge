@@ -154,6 +154,27 @@ test("forwards transfer-progress from the sink to the port, and routes a drop-fi
   });
 });
 
+test("pop-out and app requests from the main window go to onRendererMessage, never to the source's control", () => {
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: () => {}, onMessage: (fn) => { handler = fn; } };
+  const controls: ControlIntent[] = [];
+  const received: RendererToMain[] = [];
+  bindSource({ start: async () => {}, control: (i) => controls.push(i), stop: async () => {} }, port, { onRendererMessage: (m) => received.push(m) });
+
+  const requests: RendererToMain[] = [
+    { kind: "popout-open", pkg: "com.example.chat" },
+    { kind: "popout-current" },
+    { kind: "apps-request" },
+    { kind: "create-shortcut", pkg: "com.example.chat" },
+  ];
+  for (const m of requests) handler(m);
+  handler({ kind: "viewport", width: 1, height: 2, dpr: 1 });
+  handler({ kind: "retry" });
+
+  expect(received).toEqual(requests);
+  expect(controls).toEqual([]);
+});
+
 test("DeviceSource.transfer() forwards to the current session and is a no-op with no session connected", async () => {
   const watcher = fakeWatcher();
   const transferred: string[][] = [];

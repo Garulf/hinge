@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { Adb } from "@yume-chan/adb";
 import type { PostureReading } from "../shared/posture";
-import type { AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
+import type { AppRequest, AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
 import type { MediaSink, MediaSource } from "./media-source";
 import { dedupeDevices, deviceIdentity, deviceStatus, pickDevice, transportOf, type DeviceSummary } from "./transport";
@@ -41,7 +41,13 @@ function errorResult(type: DeviceCommand["type"], message: string): DeviceComman
  * followed by the last posture reading so the fold pose comes back too, and
  * the live audio stream's start and configuration packet.
  */
-export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath?: string; onStatus?: (status: SessionStatus) => void }): MediaSink {
+export interface BindSourceOptions {
+  logPath?: string;
+  onStatus?: (status: SessionStatus) => void;
+  onRendererMessage?: (msg: AppRequest) => void;
+}
+
+export function bindSource(source: MediaSource, port: PortLike, opts?: BindSourceOptions): MediaSink {
   const logHint = opts?.logPath ? `(log: ${basename(opts.logPath)})` : "";
 
   function post(msg: MainToRenderer): void {
@@ -121,7 +127,12 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
         .catch((e) => post({ kind: "device-command-result", id: msg.id, result: errorResult(msg.command.type, String(e)) }));
       return;
     }
-    source.control(msg.intent);
+    if (msg.kind === "control") {
+      source.control(msg.intent);
+      return;
+    }
+    if (msg.kind === "viewport" || msg.kind === "retry") return;
+    opts?.onRendererMessage?.(msg);
   });
 
   return sink;

@@ -1,12 +1,23 @@
 import { join } from "node:path";
-import { BrowserWindow, MessageChannelMain, ipcMain, screen } from "electron";
-import type { MessagePortMain } from "electron";
+import { BrowserWindow, ipcMain, screen, type WebPreferences } from "electron";
 import type { PortLike } from "./app-controller";
-import type { MainToRenderer, RendererToMain } from "../shared/wire";
 import type { Rotation } from "../shared/screen-uv";
 import { appIconPath } from "./app-icon";
+import { trackedPort } from "./tracked-port";
 import { NO_PAD, type Pad } from "../shared/layout";
 import { WindowPlacer } from "./window-resize";
+
+/** Shared by every hinge page: the preload's port hand-over and its window.hinge API. */
+export function pageWebPreferences(): WebPreferences {
+  return { preload: join(import.meta.dirname, "../preload/index.cjs"), sandbox: false };
+}
+
+/** Loads one of the renderer's pages: the dev server's in development, the built file otherwise. */
+export function loadPage(win: BrowserWindow, page: "index.html" | "popout.html"): void {
+  const devServer = process.env.ELECTRON_RENDERER_URL;
+  if (devServer) void win.loadURL(page === "index.html" ? devServer : `${devServer}/${page}`);
+  else void win.loadFile(join(import.meta.dirname, "../renderer", page));
+}
 
 /** onMoved fires when a drag ends or the window system reports a finished move. */
 export function createPhoneWindow(opts?: { onMoved?: () => void }): { win: BrowserWindow; port: PortLike } {
@@ -23,48 +34,16 @@ export function createPhoneWindow(opts?: { onMoved?: () => void }): { win: Brows
     title: "hinge",
     icon: appIconPath(),
     show: false,
-    webPreferences: { preload: join(import.meta.dirname, "../preload/index.cjs"), sandbox: false },
+    webPreferences: pageWebPreferences(),
   });
   win.once("ready-to-show", () => win.show());
-  if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else void win.loadFile(join(import.meta.dirname, "../renderer/index.html"));
+  loadPage(win, "index.html");
 
   const port = trackedPort(win);
 
   registerWindowIpc(win, opts?.onMoved ?? (() => {}));
 
   return { win, port };
-}
-
-/**
- * A MessagePortMain can only be transferred once, and a reloaded page (a
- * crash, Ctrl+R, or a future update) gets a brand new JS context that has
- * lost its old one, so a fresh channel has to be handed over on every
- * did-finish-load, not just the first. bindSource() must keep working
- * against a single stable PortLike across that swap.
- */
-function trackedPort(win: BrowserWindow): PortLike {
-  let current: MessagePortMain | null = null;
-  const handlers: Array<(msg: RendererToMain) => void> = [];
-
-  function attach(): void {
-    const { port1, port2 } = new MessageChannelMain();
-    current = port1;
-    port1.on("message", (e) => {
-      for (const fn of handlers) fn(e.data as RendererToMain);
-    });
-    port1.start();
-    win.webContents.postMessage("hinge:port", null, [port2]);
-  }
-
-  win.webContents.on("did-finish-load", attach);
-
-  return {
-    postMessage: (msg: MainToRenderer) => current?.postMessage(msg),
-    onMessage: (fn: (msg: RendererToMain) => void) => {
-      handlers.push(fn);
-    },
-  };
 }
 
 function registerWindowIpc(win: BrowserWindow, onMoved: () => void): void {

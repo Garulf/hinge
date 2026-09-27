@@ -1,16 +1,17 @@
 import * as THREE from "three";
 import { caseGrip, type Grip } from "../../shared/case-grip";
-import { KeyTracker, type KeyEventLike } from "../../shared/keymap";
 import { RotateGesture, type Point } from "../../shared/model-rotation";
-import { ModifierTracker, type ModifierKey } from "../../shared/modifiers";
+import type { ModifierKey } from "../../shared/modifiers";
 import { WheelSteps } from "../../shared/scale";
-import { isWheelNotch, ScrollSmoother, wheelToScroll, type ChromiumWheelDeltas } from "../../shared/scroll-smoother";
 import { insideScreenMask, screenUvToStream } from "../../shared/screen-uv";
-import { DEFAULT_MODIFIERS, ShortcutHandler, type HingeAction } from "../../shared/shortcuts";
-import { streamToDevice, TouchTracker, type PointerEventLike, type StreamPoint } from "../../shared/touch";
-import { WheelSwipe } from "../../shared/wheel-swipe";
+import type { HingeAction } from "../../shared/shortcuts";
+import { TouchTracker, type PointerEventLike, type StreamPoint } from "../../shared/touch";
 import type { ControlIntent } from "../../shared/wire";
 import type { PhoneScene } from "../scene/phone-scene";
+import { KeyInput, keyEventLike } from "./key-input";
+import { WheelInput, type ScrollFeel } from "./wheel-input";
+
+export type { ScrollFeel } from "./wheel-input";
 
 const CHROME_FIELDS = "[data-chrome] input, [data-chrome] select, [data-chrome] textarea";
 
@@ -42,18 +43,6 @@ export interface InputRouterOptions {
   requestFrame?: (callback: (time: number) => void) => void;
 }
 
-export interface ScrollFeel {
-  /** How long a notch sent as scroll events eases out over; 0 sends it at once. */
-  smoothingMs: number;
-  speed: number;
-  /** "swipe" moves a finger for each burst of notches; scroll events otherwise. A touchpad always sends scroll events. */
-  style?: "swipe" | "events";
-}
-
-const FRAME_MS = 1000 / 60;
-
-type ScrollTarget = Omit<Extract<ControlIntent, { type: "scroll" }>, "type" | "scrollX" | "scrollY">;
-
 /**
  * What a press does, fixed at pointerdown until release: a touch on the
  * phone, a window drag, a turn of the model, or nothing (pressed while
@@ -71,21 +60,13 @@ export class InputRouter {
   readonly #send: (intent: ControlIntent) => void;
   readonly #onAction: (action: HingeAction) => void;
   readonly #touch: TouchTracker;
-  readonly #keys = new KeyTracker();
-  readonly #modifiers = new ModifierTracker();
-  readonly #shortcuts: ShortcutHandler;
+  readonly #keys: KeyInput;
+  readonly #wheel: WheelInput;
   readonly #paused: () => boolean;
   readonly #wheelSteps = new WheelSteps();
   readonly #raycaster = new THREE.Raycaster();
   readonly #rotate = new RotateGesture();
   readonly #onRotated: (outcome: "moved" | "reset") => void;
-  readonly #scrolling: () => ScrollFeel;
-  readonly #requestFrame: (callback: (time: number) => void) => void;
-  readonly #scroll = new ScrollSmoother();
-  readonly #swipe = new WheelSwipe();
-  #swipeFrameWaiting = false;
-  #scrollTarget: ScrollTarget | null = null;
-  #scrollFrameAt: number | null = null;
   #press: PressMode | null = null;
   /** Whether the current rotate press has moved the model, so a plain click saves nothing. */
   #turned = false;
@@ -106,11 +87,16 @@ export class InputRouter {
     this.#send = send;
     this.#onAction = opts.onAction ?? (() => {});
     this.#touch = new TouchTracker(videoSize);
-    this.#shortcuts = new ShortcutHandler(this.#modifiers, opts.modifiers ?? (() => DEFAULT_MODIFIERS));
+    this.#keys = new KeyInput(opts.modifiers);
     this.#paused = opts.paused ?? (() => false);
     this.#onRotated = opts.onRotated ?? (() => {});
-    this.#scrolling = opts.scrolling ?? (() => ({ smoothingMs: 0, speed: 1 }));
-    this.#requestFrame = opts.requestFrame ?? ((callback) => requestAnimationFrame(callback));
+    this.#wheel = new WheelInput({
+      send,
+      videoSize,
+      scrolling: opts.scrolling ?? (() => ({ smoothingMs: 0, speed: 1 })),
+      halted: () => this.#scene.view().active || this.#paused(),
+      requestFrame: opts.requestFrame ?? ((callback) => requestAnimationFrame(callback)),
+    });
 
     canvas.addEventListener("pointerdown", (e) => this.#onPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.#onPointerMove(e));
@@ -123,7 +109,7 @@ export class InputRouter {
     window.addEventListener("keydown", (e) => this.#onKey(e));
     window.addEventListener("keyup", (e) => this.#onKey(e));
     window.addEventListener("blur", () => {
-      this.#modifiers.clear();
+      this.#keys.forgetModifiers();
       this.#releaseAll();
     });
   }
@@ -162,7 +148,7 @@ export class InputRouter {
       return;
     }
     this.#rotate.otherPress();
-    this.#cancelSwipe();
+    this.#wheel.cancelSwipe();
     this.#press = e.button === 0 ? "touch" : null;
     this.#dispatch({ kind: "down", button: e.button, buttons: e.buttons, hit, ctrl: e.ctrlKey, shift: e.shiftKey });
   }
@@ -211,9 +197,9 @@ export class InputRouter {
 
   /** Lets go of every touch and key the phone still has held, before focus is lost or the display pauses. */
   #releaseAll(): void {
-    this.#cancelSwipe();
+    this.#wheel.cancelSwipe();
     this.#cancelInteraction();
-    for (const intent of [...this.#shortcuts.flush(), ...this.#keys.flush()]) this.#send(intent);
+    for (const intent of this.#keys.release()) this.#send(intent);
   }
 
   /** Ends a drag or a turn and cancels a touch on blur, pointercancel and lostpointercapture. */
@@ -250,7 +236,7 @@ export class InputRouter {
   }
 
   #altHeld(): boolean {
-    return this.#modifiers.held("lalt") || this.#modifiers.held("ralt");
+    return this.#keys.held("lalt") || this.#keys.held("ralt");
   }
 
   /**
@@ -272,114 +258,29 @@ export class InputRouter {
   #onWheel(e: WheelEvent): void {
     e.preventDefault();
     if (this.#scene.view().active) return;
-    if (this.#shortcuts.modHeld()) {
+    if (this.#keys.modHeld()) {
       const steps = this.#wheelSteps.add(e.deltaY);
       for (let i = 0; i < Math.abs(steps); i++) this.#onAction(steps > 0 ? "scale-down" : "scale-up");
       return;
     }
     if (this.#paused()) return;
     const hit = this.#hitOf(e);
-    const size = this.#videoSize();
-    if (!hit || !size) return;
-    const feel = this.#scrolling();
-    const delta = wheelToScroll(e.deltaX, e.deltaY, feel.speed);
-    const notch = isWheelNotch(e as WheelEvent & ChromiumWheelDeltas);
-    if (notch && feel.style === "swipe" && this.#press !== "touch") {
-      this.#swipeNotch(delta, { x: hit.x * size.w, y: hit.y * size.h }, size, e.timeStamp);
-      return;
-    }
-    const point = streamToDevice(hit.x, hit.y, size.w, size.h);
-    this.#scrollTarget = { x: point.x, y: point.y, videoWidth: size.w, videoHeight: size.h, buttons: e.buttons };
-    this.#scroll.add(delta.x, delta.y);
-    if (this.#scrollFrameAt !== null) return;
-    this.#sendScroll(FRAME_MS, notch ? feel.smoothingMs : 0);
-    this.#scheduleScroll(e.timeStamp);
-  }
-
-  #swipeNotch(units: { x: number; y: number }, at: { x: number; y: number }, size: { w: number; h: number }, time: number): void {
-    for (const intent of this.#swipe.add(units, at, size, time)) this.#send(intent);
-    this.#requestSwipeFrame();
-  }
-
-  #requestSwipeFrame(): void {
-    if (this.#swipeFrameWaiting || !this.#swipe.busy) return;
-    this.#swipeFrameWaiting = true;
-    this.#requestFrame((time) => this.#onSwipeFrame(time));
-  }
-
-  /** The finger lets go without a fling when the view starts moving, the display pauses or the stream changes size under it. */
-  #onSwipeFrame(time: number): void {
-    this.#swipeFrameWaiting = false;
-    const held = this.#swipe.stream;
-    const size = this.#videoSize();
-    const streamChanged = held !== null && (size?.w !== held.w || size?.h !== held.h);
-    const stop = this.#scene.view().active || this.#paused() || streamChanged;
-    for (const intent of stop ? this.#swipe.cancel() : this.#swipe.frame(time)) this.#send(intent);
-    this.#requestSwipeFrame();
-  }
-
-  #cancelSwipe(): void {
-    for (const intent of this.#swipe.cancel()) this.#send(intent);
-  }
-
-  #scheduleScroll(sentAt: number): void {
-    if (this.#scroll.idle) {
-      this.#scrollFrameAt = null;
-      return;
-    }
-    this.#scrollFrameAt = sentAt;
-    this.#requestFrame((time) => this.#onScrollFrame(time));
-  }
-
-  /** A notch still easing out stops when the view starts moving or the display pauses, as a fresh wheel event would. */
-  #onScrollFrame(time: number): void {
-    if (this.#scene.view().active || this.#paused()) this.#scroll.clear();
-    else this.#sendScroll(Math.max(0, time - (this.#scrollFrameAt ?? time)), this.#scrolling().smoothingMs);
-    this.#scheduleScroll(time);
-  }
-
-  #sendScroll(elapsedMs: number, smoothingMs: number): void {
-    const target = this.#scrollTarget;
-    const slice = this.#scroll.take(elapsedMs, smoothingMs);
-    if (!target || (slice.x === 0 && slice.y === 0)) return;
-    this.#send({ type: "scroll", ...target, scrollX: slice.x, scrollY: slice.y });
+    if (hit) this.#wheel.wheel(e, hit, this.#press === "touch");
   }
 
   #onKey(e: KeyboardEvent): void {
-    const like: KeyEventLike = {
-      type: e.type as "keydown" | "keyup",
-      code: e.code,
-      key: e.key,
-      repeat: e.repeat,
-      ctrlKey: e.ctrlKey,
-      altKey: e.altKey,
-      metaKey: e.metaKey,
-      shiftKey: e.shiftKey,
-    };
-    this.#modifiers.handle(like);
+    const like = keyEventLike(e);
+    this.#keys.track(like);
     if (typedIntoChrome(e.target)) return;
-    // A key already held down on the phone stays the phone's until released,
-    // even if MOD is pressed meanwhile: its repeats and its up go to it.
-    const heldOnPhone = this.#keys.holds(like.code) && (like.type === "keyup" || like.repeat);
-    const shortcut = heldOnPhone ? null : this.#shortcuts.handle(like, this.#paused());
-    if (shortcut) {
-      if (shortcut.claimed) e.preventDefault();
-      for (const intent of shortcut.intents) this.#send(intent);
-      if (shortcut.action === "pause") this.#releaseAll();
-      if (shortcut.action === "center") {
-        this.#stopRotateForCenter();
-        this.#pauseForTransition();
-      }
-      if (shortcut.action) this.#onAction(shortcut.action);
-      return;
+    const outcome = this.#keys.route(like, this.#paused());
+    if (outcome.claimed) e.preventDefault();
+    for (const intent of outcome.intents) this.#send(intent);
+    if (outcome.action === "pause") this.#releaseAll();
+    if (outcome.action === "center") {
+      this.#stopRotateForCenter();
+      this.#pauseForTransition();
     }
-    if (this.#paused()) return;
-    const intents = this.#keys.handle(like);
-    // Only claim the key when it actually produced something to send to the
-    // phone; an unclaimed key (Alt+F4, Alt+Space, ...) must still reach the
-    // OS, which preventDefault() unconditionally blocked before.
-    if (intents.length > 0) e.preventDefault();
-    for (const intent of intents) this.#send(intent);
+    if (outcome.action) this.#onAction(outcome.action);
   }
 
   /** While paused the tracker never sees a press, so none can end or move after resuming without its down. */

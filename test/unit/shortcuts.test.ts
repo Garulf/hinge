@@ -149,6 +149,20 @@ test("an unmapped MOD combo is swallowed but left unclaimed, so the OS still see
   expect(feed(key("keydown", "KeyH", { altKey: true, shiftKey: true }))).toEqual({ intents: [], action: null, claimed: false });
 });
 
+test("a shortcut the filter refuses is swallowed like an unmapped combo and leaves no key held", () => {
+  const modifiers = new ModifierTracker();
+  const h = new ShortcutHandler(modifiers, () => normaliseModifiers(undefined), (code) => code === "KeyB");
+  const feed = (e: KeyEventLike) => {
+    modifiers.handle(e);
+    return h.handle(e, false);
+  };
+  feed(key("keydown", "AltLeft", { altKey: true }));
+  expect(feed(key("keydown", "KeyH", { altKey: true }))).toEqual({ intents: [], action: null, claimed: false });
+  expect(feed(key("keydown", "KeyQ", { altKey: true }))).toEqual({ intents: [], action: null, claimed: false });
+  expect(h.flush()).toEqual([]);
+  expect(feed(key("keydown", "KeyB", { altKey: true }))?.intents).toEqual([{ type: "key", action: "down", keyCode: BACK, repeat: 0, metaState: 0 }]);
+});
+
 test("while paused, device shortcuts do nothing but unpause and the window actions still work", () => {
   const { feed } = handler();
   feed(key("keydown", "AltLeft", { altKey: true }), true);

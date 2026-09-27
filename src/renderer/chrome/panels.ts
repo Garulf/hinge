@@ -1,8 +1,8 @@
 import type { AppEntry } from "../../shared/app-catalog";
-import { pickerSections } from "../../shared/picker";
+import { listingChange, pickerSections, type PickerListing } from "../../shared/picker";
 import type { Settings, SettingsPatch, ShortcutModifier } from "../../shared/settings";
 import { normaliseModifiers, SHORTCUT_MODIFIERS } from "../../shared/shortcuts";
-import type { DeviceCommand, DeviceCommandResult, DeviceSummary, MainToRenderer } from "../../shared/wire";
+import type { DeviceCommand, DeviceCommandResult, DeviceSummary } from "../../shared/wire";
 import { connectAddress, validHostPort, validPairingCode, type DeviceCommands } from "./device-commands";
 import { el } from "./dom";
 import type { Size } from "./hit-zone";
@@ -309,14 +309,16 @@ export class SettingsPanel implements Panel {
   }
 }
 
-export type AppsListing = Omit<Extract<MainToRenderer, { kind: "apps" }>, "kind">;
-
 export interface PickerPanelDeps {
-  requestApps(): void;
+  requestApps(id: number): void;
   popOut(pkg: string): void;
   createShortcut(pkg: string): void;
 }
 
+/**
+ * The tiles are built once per list; typing only hides the ones that do not
+ * match, and a later answer carrying the fetched icons swaps them in place.
+ */
 export class PickerPanel implements Panel {
   readonly size = { w: 340, h: 480 };
   readonly node: HTMLElement;
@@ -324,11 +326,16 @@ export class PickerPanel implements Panel {
   readonly #search = el("input", { attrs: { type: "text", placeholder: "Search apps", "aria-label": "Search apps", spellcheck: "false" } });
   readonly #error = el("div", { className: "status error", attrs: { role: "status", "data-picker-error": "", hidden: "" } });
   readonly #body = el("div");
-  #listing: AppsListing | null = null;
+  readonly #recentsSection = el("div");
+  readonly #allTiles = new Map<string, HTMLElement>();
+  readonly #glyphs = new Map<string, HTMLElement[]>();
+  readonly #noMatch = el("div", { className: "empty", text: "No apps match", attrs: { hidden: "" } });
+  #requested = 0;
+  #listing: PickerListing | null = null;
 
   constructor(deps: PickerPanelDeps) {
     this.#deps = deps;
-    this.#search.addEventListener("input", () => this.#render());
+    this.#search.addEventListener("input", () => this.#filter());
     this.#search.addEventListener("keydown", (e) => {
       if (e.key !== "Enter") return;
       const first = this.#listing && pickerSections(this.#listing.apps, this.#listing.recents, this.#search.value).all[0];
@@ -346,44 +353,79 @@ export class PickerPanel implements Panel {
 
   settingsChanged(): void {}
 
-  listed(listing: AppsListing): void {
+  listed(listing: PickerListing): void {
+    const change = listingChange(this.#requested, this.#listing, listing);
+    if (change === "stale") return;
     this.#listing = listing;
-    this.#render();
+    if (change === "icons") this.#updateIcons(listing.icons);
+    else this.#build(listing);
   }
 
   #request(): void {
+    this.#requested++;
     this.#listing = null;
-    this.#render();
-    this.#deps.requestApps();
+    this.#error.hidden = true;
+    this.node.setAttribute("aria-busy", "true");
+    this.#body.replaceChildren(el("div", { className: "empty", text: "Loading apps..." }));
+    this.#deps.requestApps(this.#requested);
   }
 
-  #render(): void {
-    const listing = this.#listing;
-    this.#error.hidden = !listing?.error;
-    this.#error.textContent = listing?.error ?? "";
-    if (!listing) {
-      this.node.setAttribute("aria-busy", "true");
-      this.#body.replaceChildren(el("div", { className: "empty", text: "Loading apps..." }));
-      return;
-    }
+  #build(listing: PickerListing): void {
     this.node.removeAttribute("aria-busy");
-    const { recents, all } = pickerSections(listing.apps, listing.recents, this.#search.value);
+    this.#error.hidden = !listing.error;
+    this.#error.textContent = listing.error ?? "";
+    this.#allTiles.clear();
+    this.#glyphs.clear();
+    const { recents, all } = pickerSections(listing.apps, listing.recents, "");
+    const allGrid = el("div", { className: "hinge-apps" });
+    for (const app of all) {
+      const tile = this.#tile(app, listing.icons[app.pkg]);
+      this.#allTiles.set(app.pkg, tile);
+      allGrid.append(tile);
+    }
+    this.#recentsSection.replaceChildren(el("h3", { text: "Recent" }), el("div", { className: "hinge-apps" }, recents.map((app) => this.#tile(app, listing.icons[app.pkg]))));
+    this.#recentsSection.dataset.empty = String(recents.length === 0);
     const sections: HTMLElement[] = [];
-    if (recents.length > 0) sections.push(el("h3", { text: "Recent" }), this.#grid(recents, listing.icons));
-    if (all.length > 0) sections.push(el("h3", { text: "All apps" }), this.#grid(all, listing.icons));
-    else if (listing.apps.length > 0) sections.push(el("div", { className: "empty", text: "No apps match" }));
+    if (all.length > 0) sections.push(this.#recentsSection, el("h3", { text: "All apps" }), allGrid, this.#noMatch);
     else if (!listing.error) sections.push(el("div", { className: "empty", text: "No apps found on the phone" }));
     this.#body.replaceChildren(...sections);
+    this.#filter();
   }
 
-  #grid(apps: AppEntry[], icons: Record<string, string>): HTMLElement {
-    return el("div", { className: "hinge-apps" }, apps.map((app) => this.#tile(app, icons[app.pkg])));
+  #filter(): void {
+    const listing = this.#listing;
+    if (!listing) return;
+    const query = this.#search.value;
+    const matching = new Set(pickerSections(listing.apps, [], query).all.map((app) => app.pkg));
+    for (const [pkg, tile] of this.#allTiles) tile.hidden = !matching.has(pkg);
+    this.#recentsSection.hidden = query.trim() !== "" || this.#recentsSection.dataset.empty === "true";
+    this.#noMatch.hidden = matching.size > 0;
+  }
+
+  #updateIcons(icons: Record<string, string>): void {
+    for (const [pkg, glyphs] of this.#glyphs) {
+      const icon = icons[pkg];
+      if (!icon || glyphs.every((glyph) => glyph instanceof HTMLImageElement)) continue;
+      this.#glyphs.set(
+        pkg,
+        glyphs.map((glyph) => {
+          const image = this.#glyph(pkg, icon);
+          glyph.replaceWith(image);
+          return image;
+        }),
+      );
+    }
+  }
+
+  #glyph(label: string, icon: string | undefined): HTMLElement {
+    return icon
+      ? el("img", { className: "icon", attrs: { src: icon, alt: "", draggable: "false" } })
+      : el("span", { className: "icon letter", text: (label.trim()[0] ?? "?").toUpperCase(), attrs: { "aria-hidden": "true" } });
   }
 
   #tile(app: AppEntry, icon: string | undefined): HTMLElement {
-    const glyph = icon
-      ? el("img", { className: "icon", attrs: { src: icon, alt: "", draggable: "false" } })
-      : el("span", { className: "icon letter", text: (app.label.trim()[0] ?? "?").toUpperCase(), attrs: { "aria-hidden": "true" } });
+    const glyph = this.#glyph(app.label, icon);
+    this.#glyphs.set(app.pkg, [...(this.#glyphs.get(app.pkg) ?? []), glyph]);
     const open = el("button", { className: "open", title: `Open ${app.label} in its own window`, attrs: { "data-app": app.pkg }, on: { click: () => this.#deps.popOut(app.pkg) } }, [
       glyph,
       el("span", { className: "label", text: app.label }),

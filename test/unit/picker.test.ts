@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { AppEntry } from "../../src/shared/app-catalog";
-import { pickerSections } from "../../src/shared/picker";
+import { listingChange, pickerSections, type PickerListing } from "../../src/shared/picker";
 
 const APPS: AppEntry[] = [
   { pkg: "com.example.notes", label: "notes", versionCode: 3 },
@@ -48,4 +48,29 @@ test("the input list is left in its order", () => {
   const apps = [...APPS];
   pickerSections(apps, [], "");
   expect(apps).toEqual(APPS);
+});
+
+function listing(id: number, overrides: Partial<PickerListing> = {}): PickerListing {
+  return { id, apps: APPS, recents: ["com.example.chat"], icons: {}, error: null, ...overrides };
+}
+
+test("an answer to an earlier request is stale", () => {
+  expect(listingChange(3, null, listing(2))).toBe("stale");
+  expect(listingChange(3, listing(3), listing(2, { icons: { "com.example.chat": "data:x" } }))).toBe("stale");
+});
+
+test("the first answer to the latest request replaces the list", () => {
+  expect(listingChange(3, null, listing(3))).toBe("list");
+  expect(listingChange(3, listing(2), listing(3))).toBe("list");
+});
+
+test("a second answer to the same request with the same list only brings icons", () => {
+  expect(listingChange(3, listing(3), listing(3, { icons: { "com.example.chat": "data:x" } }))).toBe("icons");
+});
+
+test("a second answer to the same request whose list changed replaces it", () => {
+  expect(listingChange(3, listing(3), listing(3, { apps: APPS.slice(1) }))).toBe("list");
+  expect(listingChange(3, listing(3), listing(3, { apps: APPS.map((a) => ({ ...a, label: `${a.label}!` })) }))).toBe("list");
+  expect(listingChange(3, listing(3), listing(3, { recents: [] }))).toBe("list");
+  expect(listingChange(3, listing(3), listing(3, { error: "gone" }))).toBe("list");
 });

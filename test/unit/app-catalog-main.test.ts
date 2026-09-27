@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, mkdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import type { Adb } from "@yume-chan/adb";
 import type { ConnectedPhone } from "../../src/main/app-controller";
-import { AGENT_REMOTE_PATH, AppCatalog, answerAppsRequest, type AppCatalogOptions } from "../../src/main/app-catalog";
+import { AGENT_REMOTE_PATH, AppCatalog, answerAppsRequest, type AppCatalogOptions, type AppsMessage } from "../../src/main/app-catalog";
 import type { AppEntry } from "../../src/shared/app-catalog";
 
 // Both *-aosp.txt fixtures are written from the AOSP dump formats, not captured from a real phone.
@@ -27,7 +27,7 @@ function dataUrl(pkg: string): string {
   return `data:image/png;base64,${Buffer.from(pngFor(pkg)).toString("base64")}`;
 }
 
-type Responder = (command: string) => Promise<string> | string | undefined;
+type Responder = (command: string) => Promise<string | undefined> | string | undefined;
 
 class FakePhone {
   commands: string[] = [];
@@ -295,19 +295,87 @@ test("identify answers with the package name when the agent fails", async () => 
   expect(await catalog().identify(phone(), "com.example.chat")).toEqual({ label: "com.example.chat", icon: null });
 });
 
+async function answers(c: AppCatalog | null, p: ConnectedPhone | null, id = 7): Promise<AppsMessage[]> {
+  const sent: AppsMessage[] = [];
+  await answerAppsRequest(c, p, id, (msg) => sent.push(msg));
+  return sent;
+}
+
+function flush(): Promise<void> {
+  return new Promise((r) => setImmediate(r));
+}
+
 test("with no phone, an apps request says so", async () => {
-  expect(await answerAppsRequest(catalog(), null)).toEqual({ kind: "apps", apps: [], recents: [], icons: {}, error: "No phone connected" });
-  expect(await answerAppsRequest(null, phone())).toEqual({ kind: "apps", apps: [], recents: [], icons: {}, error: "No phone connected" });
+  const none = { kind: "apps", id: 7, apps: [], recents: [], icons: {}, error: "No phone connected" };
+  expect(await answers(catalog(), null)).toEqual([none]);
+  expect(await answers(null, phone())).toEqual([none]);
 });
 
-test("with a phone, an apps request answers with the catalog's apps", async () => {
-  const answer = await answerAppsRequest(catalog(), phone());
-  expect(answer.kind).toBe("apps");
-  expect(answer.apps).toEqual(fake.apps);
-  expect(answer.error).toBeNull();
+test("with a phone and every icon cached, an apps request is answered once with the catalog's apps", async () => {
+  const c = catalog();
+  await c.apps(phone());
+  const sent = await answers(c, phone(), 3);
+  expect(sent).toHaveLength(1);
+  expect(sent[0].id).toBe(3);
+  expect(sent[0].apps).toEqual(fake.apps);
+  expect(Object.keys(sent[0].icons)).toHaveLength(3);
+  expect(sent[0].error).toBeNull();
+});
+
+test("an apps request is answered with the list and cached icons before any icon is fetched, then again with every icon", async () => {
+  await cacheIcon("R5CX1234", "com.example.chat", 42);
+  let release = (): void => {};
+  const gate = new Promise<void>((r) => (release = r));
+  fake.override = async (command) => {
+    if (!command.startsWith(`${AGENT} icons`)) return undefined;
+    await gate;
+    return undefined;
+  };
+  const sent: AppsMessage[] = [];
+  const done = answerAppsRequest(catalog(), phone(), 5, (msg) => sent.push(msg));
+  await vi.waitFor(() => expect(fake.iconCommands()).toHaveLength(1));
+  await flush();
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ kind: "apps", id: 5, apps: fake.apps, recents: ["com.example.chat", "com.example.maps", "com.example.notes"], error: null });
+  expect(Object.keys(sent[0].icons)).toEqual(["com.example.chat"]);
+
+  fake.override = null;
+  release();
+  await done;
+  expect(sent).toHaveLength(2);
+  expect(sent[1]).toMatchObject({ kind: "apps", id: 5, apps: fake.apps, error: null });
+  expect(Object.keys(sent[1].icons).sort()).toEqual(["com.example.chat", "com.example.maps", "com.example.notes"]);
 });
 
 test("an apps request whose listing throws still gets an answer", async () => {
   const broken = { apps: async () => { throw new Error("disk on fire"); } } as unknown as AppCatalog;
-  expect(await answerAppsRequest(broken, phone())).toEqual({ kind: "apps", apps: [], recents: [], icons: {}, error: "Could not list the phone's apps: disk on fire" });
+  expect(await answers(broken, phone())).toEqual([{ kind: "apps", id: 7, apps: [], recents: [], icons: {}, error: "Could not list the phone's apps: disk on fire" }]);
+});
+
+test("a package the agent names with path or shell characters never reaches the icons command or the cache", async () => {
+  fake.apps = [
+    { pkg: "../../../../Desktop/x", label: "Evil", versionCode: 1 },
+    { pkg: "a;reboot", label: "Evil", versionCode: 1 },
+    { pkg: "com.example.chat", label: "Chat", versionCode: 42 },
+  ];
+  const result = await catalog().apps(phone());
+  expect(result.apps.map((a) => a.pkg)).toEqual(["com.example.chat"]);
+  expect(fake.iconCommands()).toEqual([`${AGENT} icons 96 com.example.chat`]);
+});
+
+test.each(["..", "...", ""])("an identity of %j caches no icon outside the cache folder but still shows the icons", async (deviceId) => {
+  const root = await mkdtemp(join(tmpdir(), "hinge-root-"));
+  const nested = join(root, "icons");
+  const result = await catalog({ cacheDir: nested }).apps(phone(deviceId));
+  expect(Object.keys(result.icons)).toHaveLength(3);
+  const written = (await readdir(root, { recursive: true })).filter((f) => f.endsWith(".png"));
+  expect(written).toEqual([]);
+});
+
+test("a cache file that cannot be written is logged and the other icons are still cached", async () => {
+  await mkdir(join(cacheDir, "R5CX1234", "com.example.chat@42.png"), { recursive: true });
+  const result = await catalog().apps(phone());
+  expect(Object.keys(result.icons).sort()).toEqual(["com.example.chat", "com.example.maps", "com.example.notes"]);
+  expect([...(await readFile(join(cacheDir, "R5CX1234", "com.example.notes@3.png")))]).toEqual([...pngFor("com.example.notes")]);
+  expect(logs.some((l) => l.includes("com.example.chat"))).toBe(true);
 });

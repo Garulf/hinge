@@ -109,8 +109,12 @@ export type MainToRenderer =
   | { kind: "notice"; text: string }
   /** The tray's "Open app…": show the app picker. */
   | { kind: "open-picker" }
-  /** The answer to "apps-request"; icons are data: URLs by package, error says why the list is partial or empty. */
-  | { kind: "apps"; apps: AppEntry[]; recents: string[]; icons: Record<string, string>; error: string | null }
+  /**
+   * An answer to the "apps-request" with the same id, sent once with the
+   * cached icons and again with every icon when some had to be fetched.
+   * icons are data: URLs by package; error says why the list is partial or empty.
+   */
+  | { kind: "apps"; id: number; apps: AppEntry[]; recents: string[]; icons: Record<string, string>; error: string | null }
   | PostureMessage;
 
 export type RendererToMain =
@@ -125,7 +129,8 @@ export type RendererToMain =
   | { kind: "popout-open"; pkg: string }
   /** Pops out whatever app is in the foreground on the phone. */
   | { kind: "popout-current" }
-  | { kind: "apps-request" }
+  /** id tags the answers, so a late answer to an earlier request is told apart. */
+  | { kind: "apps-request"; id: number }
   | { kind: "create-shortcut"; pkg: string };
 
 /** The main window's requests about apps and pop-outs, which bindSource hands to its owner instead of the source. */

@@ -377,7 +377,7 @@ async function runMode(opts: RunOptions): Promise<void> {
       if (msg.kind === "popout-open") popouts.open(msg.pkg);
       else if (msg.kind === "popout-current") void popOutCurrent({ phone: () => currentPhone, dumpActivities, popouts, notice, log: logger.log });
       else if (msg.kind === "create-shortcut") void createDesktopShortcut(shortcutDeps, msg.pkg).then(notice);
-      else if (msg.kind === "apps-request") void answerAppsRequest(built.catalog ?? null, currentPhone).then((answer) => port.postMessage(answer, []));
+      else if (msg.kind === "apps-request") void answerAppsRequest(built.catalog ?? null, currentPhone, msg.id, (answer) => port.postMessage(answer, []));
     },
   });
 

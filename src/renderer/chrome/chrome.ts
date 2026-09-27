@@ -1,3 +1,4 @@
+import type { PickerListing } from "../../shared/picker";
 import type { Settings, SettingsPatch } from "../../shared/settings";
 import type { HingeAction } from "../../shared/shortcuts";
 import type { DeviceSummary } from "../../shared/wire";
@@ -5,7 +6,7 @@ import type { DeviceCommands } from "./device-commands";
 import { el, place, svgIcon } from "./dom";
 import { MenuVisibility, panelBox, pillHeightPx, sizeForPanel, type Box, type Size } from "./hit-zone";
 import { ICONS, type IconName } from "./icons";
-import { ColourPanel, DevicePanel, PickerPanel, SettingsPanel, type AppsListing, type Panel, type PanelName } from "./panels";
+import { ColourPanel, DevicePanel, PickerPanel, SettingsPanel, type Panel, type PanelName } from "./panels";
 import { CHROME_CSS } from "./styles";
 import { ToastQueue, type Toast, type ToastInput } from "./toast-queue";
 
@@ -25,7 +26,7 @@ export interface ChromeDeps {
   settingsPath(): Promise<string>;
   onAction(action: HingeAction): void;
   currentSerial(): string | null;
-  requestApps(): void;
+  requestApps(id: number): void;
   popOut(pkg: string): void;
   createShortcut(pkg: string): void;
 }
@@ -121,7 +122,7 @@ export class Chrome {
     this.#devicePanel.devicesChanged(devices);
   }
 
-  appsListed(listing: AppsListing): void {
+  appsListed(listing: PickerListing): void {
     this.#pickerPanel.listed(listing);
   }
 

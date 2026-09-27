@@ -70,8 +70,16 @@ function iconFileName(app: AppEntry): string {
   return `${app.pkg}@${app.versionCode ?? 0}.png`;
 }
 
-function pngDataUrl(png: Uint8Array): string {
-  return `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
+function pngDataUrls(icons: Map<string, Uint8Array>): Record<string, string> {
+  const urls: Record<string, string> = {};
+  for (const [pkg, png] of icons) urls[pkg] = `data:image/png;base64,${Buffer.from(png).toString("base64")}`;
+  return urls;
+}
+
+/** The phone's icon folder, or null when its identity leaves no usable folder name (empty, or only dots), so nothing is cached. */
+function iconDir(cacheDir: string, deviceId: string): string | null {
+  const name = deviceId.replace(/[^\w.+-]/g, "_");
+  return /^\.*$/.test(name) ? null : join(cacheDir, name);
 }
 
 /**
@@ -98,19 +106,23 @@ export class AppCatalog {
     if (this.#connection && this.#connection.adb !== phone?.adb) this.#connection = null;
   }
 
-  async apps(phone: ConnectedPhone): Promise<AppsResult> {
+  /** onListed gets the list with only the cached icons first, when some are still to be fetched; the answer has them all. */
+  async apps(phone: ConnectedPhone, onListed?: (early: AppsResult) => void): Promise<AppsResult> {
     const [listed, recents] = await Promise.all([this.#listApps(phone), this.#recents(phone)]);
     const packages = new Set(listed.apps.map((app) => app.pkg));
-    const icons: Record<string, string> = {};
-    if (listed.error === null) {
-      for (const [pkg, png] of await this.#icons(phone, listed.apps)) icons[pkg] = pngDataUrl(png);
-    }
-    return {
+    const result = (icons: Map<string, Uint8Array>): AppsResult => ({
       apps: listed.apps,
       recents: recents.filter((pkg) => packages.has(pkg)).slice(0, MAX_RECENTS),
-      icons,
+      icons: pngDataUrls(icons),
       error: listed.error,
-    };
+    });
+    if (listed.error !== null) return result(new Map());
+    const dir = iconDir(this.#opts.cacheDir, phone.deviceId);
+    const { icons, missing } = await this.#cachedIcons(dir, listed.apps);
+    if (missing.length === 0) return result(icons);
+    onListed?.(result(icons));
+    await this.#fetchIcons(phone, dir, missing, icons);
+    return result(icons);
   }
 
   /** Never throws: a failure is logged and answered with the package name. */
@@ -119,7 +131,9 @@ export class AppCatalog {
       const apps = this.#connectionFor(phone).agentApps ?? (await this.#agentApps(phone));
       const app = apps.find((a) => a.pkg === pkg);
       if (!app) return { label: pkg, icon: null };
-      const icons = await this.#icons(phone, [app]);
+      const dir = iconDir(this.#opts.cacheDir, phone.deviceId);
+      const { icons, missing } = await this.#cachedIcons(dir, [app]);
+      await this.#fetchIcons(phone, dir, missing, icons);
       return { label: app.label, icon: icons.get(pkg) ?? null };
     } catch (e) {
       this.#opts.log(`identifying ${pkg} failed: ${reasonOf(e)}`);
@@ -173,10 +187,8 @@ export class AppCatalog {
     }
   }
 
-  /** The cached icons, after asking the agent for the missing ones; a failed batch is logged and ends the asking. */
-  async #icons(phone: ConnectedPhone, apps: AppEntry[]): Promise<Map<string, Uint8Array>> {
-    const dir = join(this.#opts.cacheDir, phone.deviceId.replace(/[^\w.+-]/g, "_"));
-    const cached = await Promise.all(apps.map((app) => readFile(join(dir, iconFileName(app))).catch(() => null)));
+  async #cachedIcons(dir: string | null, apps: AppEntry[]): Promise<{ icons: Map<string, Uint8Array>; missing: AppEntry[] }> {
+    const cached = await Promise.all(apps.map((app) => (dir ? readFile(join(dir, iconFileName(app))).catch(() => null) : null)));
     const icons = new Map<string, Uint8Array>();
     const missing: AppEntry[] = [];
     apps.forEach((app, i) => {
@@ -184,9 +196,14 @@ export class AppCatalog {
       if (png) icons.set(app.pkg, png);
       else missing.push(app);
     });
-    if (missing.length === 0) return icons;
+    return { icons, missing };
+  }
+
+  /** Asks the agent for the missing icons into icons, caching each; a failed batch is logged and ends the asking. */
+  async #fetchIcons(phone: ConnectedPhone, dir: string | null, missing: AppEntry[], icons: Map<string, Uint8Array>): Promise<void> {
+    if (missing.length === 0) return;
     try {
-      await mkdir(dir, { recursive: true });
+      if (dir) await mkdir(dir, { recursive: true });
       for (const batch of chunks(missing, ICON_BATCH)) {
         const command = `${AGENT_COMMAND} icons ${ICON_PX} ${batch.map((app) => app.pkg).join(" ")}`;
         const fetched = parseAgentIcons(await this.#shell(phone.adb, command, "the agent's icons"));
@@ -194,13 +211,12 @@ export class AppCatalog {
           const png = fetched[app.pkg];
           if (!png) continue;
           icons.set(app.pkg, png);
-          await writeFile(join(dir, iconFileName(app)), png);
+          if (dir) await writeFile(join(dir, iconFileName(app)), png).catch((e: unknown) => this.#opts.log(`could not cache the icon of ${app.pkg}: ${reasonOf(e)}`));
         }
       }
     } catch (e) {
       this.#opts.log(`app icons unavailable: ${reasonOf(e)}`);
     }
-    return icons;
   }
 
   #shell(adb: Adb, command: string, what: string): Promise<string> {
@@ -210,12 +226,17 @@ export class AppCatalog {
 
 export type AppsMessage = Extract<MainToRenderer, { kind: "apps" }>;
 
-/** The main window's "apps-request", answered for the phone connected now. */
-export async function answerAppsRequest(catalog: AppCatalog | null, phone: ConnectedPhone | null): Promise<AppsMessage> {
-  if (!catalog || !phone) return { kind: "apps", apps: [], recents: [], icons: {}, error: "No phone connected" };
+/**
+ * The main window's "apps-request", answered for the phone connected now:
+ * the list with the cached icons as soon as it is known, then again with
+ * every icon once the missing ones are fetched. Every answer carries the
+ * request's id.
+ */
+export async function answerAppsRequest(catalog: AppCatalog | null, phone: ConnectedPhone | null, id: number, send: (msg: AppsMessage) => void): Promise<void> {
+  if (!catalog || !phone) return send({ kind: "apps", id, apps: [], recents: [], icons: {}, error: "No phone connected" });
   try {
-    return { kind: "apps", ...(await catalog.apps(phone)) };
+    send({ kind: "apps", id, ...(await catalog.apps(phone, (early) => send({ kind: "apps", id, ...early }))) });
   } catch (e) {
-    return { kind: "apps", apps: [], recents: [], icons: {}, error: `Could not list the phone's apps: ${reasonOf(e)}` };
+    send({ kind: "apps", id, apps: [], recents: [], icons: {}, error: `Could not list the phone's apps: ${reasonOf(e)}` });
   }
 }

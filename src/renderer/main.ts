@@ -174,7 +174,7 @@ const chrome = new Chrome(document.body, {
   settingsPath: () => window.hinge.settingsPath(),
   onAction: (action) => onAction(action),
   currentSerial: () => currentSerial,
-  requestApps: () => client?.send({ kind: "apps-request" }),
+  requestApps: (id) => client?.send({ kind: "apps-request", id }),
   popOut: (pkg) => client?.send({ kind: "popout-open", pkg }),
   createShortcut: (pkg) => client?.send({ kind: "create-shortcut", pkg }),
 });

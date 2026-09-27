@@ -164,7 +164,7 @@ test("pop-out and app requests from the main window go to onRendererMessage, nev
   const requests: RendererToMain[] = [
     { kind: "popout-open", pkg: "com.example.chat" },
     { kind: "popout-current" },
-    { kind: "apps-request" },
+    { kind: "apps-request", id: 1 },
     { kind: "create-shortcut", pkg: "com.example.chat" },
   ];
   for (const m of requests) handler(m);

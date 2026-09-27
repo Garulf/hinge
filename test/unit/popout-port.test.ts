@@ -62,7 +62,7 @@ test("main-window requests from a pop-out are ignored", () => {
 
   h.send({ kind: "popout-open", pkg: "com.example.chat" });
   h.send({ kind: "popout-current" });
-  h.send({ kind: "apps-request" });
+  h.send({ kind: "apps-request", id: 1 });
   h.send({ kind: "create-shortcut", pkg: "com.example.chat" });
   h.send({ kind: "drop-files", paths: ["/tmp/a.apk"] });
 

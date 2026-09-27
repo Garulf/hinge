@@ -2,7 +2,7 @@ import type { Adb } from "@yume-chan/adb";
 import { AdbScrcpyOptions4_1, type AdbScrcpyClient } from "@yume-chan/adb-scrcpy";
 import { pumpAudio, type AudioSink } from "./audio-forward";
 import { createClipboardSync, type ClipboardHost, type ClipboardSync } from "./clipboard-sync";
-import { buildCompanionInit, type StreamSettings } from "./scrcpy-init";
+import { buildCompanionInit, newServerInstance, type StreamSettings } from "./scrcpy-init";
 import { defaultServerDeps, type ScrcpyServerDeps } from "./scrcpy-session";
 
 export type { AudioSink } from "./audio-forward";
@@ -73,11 +73,13 @@ export class CompanionSession {
   }
 
   async #startClient(): Promise<Client | undefined> {
+    const instance = newServerInstance();
     const jar = await this.#deps.readServerJar(this.opts.serverPath);
     if (this.#stopped) return undefined;
-    await this.#deps.pushServer(this.opts.adb, jar);
+    await this.#deps.pushServer(this.opts.adb, jar, instance.jarPath);
     if (this.#stopped) return undefined;
-    const client = await this.#deps.startClient(this.opts.adb, new AdbScrcpyOptions4_1(buildCompanionInit(this.opts.settings) as never));
+    const options = new AdbScrcpyOptions4_1({ ...buildCompanionInit(this.opts.settings), scid: instance.scid } as never);
+    const client = await this.#deps.startClient(this.opts.adb, options, instance.jarPath);
     if (this.#stopped) {
       await client.close().catch(() => {});
       return undefined;

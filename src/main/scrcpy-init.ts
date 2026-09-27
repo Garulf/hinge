@@ -27,6 +27,21 @@ export function toStreamSettings(settings: Settings): StreamSettings {
   };
 }
 
+/**
+ * Several hinge servers run on one phone at once (main, companion, pop-outs).
+ * Each needs its own scid, which names its adb socket, and its own jar path,
+ * because a server deletes its jar once it has launched.
+ */
+export interface ServerInstance {
+  scid: string;
+  jarPath: string;
+}
+
+export function newServerInstance(): ServerInstance {
+  const scid = Math.floor(Math.random() * 0x80000000).toString(16);
+  return { scid, jarPath: `/data/local/tmp/hinge-scrcpy-${scid}.jar` };
+}
+
 /** A pop-out streams one app on its own virtual display; the main session streams the phone's screen. */
 export type SessionRole = { kind: "main" } | { kind: "popout"; pkg: string; geometry: DisplayGeometry };
 

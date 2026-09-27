@@ -2,13 +2,13 @@ import { readFile } from "node:fs/promises";
 import { PackageManager } from "@yume-chan/android-bin";
 import type { Adb } from "@yume-chan/adb";
 import { AdbScrcpyClient, AdbScrcpyExitedError, AdbScrcpyOptions4_1 } from "@yume-chan/adb-scrcpy";
-import { DefaultServerPath, type ScrcpyVideoStreamPacket } from "@yume-chan/scrcpy";
+import type { ScrcpyVideoStreamPacket } from "@yume-chan/scrcpy";
 import { PushReadableStream } from "@yume-chan/stream-extra";
 import { createClipboardSync, type ClipboardHost, type ClipboardSync } from "./clipboard-sync";
 import { pumpAudio } from "./audio-forward";
 import { applyIntent, type ApplyIntentDeps } from "./intents";
 import type { MediaSink, MediaSource } from "./media-source";
-import { buildInit, type SessionRole, type StreamSettings } from "./scrcpy-init";
+import { buildInit, newServerInstance, type SessionRole, type StreamSettings } from "./scrcpy-init";
 import { createTransferQueue, defaultOpenFile, type TransferDeps, type TransferQueue } from "./transfers";
 import type { DisplayGeometry } from "../shared/popout";
 import { toWire, type ControlIntent } from "../shared/wire";
@@ -53,22 +53,23 @@ const FIRST_PACKET_TIMEOUT_MS = 10_000;
  */
 export interface ScrcpyServerDeps {
   readServerJar(path: string): Promise<Uint8Array>;
-  pushServer(adb: Adb, jar: Uint8Array): Promise<void>;
-  startClient(adb: Adb, options: AdbScrcpyOptions4_1<any>): Promise<Client>;
+  pushServer(adb: Adb, jar: Uint8Array, path: string): Promise<void>;
+  startClient(adb: Adb, options: AdbScrcpyOptions4_1<any>, path: string): Promise<Client>;
 }
 
 export const defaultServerDeps: ScrcpyServerDeps = {
   readServerJar: (path) => readFile(path),
-  pushServer: async (adb, jar) => {
+  pushServer: async (adb, jar, path) => {
     await AdbScrcpyClient.pushServer(
       adb,
       new PushReadableStream<Uint8Array>((controller) => {
         controller.enqueue(jar);
         controller.close();
       }),
+      path,
     );
   },
-  startClient: (adb, options) => AdbScrcpyClient.start(adb, DefaultServerPath, options),
+  startClient: (adb, options, path) => AdbScrcpyClient.start(adb, path, options),
 };
 
 export class ScrcpySession implements MediaSource {
@@ -231,13 +232,15 @@ export class ScrcpySession implements MediaSource {
       // scrcpy-server unlinks its own jar from the device after launch (cleanup
       // defaults to true), so a jar pushed once before the loop is gone by the
       // second attempt; push it fresh for every attempt.
+      const instance = newServerInstance();
       const jar = await this.#deps.readServerJar(this.opts.serverPath);
       if (this.#stopped) return "stopped";
-      await this.#deps.pushServer(this.opts.adb, jar);
+      await this.#deps.pushServer(this.opts.adb, jar, instance.jarPath);
       if (this.#stopped) return "stopped";
 
-      const options = new AdbScrcpyOptions4_1(buildInit(this.opts.settings, attempt, this.#role, this.opts.companion) as never);
-      const startPromise = this.#deps.startClient(this.opts.adb, options);
+      const init = buildInit(this.opts.settings, attempt, this.#role, this.opts.companion);
+      const options = new AdbScrcpyOptions4_1({ ...init, scid: instance.scid } as never);
+      const startPromise = this.#deps.startClient(this.opts.adb, options, instance.jarPath);
       client = await this.#withTimeout(startPromise, "scrcpy server did not start within", () => {
         // The timeout already moved on to the next attempt (or gave up); a
         // client that shows up after that would otherwise never be closed.

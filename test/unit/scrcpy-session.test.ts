@@ -781,3 +781,29 @@ test("a main session with a companion pastes with the companion's clipboard sequ
   expect(clipboard.locked).toBe(false);
   await session.stop();
 });
+
+test("every attempt runs its own server instance: a fresh scid and a jar path of its own, pushed and started together", async () => {
+  const pushed: unknown[] = [];
+  const started: { path: unknown; scid: unknown }[] = [];
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async (_adb, _jar, path) => {
+      pushed.push(path);
+    },
+    startClient: async (_adb, options, path) => {
+      started.push({ path, scid: (options.value as { scid?: unknown }).scid });
+      throw new Error("boom");
+    },
+  };
+  const session = new ScrcpySession(baseOpts(deps));
+  await session.start(fakeSink().sink);
+
+  expect(started).toHaveLength(3);
+  expect(started.map((s) => s.path)).toEqual(pushed);
+  for (const { path, scid } of started) {
+    expect(scid).toMatch(/^[0-9a-f]{1,8}$/);
+    expect(Number.parseInt(scid as string, 16)).toBeLessThan(0x80000000);
+    expect(path).toBe(`/data/local/tmp/hinge-scrcpy-${scid as string}.jar`);
+  }
+  expect(new Set(started.map((s) => s.scid)).size).toBe(3);
+});

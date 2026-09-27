@@ -189,3 +189,31 @@ test("a server that fails to start ends the session instead of retrying", async 
   expect(starts).toBe(1);
   expect(logs.some((l) => l.includes("no server"))).toBe(true);
 });
+
+test("each companion runs its own server instance, apart from every other hinge server on the phone", async () => {
+  const runs: { pushed: unknown; started: unknown; scid: unknown }[] = [];
+  const deps = (): Partial<ScrcpyServerDeps> => {
+    const run: { pushed: unknown; started: unknown; scid: unknown } = { pushed: null, started: null, scid: null };
+    runs.push(run);
+    return {
+      readServerJar: async () => new Uint8Array([1]),
+      pushServer: async (_adb, _jar, path) => {
+        run.pushed = path;
+      },
+      startClient: async (_adb, options, path) => {
+        run.started = path;
+        run.scid = (options.value as { scid?: unknown }).scid;
+        throw new Error("stop here");
+      },
+    };
+  };
+  await companion(deps()).start(fakeAudioSink().sink);
+  await companion(deps()).start(fakeAudioSink().sink);
+
+  for (const run of runs) {
+    expect(run.scid).toMatch(/^[0-9a-f]{1,8}$/);
+    expect(run.pushed).toBe(`/data/local/tmp/hinge-scrcpy-${run.scid as string}.jar`);
+    expect(run.started).toBe(run.pushed);
+  }
+  expect(runs[0].scid).not.toBe(runs[1].scid);
+});

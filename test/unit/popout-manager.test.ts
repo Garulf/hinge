@@ -134,6 +134,16 @@ class FakeSession implements PopoutSessionLike {
 
   control(): void {}
 
+  #end!: () => void;
+  readonly ended = new Promise<void>((resolve) => {
+    this.#end = resolve;
+  });
+
+  /** The stream closing on its own, or a stopped session's ended arriving late. */
+  end(): void {
+    this.#end();
+  }
+
   async stop(): Promise<void> {
     this.stopCalls++;
   }
@@ -722,4 +732,55 @@ test("after an error, a retried session that streams answers a new whenStreaming
   sessions[1].appStarted();
   sessions[1].frame();
   expect(await second).toBe(true);
+});
+
+test("a session that ends on its own shows the window an error with Retry, and whoever waits for it to stream stops waiting", async () => {
+  vi.useFakeTimers();
+  const { manager, windows, sessions, bindings, refusalChecks } = harness({ identify: async () => ({ label: "Example", icon: null }) });
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  await vi.advanceTimersByTimeAsync(0);
+  const streaming = manager.whenStreaming("com.example.app");
+  sessions[0].appStarted();
+
+  sessions[0].end();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(bindings[0].statuses).toEqual([{ state: "error", message: "Example stopped" }]);
+  expect(await streaming).toBe(false);
+  expect(windows[0].closeCalls).toBe(0);
+  expect(manager.count()).toBe(1);
+
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(refusalChecks).toEqual([]);
+
+  bindings[0].handlers.retry();
+  expect(sessions).toHaveLength(2);
+  expect(sessions[1].startCalls).toBe(1);
+});
+
+test("a replaced session ending late, or one stopped by closing its window, shows nothing", async () => {
+  const { manager, windows, sessions, bindings } = harness();
+  manager.setPhone(fold());
+  manager.open("a.one");
+  manager.open("a.two");
+
+  bindings[0].handlers.retry();
+  sessions[0].end();
+  windows[1].userClose();
+  sessions[1].end();
+  await flush();
+
+  expect(bindings.map((b) => b.statuses)).toEqual([[], []]);
+});
+
+test("a session that reported its own error before ending keeps that error on screen", async () => {
+  const { manager, sessions, bindings } = harness();
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+
+  sessions[0].sink?.status({ state: "error", message: "Could not start com.example.app in its own window" });
+  sessions[0].end();
+  await flush();
+
+  expect(bindings[0].statuses).toEqual([]);
 });

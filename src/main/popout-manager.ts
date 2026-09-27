@@ -93,11 +93,13 @@ class SessionSlot implements PopoutSessionLike {
   #closed = false;
   /** Whether the current session has started its app, so its frames are the app's. */
   #appRunning = false;
+  /** Whether the current session has put its own error on screen. */
+  #reportedError = false;
   readonly #appStartedListeners: (() => void)[] = [];
 
   constructor(
     private readonly log: (line: string) => void,
-    private readonly on: { appFrame(): void; error(): void },
+    private readonly on: { appFrame(): void; error(): void; endedOnItsOwn(): void },
   ) {}
 
   async start(sink: MediaSink): Promise<void> {
@@ -105,7 +107,10 @@ class SessionSlot implements PopoutSessionLike {
       frame: () => {
         if (this.#appRunning) this.on.appFrame();
       },
-      error: () => this.on.error(),
+      error: () => {
+        this.#reportedError = true;
+        this.on.error();
+      },
     });
     await this.#current?.start(this.#sink);
   }
@@ -130,10 +135,15 @@ class SessionSlot implements PopoutSessionLike {
   replace(next: PopoutSessionLike | null): void {
     if (this.#closed) return;
     this.#appRunning = false;
+    this.#reportedError = false;
     next?.onAppStarted(() => {
       if (this.#current !== next || this.#closed) return;
       this.#appRunning = true;
       for (const cb of this.#appStartedListeners) cb();
+    });
+    void next?.ended?.then(() => {
+      if (this.#current !== next || this.#closed || this.#reportedError) return;
+      this.on.endedOnItsOwn();
     });
     void this.#swap(next);
     const sink = this.#sink;
@@ -241,7 +251,11 @@ export class PopoutManager {
     const content = window.contentBounds();
     const scale = window.scaleFactor();
     const geometry = displayGeometry(content.width, content.height, scale) ?? { width: MIN_DISPLAY_PX, height: MIN_DISPLAY_PX, dpi: Math.round(160 * scale) };
-    const slot = new SessionSlot(this.deps.log, { appFrame: () => this.#streamed(entry), error: () => this.#failed(entry) });
+    const slot = new SessionSlot(this.deps.log, {
+      appFrame: () => this.#streamed(entry),
+      error: () => this.#failed(entry),
+      endedOnItsOwn: () => this.#endedOnItsOwn(entry),
+    });
     const entry: Entry = {
       pkg,
       deviceId: phone.deviceId,
@@ -304,6 +318,13 @@ export class PopoutManager {
   /** The window shows the error with its Retry; whoever waits for it to stream stops waiting. */
   #failed(entry: Entry): void {
     for (const resolve of entry.streamWaiters.splice(0)) resolve(false);
+  }
+
+  /** Only the window's Retry starts it again; with no display left, the refusal check would misread where its app went. */
+  #endedOnItsOwn(entry: Entry): void {
+    this.#clearRefusalTimer(entry);
+    this.#failed(entry);
+    entry.status({ state: "error", message: `${entry.label} stopped` });
   }
 
   #streamed(entry: Entry): void {

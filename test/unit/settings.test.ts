@@ -318,3 +318,68 @@ test("any other rename error is not retried", async () => {
   await expect(store.save({ colourway: "Silver" })).rejects.toThrow("gone");
   expect(calls).toBe(1);
 });
+
+test("saving one pop-out's window keeps every other app's and the phone's other fields, and round-trips", async () => {
+  const store = await loadSettings(path);
+  await store.saveDevice("R5CY", { pxPerMm: 11.8, popouts: { "com.a": { x: 1, y: 2, width: 400, height: 900 } } });
+  await store.saveDevice("R5CY", { popouts: { "com.b": { x: 3, y: 4, width: 500, height: 800 } } });
+  await store.saveDevice("R5CY", { windowPosition: { x: 10, y: 20 } });
+  await store.saveDevice("R5CY", { popouts: { "com.a": { x: 5, y: 6, width: 410, height: 910 } } });
+
+  const expected = {
+    pxPerMm: 11.8,
+    windowPosition: { x: 10, y: 20 },
+    popouts: { "com.a": { x: 5, y: 6, width: 410, height: 910 }, "com.b": { x: 3, y: 4, width: 500, height: 800 } },
+  };
+  expect(store.current.devices.R5CY).toEqual(expected);
+  expect((await loadSettings(path)).current.devices.R5CY).toEqual(expected);
+});
+
+test("overlapping pop-out saves for different apps all land", async () => {
+  const store = await loadSettings(path);
+  await Promise.all(["com.a", "com.b", "com.c"].map((pkg, i) => store.saveDevice("R5CY", { popouts: { [pkg]: { x: i, y: i, width: 300, height: 600 } } })));
+  expect(Object.keys(store.current.devices.R5CY.popouts ?? {}).sort()).toEqual(["com.a", "com.b", "com.c"]);
+});
+
+test("a malformed pop-out window entry is dropped on load and the good ones are kept", async () => {
+  writeFileSync(
+    path,
+    JSON.stringify({
+      version: 4,
+      devices: {
+        A: { popouts: { good: { x: -5, y: 0, width: 300, height: 600 }, flat: { x: 0, y: 0, width: 0, height: 600 }, text: { x: "1", y: 0, width: 300, height: 600 }, none: null } },
+        B: { popouts: [1, 2] },
+      },
+    }),
+  );
+  expect((await loadSettings(path)).current.devices).toEqual({ A: { popouts: { good: { x: -5, y: 0, width: 300, height: 600 } } }, B: {} });
+});
+
+test("settled waits for every write queued so far, and a failed one does not reject it", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let renames = 0;
+  const store = await loadSettings(path, {
+    rename: async (from, to) => {
+      renames++;
+      if (renames === 1) await held;
+      const { rename } = await import("node:fs/promises");
+      await rename(from, to);
+    },
+  });
+  const first = store.saveDevice("R5CY", { popouts: { "com.a": { x: 0, y: 0, width: 300, height: 600 } } });
+  let settled = false;
+  const waiting = store.settled().then(() => (settled = true));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(settled).toBe(false);
+
+  release();
+  await first;
+  await waiting;
+  expect(JSON.parse(readFileSync(path, "utf8")).devices.R5CY.popouts["com.a"]).toEqual({ x: 0, y: 0, width: 300, height: 600 });
+
+  const failing = await loadSettings(join(dir, "missing-dir", "settings.json"));
+  const failed = failing.save({ audio: false }).catch(() => "failed");
+  await expect(failing.settled()).resolves.toBeUndefined();
+  expect(await failed).toBe("failed");
+});

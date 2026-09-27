@@ -1,3 +1,4 @@
+import type { PickerListing } from "../../shared/picker";
 import type { Settings, SettingsPatch } from "../../shared/settings";
 import type { HingeAction } from "../../shared/shortcuts";
 import type { DeviceSummary } from "../../shared/wire";
@@ -5,7 +6,7 @@ import type { DeviceCommands } from "./device-commands";
 import { el, place, svgIcon } from "./dom";
 import { MenuVisibility, panelBox, pillHeightPx, sizeForPanel, type Box, type Size } from "./hit-zone";
 import { ICONS, type IconName } from "./icons";
-import { ColourPanel, DevicePanel, SettingsPanel, type Panel, type PanelName } from "./panels";
+import { ColourPanel, DevicePanel, PickerPanel, SettingsPanel, type Panel, type PanelName } from "./panels";
 import { CHROME_CSS } from "./styles";
 import { ToastQueue, type Toast, type ToastInput } from "./toast-queue";
 
@@ -25,9 +26,12 @@ export interface ChromeDeps {
   settingsPath(): Promise<string>;
   onAction(action: HingeAction): void;
   currentSerial(): string | null;
+  requestApps(id: number): void;
+  popOut(pkg: string): void;
+  createShortcut(pkg: string): void;
 }
 
-const MENU_BUTTONS = 6;
+const MENU_BUTTONS = 8;
 const MENU_GAP_PX = 2;
 const MENU_PAD_PX = 1;
 const PANEL_GAP_PX = 6;
@@ -58,6 +62,7 @@ export class Chrome {
   readonly #visibility = new MenuVisibility();
   readonly #panels: Record<PanelName, Panel>;
   readonly #devicePanel: DevicePanel;
+  readonly #pickerPanel: PickerPanel;
   #open: PanelName | null = null;
   #layout: ChromeLayout | null = null;
   #pointer: { x: number; y: number } | null = null;
@@ -73,6 +78,8 @@ export class Chrome {
     this.#deps = deps;
     parent.append(el("style", { text: CHROME_CSS }));
     const menuButtons: MenuButton[] = [
+      { name: "apps", title: "Apps", press: () => this.#toggle("apps") },
+      { name: "popout", title: "Pop out this app (MOD+t)", press: () => deps.onAction("popout-current") },
       { name: "device", title: "Devices", press: () => this.#toggle("device") },
       { name: "center", title: "Center (MOD+d)", press: () => deps.onAction("center") },
       { name: "colour", title: "Colour", press: () => this.#toggle("colour") },
@@ -88,7 +95,16 @@ export class Chrome {
     }
     this.#toastsNode = el("div", { className: "hinge-toasts", attrs: { "aria-live": "polite" } });
     this.#devicePanel = new DevicePanel({ commands: deps.commands, toast: (t) => this.toast(t), currentSerial: deps.currentSerial });
+    this.#pickerPanel = new PickerPanel({
+      requestApps: deps.requestApps,
+      popOut: (pkg) => {
+        deps.popOut(pkg);
+        this.#setOpen(null);
+      },
+      createShortcut: deps.createShortcut,
+    });
     this.#panels = {
+      apps: this.#pickerPanel,
       device: this.#devicePanel,
       colour: new ColourPanel({ swatches: deps.swatches, save: deps.save }),
       settings: new SettingsPanel({ save: deps.save, settingsPath: deps.settingsPath }),
@@ -104,6 +120,14 @@ export class Chrome {
 
   devicesChanged(devices: DeviceSummary[]): void {
     this.#devicePanel.devicesChanged(devices);
+  }
+
+  appsListed(listing: PickerListing): void {
+    this.#pickerPanel.listed(listing);
+  }
+
+  openPicker(): void {
+    this.#setOpen("apps");
   }
 
   settingsChanged(settings: Settings): void {
@@ -202,7 +226,7 @@ export class Chrome {
     if (this.#open) this.#panels[this.#open].node.remove();
     this.#open = name;
     this.#panelMaxHeight = "";
-    for (const panelName of ["device", "colour", "settings"] as const) this.#buttons.get(panelName)?.setAttribute("aria-pressed", String(panelName === name));
+    for (const panelName of ["apps", "device", "colour", "settings"] as const) this.#buttons.get(panelName)?.setAttribute("aria-pressed", String(panelName === name));
     if (!name) return;
     const panel = this.#panels[name];
     if (this.#settings) panel.settingsChanged(this.#settings);

@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>hinge</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      canvas { display: block; width: 100vw; height: 100vh; }
+      button[data-retry] {
+        position: fixed; left: 50%; top: 62%; transform: translateX(-50%);
+        padding: 6px 18px; border: 1px solid rgba(255, 255, 255, 0.6); border-radius: 6px;
+        background: rgba(255, 255, 255, 0.12); color: #fff; font: 14px sans-serif; cursor: pointer;
+      }
+      button[data-retry]:hover { background: rgba(255, 255, 255, 0.24); }
+      button[data-retry][hidden] { display: none; }
+    </style>
+  </head>
+  <body><script type="module" src="./popout/main.ts"></script></body>
+</html>

@@ -47,5 +47,14 @@ export const CHROME_CSS = `
 .hinge-swatches button { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px; }
 .hinge-swatches button[aria-pressed="true"] { border-color: #7fb0ff; background: rgba(120, 170, 255, 0.16); }
 .hinge-swatches .dot { width: 30px; height: 30px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.3); }
+.hinge-apps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.hinge-apps .tile { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-width: 0; }
+.hinge-panel .hinge-apps button.open { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px 6px; background: transparent; border-color: transparent; white-space: normal; }
+.hinge-panel .hinge-apps button.open:hover { background: rgba(255, 255, 255, 0.1); }
+.hinge-apps .icon { width: 40px; height: 40px; border-radius: 10px; }
+.hinge-apps .letter { display: grid; place-items: center; font-size: 18px; font-weight: 600; background: rgba(120, 170, 255, 0.22); color: #cfe0ff; }
+.hinge-apps .label { font-size: 11px; width: 100%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hinge-panel .hinge-apps button.shortcut { font-size: 10px; padding: 1px 4px; color: #a8a8b3; background: transparent; border-color: transparent; }
+.hinge-panel .hinge-apps button.shortcut:hover { color: inherit; background: rgba(255, 255, 255, 0.1); }
 .hinge-fps { position: absolute; font: 600 10px ui-monospace, Consolas, monospace; color: rgba(255, 255, 255, 0.75); text-shadow: 0 1px 2px #000; transform: translate(-50%, -100%); }
 `;

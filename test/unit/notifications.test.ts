@@ -39,7 +39,6 @@ test("parseNotifications recognises a group summary from its flag bit", () => {
 test("parseNotifications unwraps extras that AOSP prints as their class name and the value in brackets", () => {
   const block = [
     "  NotificationRecord(0x3c4d5e6: pkg=com.example.mail user=UserHandle{0} id=7 tag=null key=0|com.example.mail|7|null|10300: Notification(channel=inbox pri=0 flags=0x10))",
-    "    pkg=com.example.mail",
     "    key=0|com.example.mail|7|null|10300",
     "    flags=0x10",
     "      extras={",
@@ -51,6 +50,50 @@ test("parseNotifications unwraps extras that AOSP prints as their class name and
   const [mail] = parseNotifications(block);
   expect(mail.title).toBe("Sam");
   expect(mail.text).toBe("Lunch (the usual place)?");
+});
+
+test("parseNotifications takes the package from the record's key, never from a pkg= line inside a message's extras", () => {
+  const block = [
+    "  NotificationRecord(0x9a8b7c6: pkg=com.example.chat user=UserHandle{0} id=5 tag=null key=0|com.example.chat|5|null|10201: Notification(channel=messages pri=0 flags=0x10))",
+    "    uid=10201 userId=0",
+    "    opPkg=com.example.chat",
+    "    key=0|com.example.chat|5|null|10201",
+    "    flags=0x10",
+    "      extras={",
+    "        android.title=String (Mallory)",
+    "        android.text=String (hello",
+    "pkg=x;reboot",
+    "key=0|x;reboot|1|null|1)",
+    "      }",
+  ].join("\n");
+  const [message] = parseNotifications(block);
+  expect(message.pkg).toBe("com.example.chat");
+  expect(message.key).toBe("0|com.example.chat|5|null|10201");
+});
+
+test("parseNotifications falls back to the header's key and package when the record has no key line", () => {
+  const block = [
+    "  NotificationRecord(0x9a8b7c6: pkg=com.example.chat user=UserHandle{0} id=5 tag=null key=0|com.example.chat|5|null|10201: Notification(channel=messages pri=0 flags=0x10))",
+    "    flags=0x10",
+    "      extras={",
+    "        android.title=String (Mallory)",
+    "pkg=x;reboot",
+    "      }",
+  ].join("\n");
+  const [message] = parseNotifications(block);
+  expect(message.pkg).toBe("com.example.chat");
+  expect(message.key).toBe("0|com.example.chat|5|null|10201");
+});
+
+test("parseNotifications leaves the package empty when the record names no valid package", () => {
+  const block = [
+    "  NotificationRecord(0x9a8b7c6: pkg=x;reboot user=UserHandle{0} id=5 tag=null key=0|x;reboot|5|null|10201: Notification(flags=0x10))",
+    "    key=0|x;reboot|5|null|10201",
+    "      extras={",
+    "        android.title=String (Mallory)",
+    "      }",
+  ].join("\n");
+  expect(parseNotifications(block)[0].pkg).toBe("");
 });
 
 test("parseNotifications reads an empty title and text as empty strings, not undefined", () => {

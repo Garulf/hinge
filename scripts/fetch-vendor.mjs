@@ -76,11 +76,11 @@ function verify(target, bytes) {
   }
 }
 
-async function extractZip(target, zipBytes) {
-  const destDir = join(vendorDir, target.extractTo);
+async function extractZip(target, zipBytes, rootDir) {
+  const destDir = join(rootDir, target.extractTo);
   const partialDestDir = `${destDir}.partial`;
-  mkdirSync(vendorDir, { recursive: true });
-  const tempDir = mkdtempSync(join(vendorDir, ".tmp-"));
+  mkdirSync(rootDir, { recursive: true });
+  const tempDir = mkdtempSync(join(rootDir, ".tmp-"));
 
   try {
     const zipPath = join(tempDir, target.file);
@@ -88,7 +88,7 @@ async function extractZip(target, zipBytes) {
     const extractedDir = join(tempDir, "extracted");
     await extract(zipPath, { dir: extractedDir });
 
-    const innerDir = join(extractedDir, "platform-tools");
+    const innerDir = join(extractedDir, target.innerDir ?? "platform-tools");
     if (existsSync(partialDestDir)) rmSync(partialDestDir, { recursive: true, force: true });
     mkdirSync(partialDestDir, { recursive: true });
     for (const entry of target.keep) {
@@ -107,23 +107,23 @@ async function extractZip(target, zipBytes) {
   }
 
   for (const entry of target.keep) {
-    if (entry.endsWith(".dll") || entry.endsWith(".txt")) continue;
+    if ([".dll", ".txt", ".jar"].some((ext) => entry.endsWith(ext))) continue;
     chmodSync(join(destDir, entry), 0o755);
   }
 }
 
-function isTargetPresent(target) {
+function isTargetPresent(target, rootDir) {
   if (target.extractTo) {
-    const destDir = join(vendorDir, target.extractTo);
+    const destDir = join(rootDir, target.extractTo);
     return keptFilesFor(target).every((entry) => existsSync(join(destDir, entry)));
   }
-  const destPath = join(vendorDir, target.file);
+  const destPath = join(rootDir, target.file);
   if (!existsSync(destPath)) return false;
   return hashOf(readFileSync(destPath), target.algo) === target.sum;
 }
 
-async function fetchTarget(target) {
-  if (isTargetPresent(target)) {
+export async function fetchTarget(target, rootDir = vendorDir) {
+  if (isTargetPresent(target, rootDir)) {
     console.log(`up to date: ${target.file}`);
     return;
   }
@@ -133,10 +133,10 @@ async function fetchTarget(target) {
   verify(target, bytes);
 
   if (target.extractTo) {
-    await extractZip(target, bytes);
+    await extractZip(target, bytes, rootDir);
   } else {
-    mkdirSync(vendorDir, { recursive: true });
-    const destPath = join(vendorDir, target.file);
+    mkdirSync(rootDir, { recursive: true });
+    const destPath = join(rootDir, target.file);
     writeFileSync(destPath, bytes);
     chmodSync(destPath, 0o755);
   }

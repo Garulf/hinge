@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { ModifierTracker } from "../../src/shared/modifiers";
 import type { KeyEventLike } from "../../src/shared/keymap";
+import { popoutAllows } from "../../src/shared/popout";
 import { defaultModifiers, normaliseModifiers, ShortcutHandler, SHORTCUT_TABLE } from "../../src/shared/shortcuts";
 
 const HOME = 3;
@@ -79,7 +80,7 @@ test("control intents fire once on press", () => {
   }
 });
 
-test("hinge actions: f g w q i z Shift+z d, and F11 without MOD", () => {
+test("hinge actions: f g w q i z Shift+z d t, and F11 without MOD", () => {
   const cases: [string, boolean, string][] = [
     ["KeyF", false, "fullscreen"],
     ["KeyG", false, "pixel-perfect"],
@@ -89,6 +90,7 @@ test("hinge actions: f g w q i z Shift+z d, and F11 without MOD", () => {
     ["KeyZ", false, "pause"],
     ["KeyZ", true, "unpause"],
     ["KeyD", false, "center"],
+    ["KeyT", false, "popout-current"],
   ];
   for (const [code, shiftKey, action] of cases) {
     const { feed } = handler();
@@ -149,6 +151,20 @@ test("an unmapped MOD combo is swallowed but left unclaimed, so the OS still see
   expect(feed(key("keydown", "KeyH", { altKey: true, shiftKey: true }))).toEqual({ intents: [], action: null, claimed: false });
 });
 
+test("a shortcut the filter refuses is swallowed like an unmapped combo and leaves no key held", () => {
+  const modifiers = new ModifierTracker();
+  const h = new ShortcutHandler(modifiers, () => normaliseModifiers(undefined), (code) => code === "KeyB");
+  const feed = (e: KeyEventLike) => {
+    modifiers.handle(e);
+    return h.handle(e, false);
+  };
+  feed(key("keydown", "AltLeft", { altKey: true }));
+  expect(feed(key("keydown", "KeyH", { altKey: true }))).toEqual({ intents: [], action: null, claimed: false });
+  expect(feed(key("keydown", "KeyQ", { altKey: true }))).toEqual({ intents: [], action: null, claimed: false });
+  expect(h.flush()).toEqual([]);
+  expect(feed(key("keydown", "KeyB", { altKey: true }))?.intents).toEqual([{ type: "key", action: "down", keyCode: BACK, repeat: 0, metaState: 0 }]);
+});
+
 test("while paused, device shortcuts do nothing but unpause and the window actions still work", () => {
   const { feed } = handler();
   feed(key("keydown", "AltLeft", { altKey: true }), true);
@@ -198,9 +214,9 @@ test("MOD defaults to left Alt alone on Windows, which reserves most Win+letter 
   expect(normaliseModifiers(["bogus"], defaultModifiers("win32"))).toEqual(["lalt"]);
 });
 
-test("the table covers every letter scrcpy documents plus hinge's d", () => {
+test("the table covers every letter scrcpy documents plus hinge's d and t", () => {
   expect(Object.keys(SHORTCUT_TABLE).sort()).toEqual(
-    ["ArrowDown", "ArrowUp", "Backspace", "KeyB", "KeyC", "KeyD", "KeyF", "KeyG", "KeyH", "KeyI", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyV", "KeyW", "KeyX", "KeyZ"].sort(),
+    ["ArrowDown", "ArrowUp", "Backspace", "KeyB", "KeyC", "KeyD", "KeyF", "KeyG", "KeyH", "KeyI", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT", "KeyV", "KeyW", "KeyX", "KeyZ"].sort(),
   );
 });
 
@@ -210,4 +226,10 @@ test("right Alt (AltGr on many layouts) and right Super are not MOD by default",
     feed(key("keydown", code, { altKey: code === "AltRight", metaKey: code === "MetaRight" }));
     expect(feed(key("keydown", "KeyD", { altKey: code === "AltRight", metaKey: code === "MetaRight" })), code).toBeNull();
   }
+});
+
+test("MOD+t pops the current app out from the main window only: a pop-out never takes it", () => {
+  expect(SHORTCUT_TABLE.KeyT).toEqual({ plain: { kind: "action", action: "popout-current" } });
+  expect(popoutAllows("KeyT", false)).toBe(false);
+  expect(popoutAllows("KeyT", true)).toBe(false);
 });

@@ -126,6 +126,31 @@ test("launchAppOnPhone takes the last non-empty line of resolve-activity's outpu
   expect(commands[1]).toBe("am start -n com.example.chat/.MainActivity");
 });
 
+test("launchAppOnPhone runs nothing on the phone for a name that is not a package", async () => {
+  const commands: string[] = [];
+  const logs: string[] = [];
+  const runShell = async (_adb: unknown, command: string) => {
+    commands.push(command);
+    return "com.example.chat/.MainActivity\n";
+  };
+  await launchAppOnPhone(fakeAdb() as never, "x;reboot", (line) => logs.push(line), { runShell: runShell as never });
+  expect(commands).toEqual([]);
+  expect(logs).toHaveLength(1);
+});
+
+test("launchAppOnPhone starts nothing when the resolved component is not a plain component name", async () => {
+  const commands: string[] = [];
+  const logs: string[] = [];
+  const runShell = async (_adb: unknown, command: string) => {
+    commands.push(command);
+    if (command.startsWith("cmd package resolve-activity")) return "com.example.chat/.Main;reboot\n";
+    return "";
+  };
+  await launchAppOnPhone(fakeAdb() as never, "com.example.chat", (line) => logs.push(line), { runShell: runShell as never });
+  expect(commands).toHaveLength(1);
+  expect(logs).toHaveLength(1);
+});
+
 test("launchAppOnPhone logs, never throws, when nothing resolves", async () => {
   const logs: string[] = [];
   const runShell = async () => "";

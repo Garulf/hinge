@@ -15,6 +15,7 @@ function fakeNotifier(): { notifier: Notifier; shown: { title: string; body: str
         onClick(cb) {
           clickHandlers.push(cb);
         },
+        close() {},
       };
     },
   };
@@ -55,7 +56,6 @@ function scriptedShell(responses: string[]): { runShell: (adb: unknown, command:
 
 const CHAT_MESSAGE = [
   "  NotificationRecord(0x1: pkg=com.example.chat user=UserHandle{0} id=1 tag=null key=0|com.example.chat|1|null|10201: Notification(flags=0x10))",
-  "    pkg=com.example.chat",
   "    key=0|com.example.chat|1|null|10201",
   "    importance=3",
   "    postTime=1000",

@@ -1,0 +1,66 @@
+ACTIVITY MANAGER RECENT TASKS (dumpsys activity recents)
+  mRecentsUid=10089
+  mRecentsComponent=ComponentInfo{com.android.launcher3/com.android.quickstep.RecentsActivity}
+  mFreezeTaskListReordering=false
+  mFreezeTaskListReorderingPendingTimeout=false
+  mHiddenTasks=[]
+
+  Recent tasks:
+  * Recent #0: Task{8c1f0a2 #412 type=standard A=10231:com.example.chat U=0 visible=true visibleRequested=true mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a231 mCallingUid=u0a89 mUserSetupComplete=true mCallingPackage=com.android.launcher3 mCallingFeatureId=null
+    affinity=10231:com.example.chat
+    intent={act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.example.chat/.MainActivity}
+    mActivityComponent=com.example.chat/.MainActivity
+    rootWasReset=false mNeverRelinquishIdentity=true mReuseTask=false mLockTaskAuth=LOCK_TASK_AUTH_PINNABLE
+    Activities=[ActivityRecord{5d6e7f8 u0 com.example.chat/.MainActivity t412}]
+    askedCompatMode=false inRecents=true isAvailable=true
+    taskId=412 rootTaskId=412
+    hasChildPipActivity=false
+    mHasBeenVisible=true
+    mResizeMode=RESIZE_MODE_RESIZEABLE mSupportsPictureInPicture=false isResizeable=true
+    lastActiveTime=81234567 (inactive for 3s)
+  * Recent #1: Task{3b2a190 #408 type=standard I=com.example.maps/.MapsActivity U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a198 mCallingUid=u0a89 mUserSetupComplete=true mCallingPackage=com.android.launcher3 mCallingFeatureId=null
+    intent={act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.example.maps/.MapsActivity}
+    mActivityComponent=com.example.maps/.MapsActivity
+    Activities=[ActivityRecord{7a8b9c0 u0 com.example.maps/.MapsActivity t408}]
+    taskId=408 rootTaskId=408
+    lastActiveTime=81200011 (inactive for 37s)
+  * Recent #2: Task{f00d123 #401 type=standard A=10231:com.example.chat U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a231 mCallingUid=u0a231 mUserSetupComplete=true mCallingPackage=com.example.chat mCallingFeatureId=null
+    affinity=10231:com.example.chat
+    intent={flg=0x10080000 cmp=com.example.chat/.CallActivity}
+    mActivityComponent=com.example.chat/.CallActivity
+    taskId=401 rootTaskId=401
+    lastActiveTime=81100456 (inactive for 137s)
+  * Recent #3: Task{0a1b2c3 #399 type=standard A=10114:com.android.systemui U=0 visible=false visibleRequested=false mode=fullscreen translucent=true sz=0}
+    userId=0 effectiveUid=u0a114 mCallingUid=1000 mUserSetupComplete=true mCallingPackage=android mCallingFeatureId=null
+    affinity=10114:com.android.systemui
+    intent={flg=0x10000000 cmp=com.android.systemui/.media.dialog.MediaOutputDialogActivity}
+    taskId=399 rootTaskId=399
+  * Recent #4: Task{9e8d7c6 #395 type=standard A=10177:com.example.notes U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a177 mCallingUid=u0a89 mUserSetupComplete=true mCallingPackage=com.android.launcher3 mCallingFeatureId=null
+    affinity=10177:com.example.notes
+    intent={act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.example.notes/.NotesActivity}
+    taskId=395 rootTaskId=395
+  * Recent #5: Task{6c5b4a3 #390 type=standard U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a150 mCallingUid=u0a89 mUserSetupComplete=true mCallingPackage=com.android.launcher3 mCallingFeatureId=null
+    intent={act=android.intent.action.VIEW dat=https://example.com/... flg=0x10000000 cmp=com.example.browser/.BrowserActivity}
+    taskId=390 rootTaskId=390
+  * Recent #6: Task{2d3e4f5 #385 type=standard I=com.example.camera/.CameraActivity U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a160 mCallingUid=u0a89 mUserSetupComplete=true mCallingPackage=com.android.launcher3 mCallingFeatureId=null
+    taskId=385 rootTaskId=385
+  * Recent #7: Task{4e5f6a7 #380 type=standard A=10300:com.example.mail.compose U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a300 mCallingUid=u0a300 mUserSetupComplete=true mCallingPackage=com.example.mail mCallingFeatureId=null
+    affinity=10300:com.example.mail.compose
+    intent={act=android.intent.action.SEND flg=0x10080001 cmp=com.example.mail/.ComposeActivity}
+    taskId=380 rootTaskId=380
+  * Recent #8: Task{5f6a7b8 #377 type=standard aI=com.example.music/.PlayerActivity U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a171 mCallingUid=u0a171 mUserSetupComplete=true mCallingPackage=com.example.music mCallingFeatureId=null
+    taskId=377 rootTaskId=377
+
+  Visible recent tasks (most recent first):
+  * RecentTaskInfo #0:
+    id=412 userId=0 hasTask=true lastActiveTime=81234567
+    baseIntent=Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.example.chat/.MainActivity }
+    baseActivity=ComponentInfo{com.example.chat/com.example.chat.MainActivity}

@@ -1,3 +1,4 @@
+import type { DisplayGeometry } from "../shared/popout";
 import type { Settings } from "./settings";
 
 export interface StreamSettings {
@@ -26,7 +27,62 @@ export function toStreamSettings(settings: Settings): StreamSettings {
   };
 }
 
-export function buildInit(s: StreamSettings, attempt: 0 | 1 | 2): Record<string, unknown> {
+/**
+ * Several hinge servers run on one phone at once (main, companion, pop-outs).
+ * Each needs its own scid, which names its adb socket, and its own jar path,
+ * because a server deletes its jar once it has launched.
+ */
+export interface ServerInstance {
+  scid: string;
+  jarPath: string;
+}
+
+export function newServerInstance(): ServerInstance {
+  const scid = Math.floor(Math.random() * 0x80000000).toString(16);
+  return { scid, jarPath: `/data/local/tmp/hinge-scrcpy-${scid}.jar` };
+}
+
+/** A pop-out streams one app on its own virtual display; the main session streams the phone's screen. */
+export type SessionRole = { kind: "main" } | { kind: "popout"; pkg: string; geometry: DisplayGeometry };
+
+const MAIN_ROLE: SessionRole = { kind: "main" };
+
+/** A companion session, when present, owns the phone's audio and clipboard, so the video sessions leave both off. */
+export function buildInit(s: StreamSettings, attempt: 0 | 1 | 2, role: SessionRole = MAIN_ROLE, companion = false): Record<string, unknown> {
+  const init = mainInit(s, attempt);
+  if (role.kind === "popout") return { ...init, ...popoutOverrides(role.geometry) };
+  if (companion) return { ...init, audio: false, clipboardAutosync: false };
+  return init;
+}
+
+function popoutOverrides(g: DisplayGeometry): Record<string, unknown> {
+  return {
+    audio: false,
+    clipboardAutosync: false,
+    maxSize: 0,
+    newDisplay: `${g.width}x${g.height}/${g.dpi}`,
+    vdSystemDecorations: false,
+    vdDestroyContent: false,
+    displayImePolicy: "hide",
+    // Waking the phone would turn its main screen on for an app shown only on the PC.
+    powerOn: false,
+  };
+}
+
+export function buildCompanionInit(s: StreamSettings): Record<string, unknown> {
+  return {
+    video: false,
+    audio: s.audio,
+    control: true,
+    clipboardAutosync: true,
+    tunnelForward: true,
+    sendDeviceMeta: false,
+    powerOn: false,
+    stayAwake: false,
+  };
+}
+
+function mainInit(s: StreamSettings, attempt: 0 | 1 | 2): Record<string, unknown> {
   return {
     video: true,
     audio: s.audio,

@@ -1,8 +1,9 @@
 import { basename } from "node:path";
 import type { Adb } from "@yume-chan/adb";
 import type { PostureReading } from "../shared/posture";
-import type { AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
+import type { AppRequest, AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
+import { abortableDelay } from "./abortable-delay";
 import type { MediaSink, MediaSource } from "./media-source";
 import { dedupeDevices, deviceIdentity, deviceStatus, pickDevice, transportOf, type DeviceSummary } from "./transport";
 import { connectOrAlreadyConnected, pairNewDevice, switchDeviceToWifi, type WirelessDeps } from "./wireless";
@@ -41,7 +42,13 @@ function errorResult(type: DeviceCommand["type"], message: string): DeviceComman
  * followed by the last posture reading so the fold pose comes back too, and
  * the live audio stream's start and configuration packet.
  */
-export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath?: string; onStatus?: (status: SessionStatus) => void }): MediaSink {
+export interface BindSourceOptions {
+  logPath?: string;
+  onStatus?: (status: SessionStatus) => void;
+  onRendererMessage?: (msg: AppRequest) => void;
+}
+
+export function bindSource(source: MediaSource, port: PortLike, opts?: BindSourceOptions): MediaSink {
   const logHint = opts?.logPath ? `(log: ${basename(opts.logPath)})` : "";
 
   function post(msg: MainToRenderer): void {
@@ -121,7 +128,12 @@ export function bindSource(source: MediaSource, port: PortLike, opts?: { logPath
         .catch((e) => post({ kind: "device-command-result", id: msg.id, result: errorResult(msg.command.type, String(e)) }));
       return;
     }
-    source.control(msg.intent);
+    if (msg.kind === "control") {
+      source.control(msg.intent);
+      return;
+    }
+    if (msg.kind === "viewport" || msg.kind === "retry") return;
+    opts?.onRendererMessage?.(msg);
   });
 
   return sink;
@@ -154,6 +166,26 @@ export type NotificationMirrorStarter = (
   log: (line: string) => void,
 ) => Promise<() => Promise<void>>;
 
+/** A phone whose adb transport is open for the current connection. */
+export interface ConnectedPhone {
+  adb: Adb;
+  serial: string;
+  deviceId: string;
+  model: string | null;
+}
+
+/** The same phone over the same transport: a new transport to the same phone is a reconnect. */
+export function samePhone(a: ConnectedPhone | null, b: ConnectedPhone | null): boolean {
+  return a === b || (a !== null && b !== null && a.adb === b.adb && a.deviceId === b.deviceId);
+}
+
+interface Connection {
+  device: DeviceSummary;
+  id: string;
+  adb: Adb;
+  run: number;
+}
+
 export class DeviceSource implements MediaSource {
   #sink: MediaSink | null = null;
   #dispose: (() => Promise<void>) | null = null;
@@ -177,8 +209,12 @@ export class DeviceSource implements MediaSource {
   #tcpReconnectAbort: AbortController | null = null;
   /** The identity of a phone the user disconnected; every transport of it is excluded from auto-pick and TCP reconnect until chooseDevice() clears it. */
   #suppressedId: string | null = null;
-  /** The last transport that actually reached "streaming" this run; TCP reconnect only arms for it, not for a stale lastDevice that has never once connected. */
+  /** The last transport whose adb opened this run; TCP reconnect only arms for it, not for a stale lastDevice that has never once connected. */
   #reconnectEligible: { serial: string; id: string } | null = null;
+  #mainVideo: boolean;
+  /** The current run's open transport, once #run has opened it. */
+  #connection: Connection | null = null;
+  #announced: ConnectedPhone | null = null;
 
   constructor(
     private readonly opts: {
@@ -200,9 +236,27 @@ export class DeviceSource implements MediaSource {
       onConnected?: (id: string) => void;
       /** Fired the first time a transport's identity is known; connecting waits for it, so settings saved under the old serial can move over first. */
       onIdentified?: (serial: string, id: string) => Promise<void> | void;
+      /** Whether connecting a phone also starts its main video session; setMainVideo() changes it later. Defaults to true. */
+      mainVideo?: boolean;
+      /** Fired with the phone once its adb is open, and with null once that phone is gone (not when only its video session ends). */
+      onPhone?: (phone: ConnectedPhone | null) => void;
     },
   ) {
     this.#preferred = opts.preferred ?? null;
+    this.#mainVideo = opts.mainVideo ?? true;
+  }
+
+  /** Starts or stops the main video session for the connected phone, leaving its adb, fold monitor and notification mirror running. */
+  setMainVideo(on: boolean): void {
+    if (this.#mainVideo === on) return;
+    this.#mainVideo = on;
+    if (!on) {
+      const session = this.#session;
+      this.#session = null;
+      void session?.stop();
+      return;
+    }
+    if (!this.#stopped) this.#resumeVideo();
   }
 
   async start(sink: MediaSink): Promise<void> {
@@ -238,7 +292,7 @@ export class DeviceSource implements MediaSource {
       return;
     }
     if (this.#sessionSerial === device.serial) return;
-    this.#teardownSession();
+    this.#teardownSession(device);
     this.#connect(device);
   }
 
@@ -365,6 +419,8 @@ export class DeviceSource implements MediaSource {
     const session = this.#session;
     this.#session = null;
     this.#sessionSerial = null;
+    this.#connection = null;
+    this.#withdrawPhone();
     await this.#stopPostureSampler();
     await this.#stopNotificationMirrorSampler();
     await session?.stop();
@@ -400,9 +456,12 @@ export class DeviceSource implements MediaSource {
     this.#beginReconnect();
   }
 
+  /** Every transport opened through the lost adb server is dead, so the connection goes with it and the next device list connects afresh. */
   #beginReconnect(): void {
     if (this.#stopped || this.#reconnecting) return;
     this.#reconnecting = true;
+    this.#cancelSessionRetry();
+    this.#teardownSession();
     this.opts.log?.("adb device tracking failed, reconnecting");
     this.#sink?.status({ state: "error", message: "Lost connection to the adb server, reconnecting..." });
     this.#reconnectAbort = new AbortController();
@@ -411,7 +470,7 @@ export class DeviceSource implements MediaSource {
 
   async #reconnect(signal: AbortSignal): Promise<void> {
     let attempt = 0;
-    const delay = this.opts.delay ?? defaultDelay;
+    const delay = this.opts.delay ?? abortableDelay;
     while (!this.#stopped) {
       await delay(RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)], signal);
       if (this.#stopped) return;
@@ -464,9 +523,19 @@ export class DeviceSource implements MediaSource {
     }
     this.#cancelTcpReconnect();
     if (!device) return;
-    if (this.#sessionSerial === device.serial) return;
-    this.#teardownSession();
+    if (this.#sessionSerial === device.serial) {
+      this.#resumeVideo();
+      return;
+    }
+    this.#teardownSession(device);
     this.#connect(device);
+  }
+
+  /** Starts the main video on the open connection when it has none, unless a retry backoff is still pending. */
+  #resumeVideo(): void {
+    const connection = this.#connection;
+    if (!this.#mainVideo || this.#session || this.#sessionRetryAbort || !connection || connection.run !== this.#runToken) return;
+    void this.#startVideo(connection);
   }
 
   /**
@@ -489,7 +558,7 @@ export class DeviceSource implements MediaSource {
   }
 
   async #tcpReconnectLoop(address: string, controller: AbortController): Promise<void> {
-    const delay = this.opts.delay ?? defaultDelay;
+    const delay = this.opts.delay ?? abortableDelay;
     let attempt = 0;
     while (!this.#stopped && !controller.signal.aborted) {
       await delay(SESSION_RETRY_DELAYS_MS[Math.min(attempt, SESSION_RETRY_DELAYS_MS.length - 1)], controller.signal);
@@ -510,11 +579,14 @@ export class DeviceSource implements MediaSource {
     this.#tcpReconnectAbort = null;
   }
 
-  #teardownSession(): void {
+  /** `next` is the device about to be connected: the announced phone stays when it is that same transport coming back after its session ended. */
+  #teardownSession(next?: DeviceSummary): void {
     this.#runToken++;
     const session = this.#session;
     this.#session = null;
     this.#sessionSerial = null;
+    this.#connection = null;
+    if (this.#announced?.serial !== next?.serial) this.#withdrawPhone();
     void this.#stopPostureSampler();
     void this.#stopNotificationMirrorSampler();
     if (session) void session.stop();
@@ -532,10 +604,20 @@ export class DeviceSource implements MediaSource {
     await stop?.().catch(() => {});
   }
 
+  #announcePhone(phone: ConnectedPhone): void {
+    this.#announced = phone;
+    this.opts.onPhone?.(phone);
+  }
+
+  #withdrawPhone(): void {
+    if (!this.#announced) return;
+    this.#announced = null;
+    this.opts.onPhone?.(null);
+  }
+
   #connect(device: DeviceSummary): void {
     const id = this.#settledIdentity(device);
     this.#sessionSerial = device.serial;
-    this.#sessionEverStreamed = false;
     this.#preferred = id;
     this.opts.onConnected?.(id);
     const run = ++this.#runToken;
@@ -557,38 +639,69 @@ export class DeviceSource implements MediaSource {
   async #run(device: DeviceSummary, id: string, run: number): Promise<void> {
     const sink = this.#sink;
     if (!sink) return;
+    let adb: Adb;
+    try {
+      adb = await this.opts.host.open(device.serial);
+    } catch (e) {
+      this.#onRunFailed(run, e);
+      return;
+    }
+    if (this.#stopped || this.#runToken !== run) return;
+
+    const connection: Connection = { device, id, adb, run };
+    this.#connection = connection;
+    this.#announcePhone({ adb, serial: device.serial, deviceId: id, model: device.model });
+    this.#reconnectEligible = { serial: device.serial, id };
+
+    if (this.opts.foldMonitor) void this.#startFoldMonitor(run, adb, sink);
+    if (this.opts.notificationMirror) void this.#startNotificationMirror(run, adb);
+
+    if (this.#mainVideo) await this.#startVideo(connection);
+    else sink.status({ state: "connecting", serial: device.serial });
+  }
+
+  async #startVideo(connection: Connection): Promise<void> {
+    const sink = this.#sink;
+    if (!sink) return;
+    const { device, id, adb, run } = connection;
     const observedSink: MediaSink = {
       ...sink,
       status: (status) => {
         if (status.state === "streaming") {
           this.#sessionEverStreamed = true;
           this.#sessionRetryAttempt = 0;
-          this.#reconnectEligible = { serial: device.serial, id };
         }
         if (status.state === "error") this.#lastSessionError = status.message;
         sink.status(status);
       },
     };
+    this.#sessionEverStreamed = false;
+    let session: MediaSource | null = null;
     try {
-      const adb = await this.opts.host.open(device.serial);
-      if (this.#stopped || this.#runToken !== run) return;
-
-      if (this.opts.foldMonitor) void this.#startFoldMonitor(run, adb, sink);
-      if (this.opts.notificationMirror) void this.#startNotificationMirror(run, adb);
-
-      const session = this.opts.createSession(device, adb, id);
+      session = this.opts.createSession(device, adb, id);
       this.#session = session;
-      session.ended?.then(() => this.#onSessionEnded(session));
+      const started = session;
+      session.ended?.then(() => this.#onSessionEnded(started));
       await session.start(observedSink);
     } catch (e) {
-      if (this.#stopped || this.#runToken !== run) return;
-      this.#runToken++;
+      // Dropped already (setMainVideo(false) or a teardown): its failure is not the connection's.
+      if (this.#stopped || run !== this.#runToken || (session && this.#session !== session)) return;
       this.#session = null;
-      this.#sessionSerial = null;
       this.opts.log?.(`session start failed: ${String(e)}`);
       this.#lastSessionError = String(e);
       this.#beginSessionRetry();
     }
+  }
+
+  #onRunFailed(run: number, e: unknown): void {
+    if (this.#stopped || this.#runToken !== run) return;
+    this.#runToken++;
+    this.#session = null;
+    this.#sessionSerial = null;
+    this.#connection = null;
+    this.opts.log?.(`session start failed: ${String(e)}`);
+    this.#lastSessionError = String(e);
+    this.#beginSessionRetry();
   }
 
   async #startFoldMonitor(run: number, adb: Adb, sink: MediaSink): Promise<void> {
@@ -629,12 +742,8 @@ export class DeviceSource implements MediaSource {
    */
   #onSessionEnded(session: MediaSource): void {
     if (this.#stopped || this.#session !== session) return;
-    this.#runToken++;
     const streamed = this.#sessionEverStreamed;
     this.#session = null;
-    this.#sessionSerial = null;
-    void this.#stopPostureSampler();
-    void this.#stopNotificationMirrorSampler();
     void session.stop();
     if (streamed) {
       this.#sessionRetryAttempt = 0;
@@ -657,7 +766,7 @@ export class DeviceSource implements MediaSource {
     this.#sink?.status({ state: "error", message: `${base} (retrying in ${Math.round(delayMs / 1000)}s)` });
     const controller = new AbortController();
     this.#sessionRetryAbort = controller;
-    const delay = this.opts.delay ?? defaultDelay;
+    const delay = this.opts.delay ?? abortableDelay;
     void delay(delayMs, controller.signal).then(() => {
       // Superseded (a newer retry started) or cancelled (device-list change or stop): the
       // cancelling code path already decided what happens next, do nothing here.
@@ -673,22 +782,4 @@ export class DeviceSource implements MediaSource {
     this.#sessionRetryAbort = null;
     this.#sessionRetryAttempt = 0;
   }
-}
-
-function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
 }

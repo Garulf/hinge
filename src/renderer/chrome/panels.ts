@@ -1,3 +1,5 @@
+import type { AppEntry } from "../../shared/app-catalog";
+import { listingChange, pickerSections, type PickerListing } from "../../shared/picker";
 import type { Settings, SettingsPatch, ShortcutModifier } from "../../shared/settings";
 import { normaliseModifiers, SHORTCUT_MODIFIERS } from "../../shared/shortcuts";
 import type { DeviceCommand, DeviceCommandResult, DeviceSummary } from "../../shared/wire";
@@ -7,7 +9,7 @@ import type { Size } from "./hit-zone";
 import type { ToastInput } from "./toast-queue";
 import { deviceResultMessage, PAIR_INPUT_MESSAGES, type DeviceMessage } from "./toast-text";
 
-export type PanelName = "device" | "colour" | "settings";
+export type PanelName = "apps" | "device" | "colour" | "settings";
 
 export interface Panel {
   readonly node: HTMLElement;
@@ -254,7 +256,7 @@ export class SettingsPanel implements Panel {
       el("h3", { text: "Shortcut key (MOD)" }),
       modifierGrid,
       el("h3", { text: "Notifications" }),
-      el("label", { className: "check" }, [this.#mirrorNotifications, "Mirror phone notifications"]),
+      el("label", { className: "check" }, [this.#mirrorNotifications, "Mirror phone notifications and calls"]),
       el("h3", { text: "Stream" }),
       el("label", { className: "check" }, [this.#audio, "Play phone audio on this PC"]),
       el("div", { className: "grid" }, [
@@ -304,5 +306,131 @@ export class SettingsPanel implements Panel {
       return;
     }
     this.#deps.save({ shortcutModifiers: [...picked] });
+  }
+}
+
+export interface PickerPanelDeps {
+  requestApps(id: number): void;
+  popOut(pkg: string): void;
+  createShortcut(pkg: string): void;
+}
+
+/**
+ * The tiles are built once per list; typing only hides the ones that do not
+ * match, and a later answer carrying the fetched icons swaps them in place.
+ */
+export class PickerPanel implements Panel {
+  readonly size = { w: 340, h: 480 };
+  readonly node: HTMLElement;
+  readonly #deps: PickerPanelDeps;
+  readonly #search = el("input", { attrs: { type: "text", placeholder: "Search apps", "aria-label": "Search apps", spellcheck: "false" } });
+  readonly #error = el("div", { className: "status error", attrs: { role: "status", "data-picker-error": "", hidden: "" } });
+  readonly #body = el("div");
+  readonly #recentsSection = el("div");
+  readonly #allTiles = new Map<string, HTMLElement>();
+  readonly #glyphs = new Map<string, HTMLElement[]>();
+  readonly #noMatch = el("div", { className: "empty", text: "No apps match", attrs: { hidden: "" } });
+  #requested = 0;
+  #listing: PickerListing | null = null;
+
+  constructor(deps: PickerPanelDeps) {
+    this.#deps = deps;
+    this.#search.addEventListener("input", () => this.#filter());
+    this.#search.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const first = this.#listing && pickerSections(this.#listing.apps, this.#listing.recents, this.#search.value).all[0];
+      if (first) deps.popOut(first.pkg);
+    });
+    const refresh = el("button", { text: "Refresh", on: { click: () => this.#request() } });
+    this.node = panelNode("Apps", [this.#search, this.#error, this.#body], refresh);
+  }
+
+  opened(): void {
+    this.#search.value = "";
+    this.#request();
+    this.#search.focus();
+  }
+
+  settingsChanged(): void {}
+
+  listed(listing: PickerListing): void {
+    const change = listingChange(this.#requested, this.#listing, listing);
+    if (change === "stale") return;
+    this.#listing = listing;
+    if (change === "icons") this.#updateIcons(listing.icons);
+    else this.#build(listing);
+  }
+
+  #request(): void {
+    this.#requested++;
+    this.#listing = null;
+    this.#error.hidden = true;
+    this.node.setAttribute("aria-busy", "true");
+    this.#body.replaceChildren(el("div", { className: "empty", text: "Loading apps..." }));
+    this.#deps.requestApps(this.#requested);
+  }
+
+  #build(listing: PickerListing): void {
+    this.node.removeAttribute("aria-busy");
+    this.#error.hidden = !listing.error;
+    this.#error.textContent = listing.error ?? "";
+    this.#allTiles.clear();
+    this.#glyphs.clear();
+    const { recents, all } = pickerSections(listing.apps, listing.recents, "");
+    const allGrid = el("div", { className: "hinge-apps" });
+    for (const app of all) {
+      const tile = this.#tile(app, listing.icons[app.pkg]);
+      this.#allTiles.set(app.pkg, tile);
+      allGrid.append(tile);
+    }
+    this.#recentsSection.replaceChildren(el("h3", { text: "Recent" }), el("div", { className: "hinge-apps" }, recents.map((app) => this.#tile(app, listing.icons[app.pkg]))));
+    this.#recentsSection.dataset.empty = String(recents.length === 0);
+    const sections: HTMLElement[] = [];
+    if (all.length > 0) sections.push(this.#recentsSection, el("h3", { text: "All apps" }), allGrid, this.#noMatch);
+    else if (!listing.error) sections.push(el("div", { className: "empty", text: "No apps found on the phone" }));
+    this.#body.replaceChildren(...sections);
+    this.#filter();
+  }
+
+  #filter(): void {
+    const listing = this.#listing;
+    if (!listing) return;
+    const query = this.#search.value;
+    const matching = new Set(pickerSections(listing.apps, [], query).all.map((app) => app.pkg));
+    for (const [pkg, tile] of this.#allTiles) tile.hidden = !matching.has(pkg);
+    this.#recentsSection.hidden = query.trim() !== "" || this.#recentsSection.dataset.empty === "true";
+    this.#noMatch.hidden = matching.size > 0;
+  }
+
+  #updateIcons(icons: Record<string, string>): void {
+    for (const [pkg, glyphs] of this.#glyphs) {
+      const icon = icons[pkg];
+      if (!icon || glyphs.every((glyph) => glyph instanceof HTMLImageElement)) continue;
+      this.#glyphs.set(
+        pkg,
+        glyphs.map((glyph) => {
+          const image = this.#glyph(pkg, icon);
+          glyph.replaceWith(image);
+          return image;
+        }),
+      );
+    }
+  }
+
+  #glyph(label: string, icon: string | undefined): HTMLElement {
+    return icon
+      ? el("img", { className: "icon", attrs: { src: icon, alt: "", draggable: "false" } })
+      : el("span", { className: "icon letter", text: (label.trim()[0] ?? "?").toUpperCase(), attrs: { "aria-hidden": "true" } });
+  }
+
+  #tile(app: AppEntry, icon: string | undefined): HTMLElement {
+    const glyph = this.#glyph(app.label, icon);
+    this.#glyphs.set(app.pkg, [...(this.#glyphs.get(app.pkg) ?? []), glyph]);
+    const open = el("button", { className: "open", title: `Open ${app.label} in its own window`, attrs: { "data-app": app.pkg }, on: { click: () => this.#deps.popOut(app.pkg) } }, [
+      glyph,
+      el("span", { className: "label", text: app.label }),
+    ]);
+    const shortcut = el("button", { className: "shortcut", text: "Shortcut", title: `Create a desktop shortcut for ${app.label}`, on: { click: () => this.#deps.createShortcut(app.pkg) } });
+    return el("div", { className: "tile" }, [open, shortcut]);
   }
 }

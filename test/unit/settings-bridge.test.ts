@@ -72,3 +72,19 @@ test("the bridge serves, saves, pushes changes back and applies always-on-top", 
   expect(store.current.devices.R3CX).toEqual({ pxPerMm: 6 });
   expect(onTop).toEqual([false, true]);
 });
+
+test("pop-out windows read the settings and follow their changes, but cannot save them", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hinge-bridge-"));
+  const store = await loadSettings(join(dir, "settings.json"));
+  const { handlers, win, ipc, own } = fakes();
+  const popoutSent: unknown[] = [];
+  const popout = { send: (_channel: string, value: unknown) => popoutSent.push(value) };
+  bridgeSettings(win, store, ipc, "/x/settings.json", () => [popout]);
+
+  expect(handlers.get("hinge:settings-get")!({ sender: popout })).toMatchObject({ colourway: "jetblack" });
+  expect(await handlers.get("hinge:settings-save")!({ sender: popout }, { colourway: "mint" })).toBeUndefined();
+  expect(store.current.colourway).toBe("jetblack");
+
+  await handlers.get("hinge:settings-save")!(own, { wheelStyle: "events" });
+  expect(popoutSent.at(-1)).toMatchObject({ wheelStyle: "events" });
+});

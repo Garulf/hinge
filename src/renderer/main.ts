@@ -23,23 +23,8 @@ import { PortClient, receivePort } from "./port-client";
 import { ScaleController } from "./scale-controller";
 import { RotationMemory } from "./rotation-memory";
 import { PhoneScene, type ViewState } from "./scene/phone-scene";
+import { statusText } from "./status-text";
 import { VideoPipe } from "./video-pipe";
-
-function statusText(status: SessionStatus): string | null {
-  switch (status.state) {
-    case "no-device":
-      return "Connect your phone";
-    case "unauthorized":
-      return "Allow USB debugging on your phone";
-    case "connecting":
-      return "Connecting...";
-    case "error":
-      return status.message;
-    case "streaming":
-    case "replay":
-      return null;
-  }
-}
 
 const SCENE_READY_CAP_MS = 5000;
 
@@ -194,6 +179,9 @@ const chrome = new Chrome(document.body, {
   settingsPath: () => window.hinge.settingsPath(),
   onAction: (action) => onAction(action),
   currentSerial: () => currentSerial,
+  requestApps: (id) => client?.send({ kind: "apps-request", id }),
+  popOut: (pkg) => client?.send({ kind: "popout-open", pkg }),
+  createShortcut: (pkg) => client?.send({ kind: "create-shortcut", pkg }),
 });
 
 function applySettings(next: Settings): void {
@@ -235,7 +223,7 @@ window.hinge.onFullscreen((on) => {
 
 function onStatus(status: SessionStatus): void {
   sessionState = status.state;
-  scene.setStatus(statusText(status));
+  scene.setStatus(statusText(status, "Connecting..."));
   if (status.state !== "streaming") return;
   currentSerial = status.serial;
   currentDeviceId = status.deviceId;
@@ -339,6 +327,9 @@ function onAction(action: HingeAction): void {
     case "scale-down":
       scaleBy(-1);
       break;
+    case "popout-current":
+      client?.send({ kind: "popout-current" });
+      break;
   }
 }
 
@@ -367,7 +358,7 @@ window.addEventListener("drop", (e) => {
   client?.send({ kind: "drop-files", paths });
 });
 
-type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" | "devices" }>;
+type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" | "devices" | "notice" | "open-picker" | "apps" }>;
 
 function onStreamMessage(msg: StreamMessage): void {
   switch (msg.kind) {
@@ -407,6 +398,9 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
     else if (msg.kind === "transfer-progress") chrome.toast(transferToast(msg.progress));
     else if (msg.kind === "device-command-result") commands.result(msg.id, msg.result);
     else if (msg.kind === "devices") chrome.devicesChanged(msg.devices);
+    else if (msg.kind === "notice") chrome.toast({ id: "notice", text: msg.text });
+    else if (msg.kind === "open-picker") chrome.openPicker();
+    else if (msg.kind === "apps") chrome.appsListed(msg);
     else streamGate.push(msg);
   });
   client.send({ kind: "ready" });

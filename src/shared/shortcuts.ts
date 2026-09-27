@@ -12,7 +12,8 @@ export type HingeAction =
   | "pause"
   | "unpause"
   | "scale-up"
-  | "scale-down";
+  | "scale-down"
+  | "popout-current";
 
 export const SHORTCUT_MODIFIERS: readonly ModifierKey[] = ["lalt", "ralt", "lsuper", "rsuper", "lctrl", "rctrl"];
 export const DEFAULT_MODIFIERS: readonly ModifierKey[] = ["lalt", "lsuper"];
@@ -52,7 +53,7 @@ const keyBinding = (keyCode: number, repeats?: true): Binding => ({ kind: "key",
 const intent = (i: ControlIntent): Binding => ({ kind: "intent", intent: i });
 const action = (a: HingeAction): Binding => ({ kind: "action", action: a });
 
-/** scrcpy's shortcut table (doc/shortcuts.md) keyed by KeyboardEvent.code, without and with Shift; plus hinge's own d. */
+/** scrcpy's shortcut table (doc/shortcuts.md) keyed by KeyboardEvent.code, without and with Shift; plus hinge's own d and t. */
 export const SHORTCUT_TABLE: Record<string, { plain?: Binding; shift?: Binding }> = {
   KeyF: { plain: action("fullscreen") },
   KeyG: { plain: action("pixel-perfect") },
@@ -75,6 +76,7 @@ export const SHORTCUT_TABLE: Record<string, { plain?: Binding; shift?: Binding }
   KeyQ: { plain: action("quit") },
   KeyZ: { plain: action("pause"), shift: action("unpause") },
   KeyD: { plain: action("center") },
+  KeyT: { plain: action("popout-current") },
 };
 
 function bindingFor(code: string, shift: boolean): Binding | undefined {
@@ -102,13 +104,20 @@ function isAltGrText(e: KeyEventLike): boolean {
 export class ShortcutHandler {
   readonly #modifiers: Pick<ModifierTracker, "held">;
   readonly #accepted: () => readonly ModifierKey[];
+  readonly #allows: (code: string, shift: boolean) => boolean;
   readonly #heldKeys = new Map<string, number>();
   #lastPress: { code: string; shift: boolean } | null = null;
   #pressCount = 0;
 
-  constructor(modifiers: Pick<ModifierTracker, "held">, accepted: () => readonly ModifierKey[] = () => DEFAULT_MODIFIERS) {
+  /** A MOD combo that `allows` refuses is treated as unmapped. */
+  constructor(
+    modifiers: Pick<ModifierTracker, "held">,
+    accepted: () => readonly ModifierKey[] = () => DEFAULT_MODIFIERS,
+    allows: (code: string, shift: boolean) => boolean = () => true,
+  ) {
     this.#modifiers = modifiers;
     this.#accepted = accepted;
+    this.#allows = allows;
   }
 
   modHeld(): boolean {
@@ -134,7 +143,7 @@ export class ShortcutHandler {
     }
 
     if (!this.modHeld() || isAltGrText(e)) return null;
-    const binding = bindingFor(e.code, e.shiftKey);
+    const binding = this.#allows(e.code, e.shiftKey) ? bindingFor(e.code, e.shiftKey) : undefined;
     if (!binding) return { intents: [], action: null, claimed: false };
     if (!down) return NOTHING;
 

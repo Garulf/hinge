@@ -1,3 +1,5 @@
+import { isPackageName } from "./package-name";
+
 /** A phone notification as mirrored to the PC, parsed from `dumpsys notification --noredact`. */
 export interface NotificationRecord {
   /** The system's own `userId|pkg|id|tag|uid` notification key, stable across reposts. */
@@ -26,6 +28,30 @@ function escapeRegExp(value: string): string {
 function field(block: string, name: string): string | null {
   const match = new RegExp(`^\\s*${escapeRegExp(name)}=(.*)$`, "m").exec(block);
   return match ? match[1].trim() : null;
+}
+
+/** The lines before a record's extras: everything after can hold message text, so nothing that reaches a shell is read from there. */
+function recordHead(block: string): string {
+  const start = block.indexOf("extras={");
+  return start < 0 ? block : block.slice(0, start);
+}
+
+function headerLine(block: string): string {
+  const end = block.indexOf("\n");
+  return end < 0 ? block : block.slice(0, end);
+}
+
+/** The key line, else the key in the header's `key=<key>: Notification(`. */
+function keyOf(block: string): string | null {
+  return field(recordHead(block), "key") ?? /\bkey=(\S+): Notification\(/.exec(headerLine(block))?.[1] ?? null;
+}
+
+/** From the key's `userId|pkg|id|tag|uid`, else the header line's `pkg=`; empty unless it is a package name. */
+function packageOf(key: string | null, block: string): string {
+  const fromKey = key?.split("|")[1];
+  const fromHeader = /\bpkg=(\S+)/.exec(headerLine(block))?.[1];
+  const pkg = fromKey ?? fromHeader ?? "";
+  return isPackageName(pkg) ? pkg : "";
 }
 
 function extrasBlock(block: string): string | null {
@@ -61,15 +87,15 @@ function toFlags(raw: string | null): number {
 export function parseNotifications(dumpsysText: string): NotificationRecord[] {
   const blocks = dumpsysText.split(RECORD_HEADER).slice(1);
   return blocks.map((block) => {
-    const key = field(block, "key") ?? "";
-    const pkg = field(block, "pkg") ?? "";
+    const key = keyOf(block);
+    const pkg = packageOf(key, block);
     const postTime = Number(field(block, "postTime") ?? field(block, "when") ?? "0");
     const flags = toFlags(field(block, "flags"));
     const importance = toImportance(field(block, "importance"));
     const extras = extrasBlock(block);
     const title = extras ? extraField(extras, "android.title") : "";
     const text = extras ? extraField(extras, "android.text") : "";
-    return { key, pkg, title, text, postTime, flags, importance, groupSummary: (flags & FLAG_GROUP_SUMMARY) !== 0 };
+    return { key: key ?? "", pkg, title, text, postTime, flags, importance, groupSummary: (flags & FLAG_GROUP_SUMMARY) !== 0 };
   });
 }
 

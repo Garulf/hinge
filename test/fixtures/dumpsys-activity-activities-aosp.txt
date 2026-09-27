@@ -1,0 +1,50 @@
+ACTIVITY MANAGER ACTIVITIES (dumpsys activity activities)
+Display #2 (activities from top to bottom):
+  * Task{9e8d7c6 #431 type=standard A=10198:com.example.maps U=0 visible=true visibleRequested=true mode=fullscreen translucent=false sz=1}
+    mResumedActivity: ActivityRecord{4f5e6d7 u0 com.example.maps/.MapsActivity t431}
+    mLastPausedActivity: ActivityRecord{1b2c3d4 u0 com.example.chat/.MainActivity t412}
+    isSleeping=false
+    topResumedActivity=ActivityRecord{4f5e6d7 u0 com.example.maps/.MapsActivity t431}
+    * Hist  #0: ActivityRecord{4f5e6d7 u0 com.example.maps/.MapsActivity t431}
+      packageName=com.example.maps processName=com.example.maps
+      launchedFromUid=2000 launchedFromPackage=com.android.shell launchedFromFeature=null userId=0
+      app=ProcessRecord{1a2b3c4 5123:com.example.maps/u0a198}
+      Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10000000 cmp=com.example.maps/.MapsActivity }
+      rootOfTask=true task=Task{9e8d7c6 #431 type=standard A=10198:com.example.maps}
+      state=RESUMED stopped=false delayedResume=false finishing=false
+  Resumed activities in task display areas (from top to bottom):
+    Resumed: ActivityRecord{4f5e6d7 u0 com.example.maps/.MapsActivity t431}
+
+Display #0 (activities from top to bottom):
+  * Task{8c1f0a2 #412 type=standard A=10231:com.example.chat U=0 visible=true visibleRequested=true mode=fullscreen translucent=false sz=1}
+    mResumedActivity: ActivityRecord{5d6e7f8 u0 com.example.chat/.MainActivity t412}
+    mLastPausedActivity: ActivityRecord{2c3d4e5 u0 com.android.launcher3/.uioverrides.QuickstepLauncher t2}
+    isSleeping=false
+    topResumedActivity=ActivityRecord{5d6e7f8 u0 com.example.chat/.MainActivity t412}
+    * Hist  #0: ActivityRecord{5d6e7f8 u0 com.example.chat/.MainActivity t412}
+      packageName=com.example.chat processName=com.example.chat
+      launchedFromUid=10089 launchedFromPackage=com.android.launcher3 launchedFromFeature=null userId=0
+      app=ProcessRecord{7c8d9e0 4821:com.example.chat/u0a231}
+      Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.example.chat/.MainActivity }
+      rootOfTask=true task=Task{8c1f0a2 #412 type=standard A=10231:com.example.chat}
+      state=RESUMED stopped=false delayedResume=false finishing=false
+  * Task{3a4b5c6 #1 type=home U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    * Task{6d7e8f9 #2 type=home I=com.android.launcher3/.uioverrides.QuickstepLauncher U=0 rootTaskId=1 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+      mLastPausedActivity: ActivityRecord{2c3d4e5 u0 com.android.launcher3/.uioverrides.QuickstepLauncher t2}
+      isSleeping=false
+      * Hist  #0: ActivityRecord{2c3d4e5 u0 com.android.launcher3/.uioverrides.QuickstepLauncher t2}
+        packageName=com.android.launcher3 processName=com.android.launcher3
+        app=ProcessRecord{0f1e2d3 2210:com.android.launcher3/u0a89}
+        Intent { act=android.intent.action.MAIN cat=[android.intent.category.HOME] flg=0x10000100 cmp=com.android.launcher3/.uioverrides.QuickstepLauncher }
+        state=STOPPED stopped=true delayedResume=false finishing=false
+  Resumed activities in task display areas (from top to bottom):
+    Resumed: ActivityRecord{5d6e7f8 u0 com.example.chat/.MainActivity t412}
+
+  ResumedActivity: ActivityRecord{4f5e6d7 u0 com.example.maps/.MapsActivity t431}
+
+  topDisplayFocusedRootTask=Task{9e8d7c6 #431 type=standard A=10198:com.example.maps U=0 visible=true visibleRequested=true mode=fullscreen translucent=false sz=1}
+  mCurTaskIdForUser={0=431}
+  mUserRootTaskInFront={}
+  mVisibilityTransactionDepth=0
+  isHomeRecentsComponent=true  KeyguardController:
+    mKeyguardShowing=false

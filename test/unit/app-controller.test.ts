@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { bindSource, DeviceSource, type DeviceWatcher, type FoldMonitorStarter, type NotificationMirrorStarter, type PortLike } from "../../src/main/app-controller";
+import { bindSource, DeviceSource, type ConnectedPhone, type DeviceWatcher, type FoldMonitorStarter, type NotificationMirrorStarter, type PortLike } from "../../src/main/app-controller";
 import type { MediaSource, MediaSink } from "../../src/main/media-source";
 import { ScrcpySession, type ScrcpyServerDeps } from "../../src/main/scrcpy-session";
 import { DEFAULT_STREAM_SETTINGS } from "../../src/main/scrcpy-init";
@@ -154,6 +154,27 @@ test("forwards transfer-progress from the sink to the port, and routes a drop-fi
   });
 });
 
+test("pop-out and app requests from the main window go to onRendererMessage, never to the source's control", () => {
+  let handler: (m: RendererToMain) => void = () => {};
+  const port: PortLike = { postMessage: () => {}, onMessage: (fn) => { handler = fn; } };
+  const controls: ControlIntent[] = [];
+  const received: RendererToMain[] = [];
+  bindSource({ start: async () => {}, control: (i) => controls.push(i), stop: async () => {} }, port, { onRendererMessage: (m) => received.push(m) });
+
+  const requests: RendererToMain[] = [
+    { kind: "popout-open", pkg: "com.example.chat" },
+    { kind: "popout-current" },
+    { kind: "apps-request", id: 1 },
+    { kind: "create-shortcut", pkg: "com.example.chat" },
+  ];
+  for (const m of requests) handler(m);
+  handler({ kind: "viewport", width: 1, height: 2, dpr: 1 });
+  handler({ kind: "retry" });
+
+  expect(received).toEqual(requests);
+  expect(controls).toEqual([]);
+});
+
 test("DeviceSource.transfer() forwards to the current session and is a no-op with no session connected", async () => {
   const watcher = fakeWatcher();
   const transferred: string[][] = [];
@@ -297,7 +318,7 @@ test("switches from the USB device to the TCP device when USB disappears", async
   expect(sessions[0].stopped).toBe(true);
 });
 
-test("reconnects when the session ends on its own while the device stays listed", async () => {
+test("restarts the video session on the open connection when it ends on its own while the device stays listed", async () => {
   const watcher = fakeWatcher();
   const opened: string[] = [];
   const sessions: FakeSession[] = [];
@@ -323,8 +344,9 @@ test("reconnects when the session ends on its own while the device stays listed"
   sessions[0].streamed();
   sessions[0].end();
   await flush();
-  expect(opened).toEqual(["USB1", "USB1"]);
+  expect(opened).toEqual(["USB1"]);
   expect(sessions).toHaveLength(2);
+  expect(sessions[1].startCalls).toBe(1);
 });
 
 test("does not reconnect immediately when a session ends without ever streaming; backs off with the error visible", async () => {
@@ -363,7 +385,7 @@ test("does not reconnect immediately when a session ends without ever streaming;
   // silently replaced by an immediate reconnect.
   expect(delays).toEqual([1000]);
   expect(statuses).toContainEqual({ state: "error", message: "class not found (retrying in 1s)" });
-  expect(opened).toEqual(["USB1", "USB1"]);
+  expect(opened).toEqual(["USB1"]);
   expect(sessions).toHaveLength(2);
 });
 
@@ -2045,4 +2067,306 @@ test("disconnect falls back to the mDNS serial when the phone has no ip:port tra
   await flush();
   await source.handleDeviceCommand!({ type: "disconnect", serial: "adb-R5CY-AbCd._adb-tls-connect._tcp" });
   expect(calls.disconnect).toEqual([["adb-R5CY-AbCd._adb-tls-connect._tcp"]]);
+});
+
+function phoneListenerSource(opts: { mainVideo?: boolean } = {}) {
+  const watcher = identifyingWatcher({ USB1: "R5CY", USB2: "OTHER" });
+  const adbs: Record<string, number> = {};
+  watcher.host.open = async (serial) => ({ serial, n: (adbs[serial] = (adbs[serial] ?? 0) + 1) }) as never;
+  const sessions: FakeSession[] = [];
+  const phones: (ConnectedPhone | null)[] = [];
+  const foldStarts: string[] = [];
+  const mirrorStarts: string[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    mainVideo: opts.mainVideo,
+    createSession: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    onPhone: (p) => phones.push(p),
+    foldMonitor: async (adb) => {
+      foldStarts.push((adb as unknown as { serial: string }).serial);
+      return async () => {};
+    },
+    notificationMirror: async (adb) => {
+      mirrorStarts.push((adb as unknown as { serial: string }).serial);
+      return async () => {};
+    },
+  });
+  return { watcher, source, sessions, phones, foldStarts, mirrorStarts };
+}
+
+function serials(phones: (ConnectedPhone | null)[]): (string | null)[] {
+  return phones.map((p) => p?.serial ?? null);
+}
+
+test("with the main video off, a connected phone is announced and gets its fold monitor and notification mirror, but no video session", async () => {
+  const { watcher, source, sessions, phones, foldStarts, mirrorStarts } = phoneListenerSource({ mainVideo: false });
+  const { sink, statuses } = fakeSink();
+  await source.start(sink);
+
+  watcher.emit([phone("USB1", "usb")]);
+  await flush();
+  await flush();
+
+  expect(sessions).toHaveLength(0);
+  expect(phones).toEqual([{ adb: { serial: "USB1", n: 1 }, serial: "USB1", deviceId: "R5CY", model: "SM-F966B" }]);
+  expect(foldStarts).toEqual(["USB1"]);
+  expect(mirrorStarts).toEqual(["USB1"]);
+  expect(statuses).toEqual([{ state: "connecting", serial: "USB1" }]);
+  await source.stop();
+});
+
+test("turning the main video on starts one session for the connected phone, and turning it off stops it without dropping the phone", async () => {
+  const { watcher, source, sessions, phones } = phoneListenerSource({ mainVideo: false });
+  await source.start(fakeSink().sink);
+  watcher.emit([phone("USB1", "usb")]);
+  await flush();
+  await flush();
+
+  source.setMainVideo(true);
+  await flush();
+  expect(sessions).toHaveLength(1);
+  expect(sessions[0].startCalls).toBe(1);
+
+  source.setMainVideo(true);
+  await flush();
+  expect(sessions).toHaveLength(1);
+
+  source.setMainVideo(false);
+  await flush();
+  expect(sessions[0].stopped).toBe(true);
+  expect(serials(phones)).toEqual(["USB1"]);
+
+  sessions[0].end();
+  await flush();
+  expect(sessions).toHaveLength(1);
+  expect(serials(phones)).toEqual(["USB1"]);
+  await source.stop();
+});
+
+test("a phone leaving the device list is withdrawn", async () => {
+  const { watcher, source, phones } = phoneListenerSource({ mainVideo: false });
+  await source.start(fakeSink().sink);
+  watcher.emit([phone("USB1", "usb")]);
+  await flush();
+  await flush();
+
+  watcher.emit([]);
+  await flush();
+  expect(serials(phones)).toEqual(["USB1", null]);
+  await source.stop();
+  expect(serials(phones)).toEqual(["USB1", null]);
+});
+
+test("stop() withdraws the connected phone", async () => {
+  const { watcher, source, phones } = phoneListenerSource();
+  await source.start(fakeSink().sink);
+  watcher.emit([phone("USB1", "usb")]);
+  await flush();
+  await flush();
+
+  await source.stop();
+  expect(serials(phones)).toEqual(["USB1", null]);
+});
+
+test("choosing another phone withdraws the first before announcing the second", async () => {
+  const { watcher, source, phones } = phoneListenerSource();
+  await source.start(fakeSink().sink);
+  watcher.emit([phone("USB1", "usb"), phone("USB2", "usb")]);
+  await flush();
+  await flush();
+  expect(serials(phones)).toEqual(["USB1"]);
+
+  source.chooseDevice("USB2");
+  await flush();
+  expect(serials(phones)).toEqual(["USB1", null, "USB2"]);
+  expect(phones[2]?.deviceId).toBe("OTHER");
+  await source.stop();
+});
+
+test("with the main video on, the phone is announced once per connection and a video session that ends does not withdraw it", async () => {
+  const { watcher, source, sessions, phones } = phoneListenerSource();
+  await source.start(fakeSink().sink);
+  watcher.emit([phone("USB1", "usb")]);
+  await flush();
+  await flush();
+  expect(sessions).toHaveLength(1);
+  expect(serials(phones)).toEqual(["USB1"]);
+
+  sessions[0].streamed();
+  sessions[0].end();
+  await flush();
+  expect(sessions).toHaveLength(2);
+  expect(phones).not.toContain(null);
+  await source.stop();
+});
+
+test("with the main video off, a Wi-Fi phone that drops is reconnected like one that streamed", async () => {
+  const watcher = fakeWatcher();
+  const { wireless, calls } = fakeWireless();
+  const delays: number[] = [];
+  const phones: (ConnectedPhone | null)[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    mainVideo: false,
+    createSession: () => new FakeSession(),
+    onPhone: (p) => phones.push(p),
+    wireless,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  await source.start(fakeSink().sink);
+
+  watcher.emit([device("10.0.0.5:5555", "tcp")]);
+  await flush();
+  expect(serials(phones)).toEqual(["10.0.0.5:5555"]);
+
+  watcher.emit([]);
+  await flush();
+
+  expect(delays).toEqual([1000]);
+  expect(calls.connect).toEqual([["10.0.0.5:5555"]]);
+  await source.stop();
+});
+
+test("a main video session ending or failing restarts on the same connection without announcing the phone again", async () => {
+  const watcher = fakeWatcher();
+  const opened: string[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return { serial } as never;
+  };
+  const sessions: FakeSession[] = [];
+  const phones: (ConnectedPhone | null)[] = [];
+  let foldStarts = 0;
+  let foldStops = 0;
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    onPhone: (p) => phones.push(p),
+    foldMonitor: async () => {
+      foldStarts++;
+      return async () => {
+        foldStops++;
+      };
+    },
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  await source.start(fakeSink().sink);
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  sessions[0].streamed();
+  sessions[0].end();
+  await flush();
+  sessions[1].fail("boom");
+  sessions[1].end();
+  await flush();
+
+  expect(delays).toEqual([1000]);
+  expect(sessions).toHaveLength(3);
+  expect(sessions[2].startCalls).toBe(1);
+  expect(opened).toEqual(["USB1"]);
+  expect(serials(phones)).toEqual(["USB1"]);
+  expect(foldStarts).toBe(1);
+  expect(foldStops).toBe(0);
+  await source.stop();
+});
+
+test("a main video session that throws on start retries on the same connection", async () => {
+  const watcher = fakeWatcher();
+  const opened: string[] = [];
+  watcher.host.open = async (serial) => {
+    opened.push(serial);
+    return { serial } as never;
+  };
+  let creates = 0;
+  const phones: (ConnectedPhone | null)[] = [];
+  const delays: number[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: (): MediaSource => {
+      creates++;
+      if (creates === 1) return { start: async () => { throw new Error("no server"); }, control: () => {}, stop: async () => {} };
+      return new FakeSession();
+    },
+    onPhone: (p) => phones.push(p),
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  await source.start(fakeSink().sink);
+  watcher.emit([device("USB1")]);
+  await flush();
+  await flush();
+
+  expect(delays).toEqual([1000]);
+  expect(creates).toBe(2);
+  expect(opened).toEqual(["USB1"]);
+  expect(serials(phones)).toEqual(["USB1"]);
+  await source.stop();
+});
+
+test("losing the adb server drops the connection, so the phone reappearing opens a fresh transport and is announced again", async () => {
+  const watcher = fakeWatcher();
+  let opens = 0;
+  watcher.host.open = async (serial) => ({ serial, open: ++opens }) as never;
+  const sessions: FakeSession[] = [];
+  const phones: (ConnectedPhone | null)[] = [];
+  let foldStarts = 0;
+  let foldStops = 0;
+  let mirrorStops = 0;
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    onPhone: (p) => phones.push(p),
+    foldMonitor: async () => {
+      foldStarts++;
+      return async () => {
+        foldStops++;
+      };
+    },
+    notificationMirror: async () => async () => {
+      mirrorStops++;
+    },
+    delay: async () => {},
+  });
+  await source.start(fakeSink().sink);
+  watcher.emit([device("USB1")]);
+  await flush();
+  sessions[0].streamed();
+
+  watcher.fail(new Error("adb server version doesn't match; killing"));
+  await flush();
+
+  expect(sessions[0].stopped).toBe(true);
+  expect(phones.map((p) => (p ? (p.adb as unknown as { open: number }).open : null))).toEqual([1, null]);
+  expect(foldStops).toBe(1);
+  expect(mirrorStops).toBe(1);
+  expect(watcher.watchCalls).toBe(2);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  expect(opens).toBe(2);
+  expect(phones.map((p) => (p ? (p.adb as unknown as { open: number }).open : null))).toEqual([1, null, 2]);
+  expect(foldStarts).toBe(2);
+  expect(sessions).toHaveLength(2);
+  expect(sessions[1].startCalls).toBe(1);
+  await source.stop();
 });

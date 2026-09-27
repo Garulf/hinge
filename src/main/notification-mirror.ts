@@ -1,14 +1,23 @@
 import type { Adb } from "@yume-chan/adb";
 import { diffNotifications, isMirrorable, parseNotifications, type NotificationRecord } from "../shared/notifications";
+import { abortableDelay } from "./abortable-delay";
 import { runShellText } from "./adb-shell";
 
 export interface NotifierHandle {
   onClick(cb: () => void): void;
+  close(): void;
+}
+
+export interface NotifierInput {
+  title: string;
+  body: string;
+  /** Stays up until close() instead of timing out. */
+  persistent?: boolean;
 }
 
 /** A PC-side notification popup; the real implementation wraps Electron's Notification. */
 export interface Notifier {
-  show(input: { title: string; body: string }): NotifierHandle;
+  show(input: NotifierInput): NotifierHandle;
 }
 
 export interface NotificationMirrorOpts {
@@ -27,24 +36,6 @@ export interface NotificationMirrorOpts {
 const DEFAULT_POLL_MS = 2000;
 const DUMPSYS_COMMAND = "dumpsys notification --noredact";
 
-function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-}
-
 /**
  * Polls `dumpsys notification --noredact` every pollMs and mirrors any new
  * or reposted notification (see shared/notifications.ts for the diff and
@@ -58,7 +49,7 @@ export async function startNotificationMirror(adb: Adb, opts: NotificationMirror
 
   const runShell = opts.runShell ?? runShellText;
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
-  const wait = opts.delay ?? defaultDelay;
+  const wait = opts.delay ?? abortableDelay;
   const controller = new AbortController();
 
   let known = new Map<string, number>();

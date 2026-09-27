@@ -1,3 +1,4 @@
+import type { Rect } from "./clamp-bounds";
 import type { ModelAngles } from "./model-rotation";
 import type { ModifierKey } from "./modifiers";
 
@@ -9,6 +10,8 @@ export interface DeviceSettings {
   pxPerMm?: number;
   /** The model's turn, left where the user left it until Center. */
   rotation?: ModelAngles;
+  /** Each pop-out app's window bounds, frame included, keyed by package. */
+  popouts?: Record<string, Rect>;
 }
 
 export interface Settings {

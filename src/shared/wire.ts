@@ -1,3 +1,4 @@
+import type { AppEntry } from "./app-catalog";
 import type { PostureReading } from "./posture";
 
 export type WireMediaPacket =
@@ -104,6 +105,16 @@ export type MainToRenderer =
   | { kind: "device-command-result"; id: string; result: DeviceCommandResult }
   /** The deduped device list, pushed on every change so an open device panel stays current. */
   | { kind: "devices"; devices: DeviceSummary[] }
+  /** Something the user asked for could not happen (too many pop-outs, say); shown as a toast. */
+  | { kind: "notice"; text: string }
+  /** The tray's "Open app…": show the app picker. */
+  | { kind: "open-picker" }
+  /**
+   * An answer to the "apps-request" with the same id, sent once with the
+   * cached icons and again with every icon when some had to be fetched.
+   * icons are data: URLs by package; error says why the list is partial or empty.
+   */
+  | { kind: "apps"; id: number; apps: AppEntry[]; recents: string[]; icons: Record<string, string>; error: string | null }
   | PostureMessage;
 
 export type RendererToMain =
@@ -111,7 +122,19 @@ export type RendererToMain =
   | { kind: "control"; intent: ControlIntent }
   /** Local PC file paths, already resolved in the preload via webUtils.getPathForFile; main decides install vs. push by extension. */
   | { kind: "drop-files"; paths: string[] }
-  | { kind: "device-command"; id: string; command: DeviceCommand };
+  | { kind: "device-command"; id: string; command: DeviceCommand }
+  /** A pop-out's canvas size in CSS px, sent on every change; main debounces it into a display resize. */
+  | { kind: "viewport"; width: number; height: number; dpr: number }
+  | { kind: "retry" }
+  | { kind: "popout-open"; pkg: string }
+  /** Pops out whatever app is in the foreground on the phone. */
+  | { kind: "popout-current" }
+  /** id tags the answers, so a late answer to an earlier request is told apart. */
+  | { kind: "apps-request"; id: number }
+  | { kind: "create-shortcut"; pkg: string };
+
+/** The main window's requests about apps and pop-outs, which bindSource hands to its owner instead of the source. */
+export type AppRequest = Extract<RendererToMain, { kind: "popout-open" | "popout-current" | "apps-request" | "create-shortcut" }>;
 
 type LooseMediaPacket =
   | { type: "configuration"; data: Uint8Array }

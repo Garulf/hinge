@@ -28,6 +28,7 @@
     "test/unit/status-overlay.test.ts",
     "test/unit/texture-renderer.test.ts",
     "test/unit/video-pipe.test.ts",
-    "test/unit/wrap-text.test.ts"
+    "test/unit/wrap-text.test.ts",
+    "test/unit/flat-input.test.ts"
   ]
 }

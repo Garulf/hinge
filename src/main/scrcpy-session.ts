@@ -2,14 +2,16 @@ import { readFile } from "node:fs/promises";
 import { PackageManager } from "@yume-chan/android-bin";
 import type { Adb } from "@yume-chan/adb";
 import { AdbScrcpyClient, AdbScrcpyExitedError, AdbScrcpyOptions4_1 } from "@yume-chan/adb-scrcpy";
-import { DefaultServerPath, type ScrcpyVideoStreamPacket } from "@yume-chan/scrcpy";
+import type { ScrcpyVideoStreamPacket } from "@yume-chan/scrcpy";
 import { PushReadableStream } from "@yume-chan/stream-extra";
 import { createClipboardSync, type ClipboardHost, type ClipboardSync } from "./clipboard-sync";
+import { pumpAudio } from "./audio-forward";
 import { applyIntent, type ApplyIntentDeps } from "./intents";
 import type { MediaSink, MediaSource } from "./media-source";
-import { buildInit, type StreamSettings } from "./scrcpy-init";
+import { buildInit, newServerInstance, type SessionRole, type StreamSettings } from "./scrcpy-init";
 import { createTransferQueue, defaultOpenFile, type TransferDeps, type TransferQueue } from "./transfers";
-import { toWire, toWireAudio, type ControlIntent } from "../shared/wire";
+import type { DisplayGeometry } from "../shared/popout";
+import { toWire, type ControlIntent } from "../shared/wire";
 
 /**
  * Bridges a plain (DOM-shaped) ReadableStream<Uint8Array> from transfers.ts
@@ -51,22 +53,23 @@ const FIRST_PACKET_TIMEOUT_MS = 10_000;
  */
 export interface ScrcpyServerDeps {
   readServerJar(path: string): Promise<Uint8Array>;
-  pushServer(adb: Adb, jar: Uint8Array): Promise<void>;
-  startClient(adb: Adb, options: AdbScrcpyOptions4_1<any>): Promise<Client>;
+  pushServer(adb: Adb, jar: Uint8Array, path: string): Promise<void>;
+  startClient(adb: Adb, options: AdbScrcpyOptions4_1<any>, path: string): Promise<Client>;
 }
 
-const defaultDeps: ScrcpyServerDeps = {
+export const defaultServerDeps: ScrcpyServerDeps = {
   readServerJar: (path) => readFile(path),
-  pushServer: async (adb, jar) => {
+  pushServer: async (adb, jar, path) => {
     await AdbScrcpyClient.pushServer(
       adb,
       new PushReadableStream<Uint8Array>((controller) => {
         controller.enqueue(jar);
         controller.close();
       }),
+      path,
     );
   },
-  startClient: (adb, options) => AdbScrcpyClient.start(adb, DefaultServerPath, options),
+  startClient: (adb, options, path) => AdbScrcpyClient.start(adb, path, options),
 };
 
 export class ScrcpySession implements MediaSource {
@@ -74,6 +77,7 @@ export class ScrcpySession implements MediaSource {
   #stopped = false;
   #videoEnded = false;
   #endedFired = false;
+  readonly #appStartedListeners: (() => void)[] = [];
   #resolveEnded!: () => void;
   readonly ended: Promise<void>;
   readonly #deps: ScrcpyServerDeps;
@@ -82,6 +86,10 @@ export class ScrcpySession implements MediaSource {
   #clipboardSync: ClipboardSync | null = null;
   readonly #transfers: TransferQueue;
   #sink: MediaSink | null = null;
+  /** The pop-out display size last asked for, which the next attempt starts with. */
+  #wantedGeometry: DisplayGeometry | null;
+  /** The size of the virtual display a streaming attempt has; null until one streams. */
+  #shownGeometry: DisplayGeometry | null = null;
 
   constructor(
     private readonly opts: {
@@ -99,9 +107,15 @@ export class ScrcpySession implements MediaSource {
       clipboardHost?: ClipboardHost;
       /** Overrides for tests; production uses PackageManager/adb.sync/controller.scanFile against opts.adb. */
       transferDeps?: Partial<TransferDeps>;
+      role?: SessionRole;
+      /** A companion session carries this phone's audio and clipboard, so this one leaves both alone. */
+      companion?: boolean;
+      /** The companion's echo-suppressed clipboard push, used for clipboard-paste when this session has no clipboard sync of its own. */
+      clipboardPush?: (content: string) => bigint;
     },
   ) {
-    this.#deps = { ...defaultDeps, ...opts.deps };
+    this.#deps = { ...defaultServerDeps, ...opts.deps };
+    this.#wantedGeometry = opts.role?.kind === "popout" ? opts.role.geometry : null;
     this.#firstPacketTimeoutMs = opts.firstPacketTimeoutMs ?? FIRST_PACKET_TIMEOUT_MS;
     this.#clipboardHost = opts.clipboardHost;
     this.ended = new Promise((resolve) => {
@@ -165,6 +179,24 @@ export class ScrcpySession implements MediaSource {
     this.#transfers.enqueue(localPaths);
   }
 
+  /** Before an attempt streams, the size is kept for it rather than sent to a server that is not up yet. */
+  resize(g: DisplayGeometry): void {
+    this.#wantedGeometry = g;
+    this.#syncDisplaySize();
+  }
+
+  #syncDisplaySize(): void {
+    const controller = this.#client?.controller;
+    const shown = this.#shownGeometry;
+    const wanted = this.#wantedGeometry;
+    if (!controller || !shown || !wanted) return;
+    if (shown.width === wanted.width && shown.height === wanted.height) return;
+    this.#shownGeometry = wanted;
+    controller
+      .resizeDisplay({ width: wanted.width, height: wanted.height })
+      .catch((e) => this.opts.log?.(`resize display failed: ${String(e)}`));
+  }
+
   async stop(): Promise<void> {
     this.#stopped = true;
     this.#clipboardSync?.stop();
@@ -178,8 +210,40 @@ export class ScrcpySession implements MediaSource {
     if (!host) return {};
     return {
       readPcClipboard: () => host.readText(),
-      beginClipboardPush: (content) => this.#clipboardSync?.beginPush(content) ?? 0n,
+      beginClipboardPush: this.opts.clipboardPush ?? ((content) => this.#clipboardSync?.beginPush(content) ?? 0n),
     };
+  }
+
+  get #role(): SessionRole {
+    const role = this.opts.role ?? { kind: "main" };
+    if (role.kind === "popout" && this.#wantedGeometry) return { ...role, geometry: this.#wantedGeometry };
+    return role;
+  }
+
+  /** Only a main session with no companion streams audio and syncs the clipboard itself. */
+  get #ownsMedia(): boolean {
+    return this.#role.kind === "main" && !this.opts.companion;
+  }
+
+  /** A pop-out's app is started once its display streams; until then its frames are the empty display's. */
+  onAppStarted(cb: () => void): void {
+    this.#appStartedListeners.push(cb);
+  }
+
+  /** A start that cannot be sent is shown as the session's error, whose Retry starts a new session and sends it again. */
+  #startApp(client: Client, pkg: string, sink: MediaSink): void {
+    const controller = client.controller;
+    const sent = controller ? controller.startApp(pkg) : Promise.reject(new Error("no control channel"));
+    sent.then(
+      () => {
+        if (this.#stopped) return;
+        for (const cb of this.#appStartedListeners) cb();
+      },
+      (e: unknown) => {
+        this.opts.log?.(`start app ${pkg} failed: ${String(e)}`);
+        if (!this.#stopped) sink.status({ state: "error", message: `Could not start ${pkg} in its own window` });
+      },
+    );
   }
 
   /** client.clipboard blocks on backpressure once clipboardAutosync is on, so this must run for the life of every successful attempt, not just when a clipboard host happens to be wired. */
@@ -193,65 +257,6 @@ export class ScrcpySession implements MediaSource {
     void sync.start();
   }
 
-  /**
-   * Disabled/errored metadata and a stream that fails before producing
-   * anything both surface as one "unsupported" audio-end: whichever it is,
-   * the outcome for the session is the same (audio off, one toast), and
-   * there is no separate device message to tell them apart. A stream that
-   * fails later is "error" while the video goes on, and ends with no
-   * reason once the video has ended too (the phone went away, which the
-   * status already says).
-   */
-  async #startAudio(client: Client, sink: MediaSink): Promise<void> {
-    if (!this.opts.settings.audio) {
-      // Off by the user's own setting: not a failure, no toast.
-      sink.audioEnd?.("disabled");
-      return;
-    }
-    // client.audioStream must always be awaited, even with nothing to
-    // forward audio to: scrcpy-server is already streaming it once
-    // audio:true was passed, and never reading the socket would leave it
-    // sitting unread on the adb server relay for the life of the session.
-    let metadata: Awaited<Client["audioStream"]>;
-    try {
-      metadata = await client.audioStream;
-    } catch (e) {
-      if (this.#stopped) return;
-      this.opts.log?.(`audio stream metadata failed: ${String(e)}`);
-      sink.audioEnd?.("unsupported");
-      return;
-    }
-    if (this.#stopped) return;
-    if (!metadata || metadata.type !== "success") {
-      sink.audioEnd?.("unsupported");
-      return;
-    }
-
-    if (!sink.audioStart) {
-      await metadata.stream.cancel().catch(() => {});
-      return;
-    }
-
-    sink.audioStart({ codec: metadata.codec.webCodecId, sampleRate: 48000, channels: 2 });
-    const reader = metadata.stream.getReader();
-    let packets = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (this.#stopped) return;
-        if (done) break;
-        packets++;
-        sink.audioPacket?.(toWireAudio(value));
-      }
-      if (!this.#stopped) sink.audioEnd?.();
-    } catch (e) {
-      if (this.#stopped) return;
-      this.opts.log?.(`audio stream error: ${String(e)}`);
-      if (this.#videoEnded) sink.audioEnd?.();
-      else sink.audioEnd?.(packets === 0 ? "unsupported" : "error");
-    }
-  }
-
   async #tryAttempt(
     attempt: 0 | 1 | 2,
     sink: MediaSink,
@@ -262,13 +267,16 @@ export class ScrcpySession implements MediaSource {
       // scrcpy-server unlinks its own jar from the device after launch (cleanup
       // defaults to true), so a jar pushed once before the loop is gone by the
       // second attempt; push it fresh for every attempt.
+      const instance = newServerInstance();
       const jar = await this.#deps.readServerJar(this.opts.serverPath);
       if (this.#stopped) return "stopped";
-      await this.#deps.pushServer(this.opts.adb, jar);
+      await this.#deps.pushServer(this.opts.adb, jar, instance.jarPath);
       if (this.#stopped) return "stopped";
 
-      const options = new AdbScrcpyOptions4_1(buildInit(this.opts.settings, attempt) as never);
-      const startPromise = this.#deps.startClient(this.opts.adb, options);
+      const role = this.#role;
+      const init = buildInit(this.opts.settings, attempt, role, this.opts.companion);
+      const options = new AdbScrcpyOptions4_1({ ...init, scid: instance.scid } as never);
+      const startPromise = this.#deps.startClient(this.opts.adb, options, instance.jarPath);
       client = await this.#withTimeout(startPromise, "scrcpy server did not start within", () => {
         // The timeout already moved on to the next attempt (or gave up); a
         // client that shows up after that would otherwise never be closed.
@@ -308,8 +316,20 @@ export class ScrcpySession implements MediaSource {
       });
       sink.status({ state: "streaming", serial: this.opts.serial, model: this.opts.model, deviceId: this.opts.deviceId ?? this.opts.serial });
       sink.videoPacket(toWire(first.value));
-      this.#startClipboardSync(client);
-      void this.#startAudio(client, sink);
+      if (role.kind === "popout") {
+        this.#startApp(client, role.pkg, sink);
+        this.#shownGeometry = role.geometry;
+        this.#syncDisplaySize();
+      }
+      if (this.#ownsMedia) {
+        this.#startClipboardSync(client);
+        void pumpAudio(client, sink, {
+          enabled: this.opts.settings.audio,
+          stopped: () => this.#stopped,
+          sessionEnded: () => this.#videoEnded,
+          log: this.opts.log,
+        });
+      }
       void this.#pump(reader, sink);
       return "started";
     } catch (e) {

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { ScrcpySession, type ScrcpyServerDeps } from "../../src/main/scrcpy-session";
 import type { MediaSink } from "../../src/main/media-source";
-import { DEFAULT_STREAM_SETTINGS } from "../../src/main/scrcpy-init";
+import { DEFAULT_STREAM_SETTINGS, type SessionRole } from "../../src/main/scrcpy-init";
 import type { TransferDeps } from "../../src/main/transfers";
 import type { SessionStatus, TransferProgress } from "../../src/shared/wire";
 
@@ -72,6 +72,9 @@ function baseOpts(
     clipboardHost: { readText: () => Promise<string>; writeText: (t: string) => Promise<void> };
     transferDeps: Partial<TransferDeps>;
     settingsOverride: Partial<typeof DEFAULT_STREAM_SETTINGS>;
+    role: SessionRole;
+    companion: boolean;
+    clipboardPush: (content: string) => bigint;
   }>,
 ) {
   const { settingsOverride, ...rest } = extra ?? {};
@@ -653,5 +656,271 @@ test("a name with spaces and non-ASCII characters reaches the real adb.sync.writ
   expect(writes[0].path).toBe(`/sdcard/Download/${name}`);
   expect(new TextDecoder().decode(writes[0].bytes)).toBe("pdf-bytes");
 
+  await session.stop();
+});
+
+function streamWithOnePacket(): ReadableStream<{ type: "data"; data: Uint8Array }> {
+  return new ReadableStream({ start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }) });
+}
+
+const POPOUT_ROLE: SessionRole = { kind: "popout", pkg: "com.example.app", geometry: { width: 400, height: 856, dpi: 160 } };
+
+test("a pop-out session tells its listeners once the app's start has been sent, and not when sending it fails", async () => {
+  let release!: () => void;
+  const sent = new Promise<void>((resolve) => (release = resolve));
+  const deps = (startApp: () => Promise<void>): Partial<ScrcpyServerDeps> => ({
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(streamWithOnePacket, { controller: { startApp }, clipboard: new ReadableStream<string>({ start: () => {} }) }) as never,
+  });
+  const session = new ScrcpySession(baseOpts(deps(() => sent), { role: POPOUT_ROLE }));
+  let started = 0;
+  session.onAppStarted(() => started++);
+  await session.start(fakeSink().sink);
+  await flush();
+  expect(started).toBe(0);
+
+  release();
+  await flush();
+  expect(started).toBe(1);
+  await session.stop();
+
+  const failing = new ScrcpySession(baseOpts(deps(async () => Promise.reject(new Error("socket closed"))), { role: POPOUT_ROLE }));
+  let failedStarts = 0;
+  failing.onAppStarted(() => failedStarts++);
+  const failed = fakeSink();
+  await failing.start(failed.sink);
+  await flush();
+  expect(failedStarts).toBe(0);
+  expect(failed.statuses.at(-1)).toEqual({ state: "error", message: "Could not start com.example.app in its own window" });
+  await failing.stop();
+});
+
+test("a pop-out session with no control channel says its app could not be started", async () => {
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => ({ ...oneShotClient(streamWithOnePacket, { clipboard: new ReadableStream<string>({ start: () => {} }) }), controller: undefined }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  const { sink, statuses } = fakeSink();
+  await session.start(sink);
+  await flush();
+  expect(statuses.at(-1)).toEqual({ state: "error", message: "Could not start com.example.app in its own window" });
+  await session.stop();
+});
+
+test("a pop-out session starts its app once the display streams, and leaves audio and the clipboard alone", async () => {
+  const startApps: unknown[] = [];
+  const controller = {
+    startApp: async (...args: unknown[]) => {
+      startApps.push(args);
+    },
+  };
+  const clipboard = new ReadableStream<string>({ start: () => {} });
+  let audioTouched = false;
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => ({
+      ...oneShotClient(streamWithOnePacket, { controller, clipboard }),
+      get audioStream(): never {
+        audioTouched = true;
+        throw new Error("a pop-out session must not read audio");
+      },
+    }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  const { sink, packets, audioEnds } = fakeSink();
+  await session.start(sink);
+  await flush();
+
+  expect(packets).toHaveLength(1);
+  expect(startApps).toEqual([["com.example.app"]]);
+  expect(audioEnds).toEqual([]);
+  expect(audioTouched).toBe(false);
+  expect(clipboard.locked).toBe(false);
+  await session.stop();
+});
+
+test("resize() asks the device to resize the virtual display, and is a no-op before the session starts", async () => {
+  const resizes: unknown[] = [];
+  const controller = {
+    startApp: async () => {},
+    resizeDisplay: async (m: unknown) => {
+      resizes.push(m);
+    },
+  };
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(streamWithOnePacket, { controller }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  expect(() => session.resize({ width: 300, height: 600, dpi: 160 })).not.toThrow();
+
+  const { sink } = fakeSink();
+  await session.start(sink);
+  session.resize({ width: 480, height: 800, dpi: 160 });
+  await flush();
+
+  expect(resizes).toEqual([{ width: 480, height: 800 }]);
+  await session.stop();
+});
+
+test("a resize the device rejects is logged, not thrown", async () => {
+  const controller = {
+    startApp: async () => {},
+    resizeDisplay: async () => {
+      throw new Error("display gone");
+    },
+  };
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(streamWithOnePacket, { controller }) as never,
+  };
+  const logs: string[] = [];
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE, log: (l) => logs.push(l) }));
+  const { sink } = fakeSink();
+  await session.start(sink);
+  session.resize({ width: 480, height: 800, dpi: 160 });
+  await flush();
+
+  expect(logs.some((l) => l.includes("display gone"))).toBe(true);
+  await session.stop();
+});
+
+test("a main session with a companion pastes with the companion's clipboard sequence and leaves audio and the clipboard stream alone", async () => {
+  const setClipboardCalls: unknown[] = [];
+  const controller = {
+    setClipboard: async (m: unknown) => {
+      setClipboardCalls.push(m);
+    },
+  };
+  const clipboard = new ReadableStream<string>({ start: () => {} });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(streamWithOnePacket, { controller, clipboard }) as never,
+  };
+  const pushed: string[] = [];
+  const session = new ScrcpySession(
+    baseOpts(deps, {
+      companion: true,
+      clipboardPush: (content) => {
+        pushed.push(content);
+        return 42n;
+      },
+      clipboardHost: { readText: async () => "from the pc", writeText: async () => {} },
+    }),
+  );
+  const { sink, audioEnds } = fakeSink();
+  await session.start(sink);
+  session.control({ type: "clipboard-paste", asText: false });
+  await flush();
+
+  expect(pushed).toEqual(["from the pc"]);
+  expect(setClipboardCalls).toEqual([{ content: "from the pc", sequence: 42n, paste: true }]);
+  expect(audioEnds).toEqual([]);
+  expect(clipboard.locked).toBe(false);
+  await session.stop();
+});
+
+test("every attempt runs its own server instance: a fresh scid and a jar path of its own, pushed and started together", async () => {
+  const pushed: unknown[] = [];
+  const started: { path: unknown; scid: unknown }[] = [];
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async (_adb, _jar, path) => {
+      pushed.push(path);
+    },
+    startClient: async (_adb, options, path) => {
+      started.push({ path, scid: (options.value as { scid?: unknown }).scid });
+      throw new Error("boom");
+    },
+  };
+  const session = new ScrcpySession(baseOpts(deps));
+  await session.start(fakeSink().sink);
+
+  expect(started).toHaveLength(3);
+  expect(started.map((s) => s.path)).toEqual(pushed);
+  for (const { path, scid } of started) {
+    expect(scid).toMatch(/^[0-9a-f]{1,8}$/);
+    expect(Number.parseInt(scid as string, 16)).toBeLessThan(0x80000000);
+    expect(path).toBe(`/data/local/tmp/hinge-scrcpy-${scid as string}.jar`);
+  }
+  expect(new Set(started.map((s) => s.scid)).size).toBe(3);
+});
+
+test("a resize that arrives while the server is still starting reaches the display once it streams", async () => {
+  const resizes: unknown[] = [];
+  const controller = {
+    startApp: async () => {},
+    resizeDisplay: async (m: unknown) => {
+      resizes.push(m);
+    },
+  };
+  let serverUp!: () => void;
+  const serverStarted = new Promise<void>((resolve) => {
+    serverUp = resolve;
+  });
+  let newDisplay: unknown;
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async (_adb, options) => {
+      newDisplay = (options.value as { newDisplay?: unknown }).newDisplay;
+      await serverStarted;
+      return oneShotClient(streamWithOnePacket, { controller }) as never;
+    },
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  const started = session.start(fakeSink().sink);
+  await flush();
+
+  session.resize({ width: 480, height: 856, dpi: 160 });
+  serverUp();
+  await started;
+  await flush();
+
+  expect(newDisplay).toBe("400x856/160");
+  expect(resizes).toEqual([{ width: 480, height: 856 }]);
+  await session.stop();
+});
+
+test("a resize before an attempt builds its server options sizes that attempt's new display instead", async () => {
+  const resizes: unknown[] = [];
+  const controller = {
+    startApp: async () => {},
+    resizeDisplay: async (m: unknown) => {
+      resizes.push(m);
+    },
+  };
+  let jarRead!: () => void;
+  const jarReady = new Promise<void>((resolve) => {
+    jarRead = resolve;
+  });
+  let newDisplay: unknown;
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => {
+      await jarReady;
+      return new Uint8Array([1]);
+    },
+    pushServer: async () => {},
+    startClient: async (_adb, options) => {
+      newDisplay = (options.value as { newDisplay?: unknown }).newDisplay;
+      return oneShotClient(streamWithOnePacket, { controller }) as never;
+    },
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  const started = session.start(fakeSink().sink);
+  session.resize({ width: 480, height: 856, dpi: 160 });
+  jarRead();
+  await started;
+  await flush();
+
+  expect(newDisplay).toBe("480x856/160");
+  expect(resizes).toEqual([]);
   await session.stop();
 });

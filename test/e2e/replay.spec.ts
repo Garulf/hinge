@@ -584,8 +584,10 @@ test("Alt+drag in the work view switches to the showcase and keeps turning; Alt+
     const liveTurned = await waitFor(page, "the live phone turned, in the showcase", (s) => turnedTo(30, 0)(s) && s.view.target === "showcase" && s.view.t === 1 && !s.view.active && s.laidOut, 10_000);
     await frames(page, 2);
     await page.screenshot({ path: "test-results/turn-live.png" });
-    // The showcase window is a different size from the work view's, so its
-    // own centre is where the camera looks: at the turn's centre. That ray
+    // The showcase window grows evenly around the work view's, so its own
+    // centre is where the camera looks: the work view's centre, which for
+    // the settled open phone is the turn's centre to within the body's
+    // 0.3 mm modelling tolerance. That ray
     // passes through the pivot and meets the screen, standing screenDepthM in
     // front of it, screenDepthM * tan 30 degrees to the left of the stream
     // point the work view's centre touched. Measured on a real GPU the

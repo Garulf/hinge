@@ -26,14 +26,27 @@ test("the showcase rest pose is straight on: yaw and pitch both 0", () => {
   expect(SHOWCASE_REST).toEqual({ yaw: 0, pitch: 0 });
 });
 
-test("at rest the showcase camera looks straight down the phone's normal, offset along +Z with no yaw or pitch", () => {
+test("at rest the showcase camera looks straight down the work view's centre at the phone's depth, offset along +Z with no yaw or pitch", () => {
   const rig = blendedCamera({ ...BASE, t: 1 });
-  expect(rig.position.x).toBeCloseTo(CENTRE.x, 9);
-  expect(rig.position.y).toBeCloseTo(CENTRE.y, 9);
+  expect(rig.position.x).toBeCloseTo(BASE.workCentre.x, 9);
+  expect(rig.position.y).toBeCloseTo(BASE.workCentre.y, 9);
   expect(rig.position.z).toBeGreaterThan(CENTRE.z);
-  expect(rig.target.x).toBeCloseTo(CENTRE.x, 12);
-  expect(rig.target.y).toBeCloseTo(CENTRE.y, 12);
+  expect(rig.target.x).toBeCloseTo(BASE.workCentre.x, 12);
+  expect(rig.target.y).toBeCloseTo(BASE.workCentre.y, 12);
   expect(rig.target.z).toBeCloseTo(CENTRE.z, 12);
+});
+
+test("folding or unfolding does not pan the showcase camera: the fixed half stays where the work view lays it out", () => {
+  const folded = { min: { ...SUBJECT.min, x: CENTRE.x + HALF.x - 0.072 }, max: { ...SUBJECT.max, z: SUBJECT.max.z + 0.004 } };
+  const tented = { min: SUBJECT.min, max: { ...SUBJECT.max, z: SUBJECT.max.z + 0.05 } };
+  const open = blendedCamera({ ...BASE, t: 1 });
+  for (const subject of [folded, tented]) {
+    const rig = blendedCamera({ ...BASE, subject, t: 1 });
+    expect(rig.position.x).toBeCloseTo(open.position.x, 12);
+    expect(rig.position.y).toBeCloseTo(open.position.y, 12);
+    expect(rig.target.x).toBeCloseTo(open.target.x, 12);
+    expect(rig.target.y).toBeCloseTo(open.target.y, 12);
+  }
 });
 
 test("just after t 0 the camera is a near-orthographic 1 degree lens far down +Z, framing what the work view frames at the front of the phone", () => {

@@ -2202,3 +2202,32 @@ test("with the main video on, the phone is announced once per connection and a v
   expect(phones).not.toContain(null);
   await source.stop();
 });
+
+test("with the main video off, a Wi-Fi phone that drops is reconnected like one that streamed", async () => {
+  const watcher = fakeWatcher();
+  const { wireless, calls } = fakeWireless();
+  const delays: number[] = [];
+  const phones: (ConnectedPhone | null)[] = [];
+  const source = new DeviceSource({
+    host: watcher.host,
+    mainVideo: false,
+    createSession: () => new FakeSession(),
+    onPhone: (p) => phones.push(p),
+    wireless,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  await source.start(fakeSink().sink);
+
+  watcher.emit([device("10.0.0.5:5555", "tcp")]);
+  await flush();
+  expect(serials(phones)).toEqual(["10.0.0.5:5555"]);
+
+  watcher.emit([]);
+  await flush();
+
+  expect(delays).toEqual([1000]);
+  expect(calls.connect).toEqual([["10.0.0.5:5555"]]);
+  await source.stop();
+});

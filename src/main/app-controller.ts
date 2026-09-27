@@ -203,7 +203,7 @@ export class DeviceSource implements MediaSource {
   #tcpReconnectAbort: AbortController | null = null;
   /** The identity of a phone the user disconnected; every transport of it is excluded from auto-pick and TCP reconnect until chooseDevice() clears it. */
   #suppressedId: string | null = null;
-  /** The last transport that actually reached "streaming" this run; TCP reconnect only arms for it, not for a stale lastDevice that has never once connected. */
+  /** The last transport whose adb opened this run; TCP reconnect only arms for it, not for a stale lastDevice that has never once connected. */
   #reconnectEligible: { serial: string; id: string } | null = null;
   #mainVideo: boolean;
   /** The current run's open transport, once #run has opened it. */
@@ -634,6 +634,7 @@ export class DeviceSource implements MediaSource {
     const connection: Connection = { device, id, adb, run };
     this.#connection = connection;
     this.#announcePhone({ adb, serial: device.serial, deviceId: id, model: device.model });
+    this.#reconnectEligible = { serial: device.serial, id };
 
     if (this.opts.foldMonitor) void this.#startFoldMonitor(run, adb, sink);
     if (this.opts.notificationMirror) void this.#startNotificationMirror(run, adb);

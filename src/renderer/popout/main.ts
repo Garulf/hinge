@@ -5,6 +5,7 @@ import { defaultModifiers, normaliseModifiers } from "../../shared/shortcuts";
 import type { MainToRenderer, SessionStatus } from "../../shared/wire";
 import { PortClient, receivePort } from "../port-client";
 import { paintStatus } from "../status-paint";
+import { statusText } from "../status-text";
 import type { FrameTarget } from "../texture-renderer";
 import { VideoPipe } from "../video-pipe";
 import { FlatInput, videoRectIn, type VideoRect } from "./flat-input";
@@ -48,28 +49,12 @@ let client: PortClient | null = null;
 let settings: Settings | null = null;
 let videoSize: { w: number; h: number } | null = null;
 let viewport = { width: innerWidth, height: innerHeight, dpr: devicePixelRatio };
-let statusText: string | null = "Connecting…";
+let shownStatus: string | null = "Connecting…";
 let streamedOnce = false;
 let drawQueued = false;
 
-function textFor(status: SessionStatus): string | null {
-  switch (status.state) {
-    case "connecting":
-      return streamedOnce ? "Reconnecting…" : "Connecting…";
-    case "no-device":
-      return "Connect your phone";
-    case "unauthorized":
-      return "Allow USB debugging on your phone";
-    case "error":
-      return status.message;
-    case "streaming":
-    case "replay":
-      return null;
-  }
-}
-
 function onStatus(status: SessionStatus): void {
-  statusText = textFor(status);
+  shownStatus = statusText(status, streamedOnce ? "Reconnecting…" : "Connecting…");
   retryButton.hidden = status.state !== "error";
   requestDraw();
 }
@@ -79,11 +64,13 @@ function onStatus(status: SessionStatus): void {
  * the window; until then (mid-drag) the last frame is stretched to the
  * canvas rather than shown between bars.
  */
-function frameRect(): VideoRect {
-  const full = { x: 0, y: 0, width: canvas.width, height: canvas.height };
-  if (!videoSize) return full;
+function fitted(): boolean {
   const wanted = displayGeometry(viewport.width, viewport.height, viewport.dpr);
-  if (!wanted || wanted.width !== videoSize.w || wanted.height !== videoSize.h) return full;
+  return videoSize !== null && wanted !== null && wanted.width === videoSize.w && wanted.height === videoSize.h;
+}
+
+function frameRect(): VideoRect {
+  if (!videoSize || !fitted()) return { x: 0, y: 0, width: canvas.width, height: canvas.height };
   return videoRectIn(canvas.width, canvas.height, videoSize.w, videoSize.h);
 }
 
@@ -97,7 +84,7 @@ function draw(): void {
     const rect = frameRect();
     ctx.drawImage(frame, rect.x, rect.y, rect.width, rect.height);
   }
-  if (statusText !== null) paintStatus(ctx, statusText, canvas.width, canvas.height);
+  if (shownStatus !== null) paintStatus(ctx, shownStatus, canvas.width, canvas.height);
 }
 
 function requestDraw(): void {
@@ -139,6 +126,7 @@ const pipe = new VideoPipe(
 new FlatInput(canvas, () => videoSize, (intent) => client?.send({ kind: "control", intent }), {
   modifiers: () => normaliseModifiers(settings?.shortcutModifiers, defaultModifiers(window.hinge.platform)),
   scrolling: () => ({ smoothingMs: settings?.scrollSmoothing ?? 0, speed: settings?.scrollSpeed ?? 1, style: settings?.wheelStyle ?? "swipe" }),
+  fitted,
 });
 
 retryButton.addEventListener("click", () => {

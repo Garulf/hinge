@@ -2,7 +2,8 @@ import { BrowserWindow, nativeImage, screen, type WebContents } from "electron";
 import { appIconPath } from "./app-icon";
 import type { PopoutWindow, Rect } from "./popout-manager";
 import { trackedPort } from "./tracked-port";
-import { loadPage, pageWebPreferences } from "./window";
+import { guardNavigation } from "./navigation-guard";
+import { focusWindow, loadPage, pageWebPreferences } from "./window";
 
 export interface PopoutWindowOptions {
   pkg: string;
@@ -31,6 +32,7 @@ export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow & { rea
   // The page's own <title> would otherwise replace the app's name on every load.
   win.on("page-title-updated", (e) => e.preventDefault());
   win.once("ready-to-show", () => win.show());
+  guardNavigation(win.webContents);
   loadPage(win, "popout.html");
 
   let lastBounds: Rect = win.getContentBounds();
@@ -46,12 +48,7 @@ export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow & { rea
   return {
     port,
     webContents: win.webContents,
-    focus: () => {
-      if (win.isDestroyed()) return;
-      if (win.isMinimized()) win.restore();
-      win.show();
-      win.focus();
-    },
+    focus: () => focusWindow(win),
     close: () => {
       if (!win.isDestroyed()) win.close();
     },

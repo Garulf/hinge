@@ -25,7 +25,12 @@ export interface FlatInputOptions {
   modifiers?: () => readonly ModifierKey[];
   scrolling?: () => ScrollFeel;
   requestFrame?: (callback: (time: number) => void) => void;
+  /** Whether the frame is fitted inside the canvas; false while it is stretched to the whole canvas. Defaults to fitted. */
+  fitted?: () => boolean;
 }
+
+/** HOME, recents and the notification shade stay the main window's; a pop-out takes touches and BACK only. */
+const POPOUT_BUTTONS = new Set([0, 2]);
 
 /** A pop-out's input: its canvas is the phone's display, shown flat, so every press on the video is a touch. */
 export class FlatInput {
@@ -35,6 +40,7 @@ export class FlatInput {
   readonly #touch: TouchTracker;
   readonly #keys: KeyInput;
   readonly #wheel: WheelInput;
+  readonly #fitted: () => boolean;
   #touching = false;
 
   constructor(canvas: HTMLCanvasElement, videoSize: () => { w: number; h: number } | null, send: (intent: ControlIntent) => void, opts: FlatInputOptions = {}) {
@@ -43,6 +49,7 @@ export class FlatInput {
     this.#send = send;
     this.#touch = new TouchTracker(videoSize);
     this.#keys = new KeyInput(opts.modifiers, popoutAllows);
+    this.#fitted = opts.fitted ?? (() => true);
     this.#wheel = new WheelInput({
       send,
       videoSize,
@@ -59,6 +66,9 @@ export class FlatInput {
     canvas.addEventListener("lostpointercapture", () => this.#cancel());
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     canvas.addEventListener("wheel", (e) => this.#onWheel(e), { passive: false });
+    // A file dropped on the window would otherwise replace the page.
+    window.addEventListener("dragover", (e) => e.preventDefault());
+    window.addEventListener("drop", (e) => e.preventDefault());
     window.addEventListener("keydown", (e) => this.#onKey(e));
     window.addEventListener("keyup", (e) => this.#onKey(e));
     window.addEventListener("blur", () => {
@@ -72,12 +82,14 @@ export class FlatInput {
   #onPointerDown(e: PointerEvent): void {
     this.#canvas.setPointerCapture(e.pointerId);
     this.#wheel.cancelSwipe();
+    if (!POPOUT_BUTTONS.has(e.button)) return;
     if (e.button === 0) this.#touching = true;
     this.#dispatch({ kind: "down", button: e.button, buttons: e.buttons, hit: this.#hitOf(e), ctrl: e.ctrlKey, shift: e.shiftKey });
   }
 
   #onPointerUp(e: PointerEvent): void {
     if (this.#canvas.hasPointerCapture(e.pointerId)) this.#canvas.releasePointerCapture(e.pointerId);
+    if (!POPOUT_BUTTONS.has(e.button)) return;
     if (e.button === 0) this.#touching = false;
     this.#dispatch({ kind: "up", button: e.button, buttons: e.buttons, hit: this.#hitOf(e) });
   }
@@ -110,7 +122,7 @@ export class FlatInput {
     const size = this.#videoSize();
     if (!size) return null;
     const bounds = this.#canvas.getBoundingClientRect();
-    const rect = videoRectIn(bounds.width, bounds.height, size.w, size.h);
+    const rect = this.#fitted() ? videoRectIn(bounds.width, bounds.height, size.w, size.h) : { x: 0, y: 0, width: bounds.width, height: bounds.height };
     const x = (e.clientX - bounds.left - rect.x) / rect.width;
     const y = (e.clientY - bounds.top - rect.y) / rect.height;
     return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;

@@ -123,3 +123,40 @@ test("a wheel notch with the events style scrolls at the mapped point", () => {
 
   expect(sent).toEqual([expect.objectContaining({ type: "scroll", x: 200, y: 400, videoWidth: 400, videoHeight: 800, scrollY: -1 })]);
 });
+
+test("the right button is BACK, but middle, back/forward and fifth buttons do nothing in a pop-out", () => {
+  const { canvas, sent } = setup({ w: 400, h: 800 }, { w: 400, h: 800 });
+  const at = { clientX: 200, clientY: 400 };
+
+  for (const button of [1, 3, 4]) {
+    canvas.fire("pointerdown", { pointerId: 1, button, buttons: 1 << button, ...at });
+    canvas.fire("pointerup", { pointerId: 1, button, buttons: 0, ...at });
+    expect(sent, `button ${button}`).toEqual([]);
+  }
+
+  canvas.fire("pointerdown", { pointerId: 1, button: 2, buttons: 2, ...at });
+  canvas.fire("pointerup", { pointerId: 1, button: 2, buttons: 0, ...at });
+  expect(sent).toEqual([
+    { type: "back-or-screen-on", action: "down" },
+    { type: "back-or-screen-on", action: "up" },
+  ]);
+});
+
+test("a file dragged onto a pop-out is refused instead of opened in the window", () => {
+  setup({ w: 400, h: 800 }, { w: 400, h: 800 });
+  const prevented: string[] = [];
+
+  for (const type of ["dragover", "drop"]) fakeWindow.fire(type, { preventDefault: () => prevented.push(type) });
+
+  expect(prevented).toEqual(["dragover", "drop"]);
+});
+
+test("while the frame is stretched to the canvas a press maps through the whole canvas", () => {
+  const canvas = fakeCanvas(800, 800);
+  const sent: ControlIntent[] = [];
+  new FlatInput(canvas as unknown as HTMLCanvasElement, () => ({ w: 400, h: 800 }), (intent) => sent.push(intent), { fitted: () => false });
+
+  canvas.fire("pointerdown", { pointerId: 1, button: 0, buttons: 1, clientX: 100, clientY: 400 });
+
+  expect(sent[0]).toMatchObject({ type: "touch", action: "down", x: 50, y: 400 });
+});

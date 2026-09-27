@@ -3,6 +3,7 @@ import { BrowserWindow, ipcMain, screen, type WebPreferences } from "electron";
 import type { PortLike } from "./app-controller";
 import type { Rotation } from "../shared/screen-uv";
 import { appIconPath } from "./app-icon";
+import { guardNavigation } from "./navigation-guard";
 import { trackedPort } from "./tracked-port";
 import { NO_PAD, type Pad } from "../shared/layout";
 import { WindowPlacer } from "./window-resize";
@@ -19,8 +20,23 @@ export function loadPage(win: BrowserWindow, page: "index.html" | "popout.html")
   else void win.loadFile(join(import.meta.dirname, "../renderer", page));
 }
 
-/** onMoved fires when a drag ends or the window system reports a finished move. showWhenReady false keeps the window hidden until shown by hand. */
-export function createPhoneWindow(opts?: { onMoved?: () => void; showWhenReady?: boolean }): { win: BrowserWindow; port: PortLike } {
+export function focusWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+export interface PhoneWindowOptions {
+  /** Fires when a drag ends or the window system reports a finished move. */
+  onMoved?: () => void;
+  /** false keeps the window hidden until shown by hand. */
+  showWhenReady?: boolean;
+  /** MOD+q; closes the window when not given. */
+  onQuit?: () => void;
+}
+
+export function createPhoneWindow(opts?: PhoneWindowOptions): { win: BrowserWindow; port: PortLike } {
   const win = new BrowserWindow({
     width: 360,
     height: 760,
@@ -37,16 +53,17 @@ export function createPhoneWindow(opts?: { onMoved?: () => void; showWhenReady?:
     webPreferences: pageWebPreferences(),
   });
   if (opts?.showWhenReady ?? true) win.once("ready-to-show", () => win.show());
+  guardNavigation(win.webContents);
   loadPage(win, "index.html");
 
   const port = trackedPort(win);
 
-  registerWindowIpc(win, opts?.onMoved ?? (() => {}));
+  registerWindowIpc(win, opts?.onMoved ?? (() => {}), opts?.onQuit ?? (() => win.close()));
 
   return { win, port };
 }
 
-function registerWindowIpc(win: BrowserWindow, onMoved: () => void): void {
+function registerWindowIpc(win: BrowserWindow, onMoved: () => void, onQuit: () => void): void {
   let dragTimer: ReturnType<typeof setInterval> | null = null;
   let dragSize: { width: number; height: number } | null = null;
   const placer = new WindowPlacer();
@@ -110,7 +127,7 @@ function registerWindowIpc(win: BrowserWindow, onMoved: () => void): void {
   win.on("leave-full-screen", () => win.webContents.send("hinge:fullscreen", false));
 
   ipcMain.on("hinge:quit", (event) => {
-    if (event.sender === win.webContents) win.close();
+    if (event.sender === win.webContents) onQuit();
   });
 }
 

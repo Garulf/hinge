@@ -23,23 +23,8 @@ import { PortClient, receivePort } from "./port-client";
 import { ScaleController } from "./scale-controller";
 import { RotationMemory } from "./rotation-memory";
 import { PhoneScene, type ViewState } from "./scene/phone-scene";
+import { statusText } from "./status-text";
 import { VideoPipe } from "./video-pipe";
-
-function statusText(status: SessionStatus): string | null {
-  switch (status.state) {
-    case "no-device":
-      return "Connect your phone";
-    case "unauthorized":
-      return "Allow USB debugging on your phone";
-    case "connecting":
-      return "Connecting...";
-    case "error":
-      return status.message;
-    case "streaming":
-    case "replay":
-      return null;
-  }
-}
 
 const SCENE_READY_CAP_MS = 5000;
 
@@ -230,7 +215,7 @@ window.hinge.onFullscreen((on) => {
 
 function onStatus(status: SessionStatus): void {
   sessionState = status.state;
-  scene.setStatus(statusText(status));
+  scene.setStatus(statusText(status, "Connecting..."));
   if (status.state !== "streaming") return;
   currentSerial = status.serial;
   currentDeviceId = status.deviceId;

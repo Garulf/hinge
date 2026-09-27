@@ -1,6 +1,7 @@
 import type { Adb } from "@yume-chan/adb";
 import { runShellText } from "./adb-shell";
 import type { ControlIntent, TouchAction } from "../shared/wire";
+import { isPackageName } from "../shared/package-name";
 
 export interface ControllerLike {
   injectTouch(m: {
@@ -130,13 +131,19 @@ function lastNonEmptyLine(text: string): string | null {
   return lines.length > 0 ? lines[lines.length - 1] : null;
 }
 
+const COMPONENT_NAME = /^[A-Za-z0-9_.]+\/[A-Za-z0-9_.$]+$/;
+
 /** Resolves pkg's launcher activity on the phone and starts it there. A failure to resolve or start is logged, never thrown at the caller. */
 export async function launchAppOnPhone(adb: Adb, pkg: string, log: (line: string) => void, deps: LaunchAppDeps = {}): Promise<void> {
   const runShell = deps.runShell ?? runShellText;
+  if (!isPackageName(pkg)) {
+    log(`not launching ${JSON.stringify(pkg)} on the phone: not an app package`);
+    return;
+  }
   try {
     const resolved = await runShell(adb, `cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER ${pkg}`);
     const component = lastNonEmptyLine(resolved);
-    if (!component || !component.includes("/")) throw new Error(`could not resolve a launcher activity for ${pkg}`);
+    if (!component || !COMPONENT_NAME.test(component)) throw new Error(`could not resolve a launcher activity for ${pkg}`);
     await runShell(adb, `am start -n ${component}`);
   } catch (e) {
     log(`could not launch ${pkg} on the phone: ${String(e)}`);

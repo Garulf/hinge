@@ -639,3 +639,14 @@ test("a replaced session's app start is ignored, and the new session's start arm
   await vi.advanceTimersByTimeAsync(5000);
   expect(refusalChecks).toEqual(["com.example.app"]);
 });
+
+test("a closed window's bounds are saved before the count drops, so a quit on the last close never races the save", () => {
+  const { manager, windows, saved } = harness();
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  const savedWhenCounted: number[] = [];
+  manager.onCountChanged(() => savedWhenCounted.push(saved.length));
+
+  windows[0].userClose();
+  expect(savedWhenCounted).toEqual([1]);
+});

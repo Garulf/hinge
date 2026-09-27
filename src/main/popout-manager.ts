@@ -359,8 +359,8 @@ export class PopoutManager {
     this.#clearRefusalTimer(entry);
     for (const resolve of entry.streamWaiters.splice(0)) resolve(false);
     const stopped = entry.slot.stop();
-    this.#countChanged();
     this.#saveBounds(entry);
+    this.#countChanged();
     await stopped;
   }
 

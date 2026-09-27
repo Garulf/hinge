@@ -147,7 +147,7 @@ export class PopoutManager {
     }
     for (const entry of [...this.#entries.values()]) {
       if (entry.deviceId === phone.deviceId) this.#restartSession(entry, phone);
-      else this.#close(entry);
+      else this.#close(entry).catch((e) => this.deps.log(`closing ${entry.pkg} failed: ${String(e)}`));
     }
     this.#openQueued(phone);
   }
@@ -187,7 +187,9 @@ export class PopoutManager {
     };
     entry.debouncer.prime(geometry);
     this.#entries.set(pkg, entry);
-    window.onClosed(() => void this.#forget(entry));
+    window.onClosed(() => {
+      this.#forget(entry).catch((e) => this.deps.log(`closing ${pkg} failed: ${String(e)}`));
+    });
     slot.replace(this.deps.createSession(phone, pkg, geometry));
     entry.status = this.deps.bindPort(slot, window.port, {
       viewport: (w, h, dpr) => entry.debouncer.push(displayGeometry(w, h, dpr)),
@@ -231,22 +233,40 @@ export class PopoutManager {
     this.#restartSession(entry, phone);
   }
 
+  /** A window that fails to close is only logged, so it cannot keep the others open. */
   async #close(entry: Entry): Promise<void> {
     if (this.#entries.get(entry.pkg) !== entry) return;
     const stopped = this.#forget(entry);
-    entry.window.close();
+    try {
+      entry.window.close();
+    } catch (e) {
+      this.deps.log(`closing the ${entry.pkg} window failed: ${String(e)}`);
+    }
     await stopped;
   }
 
-  /** A second call for the same entry (onClosed firing for a window the manager closed itself) is a no-op. */
+  /**
+   * Stops the session before anything that can throw, so a failure cannot
+   * leak the session and its virtual display. A second call
+   * for the same entry (onClosed firing for a window the manager closed
+   * itself) is a no-op.
+   */
   async #forget(entry: Entry): Promise<void> {
     if (this.#entries.get(entry.pkg) !== entry) return;
     this.#entries.delete(entry.pkg);
     entry.debouncer.cancel();
-    this.deps.saveBounds(entry.deviceId, entry.pkg, entry.window.contentBounds());
     const stopped = entry.slot.stop();
     this.#countChanged();
+    this.#saveBounds(entry);
     await stopped;
+  }
+
+  #saveBounds(entry: Entry): void {
+    try {
+      this.deps.saveBounds(entry.deviceId, entry.pkg, entry.window.contentBounds());
+    } catch (e) {
+      this.deps.log(`saving the ${entry.pkg} window bounds failed: ${String(e)}`);
+    }
   }
 
   #countChanged(): void {

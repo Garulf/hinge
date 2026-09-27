@@ -120,6 +120,7 @@ function harness(opts: { savedBounds?: Rect | null; identify?: (pkg: string) => 
   const bindings: Binding[] = [];
   const notices: string[] = [];
   const saved: [string, string, Rect][] = [];
+  const logs: string[] = [];
   const deps: PopoutManagerDeps = {
     createWindow: (o) => {
       const w = new FakeWindow(o);
@@ -142,12 +143,12 @@ function harness(opts: { savedBounds?: Rect | null; identify?: (pkg: string) => 
     savedBounds: () => opts.savedBounds ?? null,
     saveBounds: (deviceId, pkg, r) => saved.push([deviceId, pkg, r]),
     notice: (text) => notices.push(text),
-    log: () => {},
+    log: (line) => logs.push(line),
   };
   const manager = new PopoutManager(deps);
   const counts: number[] = [];
   manager.onCountChanged((n) => counts.push(n));
-  return { manager, windows, sessions, bindings, notices, saved, counts };
+  return { manager, windows, sessions, bindings, notices, saved, counts, logs };
 }
 
 function fold(deviceId = "R5CY", tag = "a"): ConnectedPhone {
@@ -344,4 +345,58 @@ test("closeAll stops every session and closes every window", async () => {
   expect(windows.map((w) => w.closeCalls)).toEqual([1, 1]);
   expect(manager.count()).toBe(0);
   expect(counts.at(-1)).toBe(0);
+});
+
+async function unhandledRejectionsDuring(run: () => Promise<void>): Promise<unknown[]> {
+  const seen: unknown[] = [];
+  const onRejection = (reason: unknown) => seen.push(reason);
+  process.on("unhandledRejection", onRejection);
+  try {
+    await run();
+    await flush();
+    await flush();
+  } finally {
+    process.off("unhandledRejection", onRejection);
+  }
+  return seen;
+}
+
+test("a window whose bounds cannot be read on close still has its session stopped, and the failure is only logged", async () => {
+  const { manager, windows, sessions, counts, logs } = harness();
+  manager.setPhone(fold());
+  manager.open("a.one");
+  manager.open("a.two");
+  for (const w of windows) {
+    w.contentBounds = () => {
+      throw new Error("Object has been destroyed");
+    };
+  }
+
+  const rejections = await unhandledRejectionsDuring(async () => {
+    windows[0].userClose();
+    manager.setPhone(fold("OTHER"));
+  });
+
+  expect(rejections).toEqual([]);
+  expect(sessions.map((s) => s.stopCalls)).toEqual([1, 1]);
+  expect(windows[1].closeCalls).toBe(1);
+  expect(manager.count()).toBe(0);
+  expect(counts.at(-1)).toBe(0);
+  expect(logs.filter((l) => l.includes("Object has been destroyed"))).toHaveLength(2);
+});
+
+test("closeAll closes every window even when one of them fails to close", async () => {
+  const { manager, windows, sessions, logs } = harness();
+  manager.setPhone(fold());
+  manager.open("a.one");
+  manager.open("a.two");
+  windows[0].close = () => {
+    throw new Error("close failed");
+  };
+
+  await manager.closeAll();
+  expect(sessions.map((s) => s.stopCalls)).toEqual([1, 1]);
+  expect(windows[1].closeCalls).toBe(1);
+  expect(manager.count()).toBe(0);
+  expect(logs.some((l) => l.includes("close failed"))).toBe(true);
 });

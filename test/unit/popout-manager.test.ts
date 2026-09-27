@@ -9,6 +9,7 @@ import {
   type PopoutWindow,
   type Rect,
 } from "../../src/main/popout-manager";
+import { popOutCurrent } from "../../src/main/current-app";
 import type { DisplayGeometry } from "../../src/shared/popout";
 import type { SessionStatus } from "../../src/shared/wire";
 
@@ -649,4 +650,55 @@ test("a closed window's bounds are saved before the count drops, so a quit on th
 
   windows[0].userClose();
   expect(savedWhenCounted).toEqual([1]);
+});
+
+function currentAppDeps(manager: PopoutManager, notices: string[]) {
+  return {
+    phone: () => fold(),
+    dumpActivities: async () => "Display #0 (activities from top to bottom):\n    mResumedActivity: ActivityRecord{abc u0 com.example.app/.Main t7}",
+    popouts: manager,
+    notice: (text: string) => notices.push(text),
+    log: () => {},
+    wait: async () => {},
+  };
+}
+
+test("an error from the pop-out's session settles whenStreaming, so popping out the current app returns without a notice", async () => {
+  const { manager, sessions, notices } = harness();
+  manager.setPhone(fold());
+  const popping = popOutCurrent(currentAppDeps(manager, notices));
+  await flush();
+  expect(sessions).toHaveLength(1);
+
+  sessions[0].sink?.status({ state: "error", message: "Could not start com.example.app in its own window" });
+  await popping;
+  expect(notices).toEqual([]);
+  expect(manager.count()).toBe(1);
+});
+
+test("closing a pop-out before it streams settles whenStreaming, so popping out the current app returns", async () => {
+  const { manager, windows, sessions, notices } = harness();
+  manager.setPhone(fold());
+  const popping = popOutCurrent(currentAppDeps(manager, notices));
+  await flush();
+  sessions[0].appStarted();
+  windows[0].userClose();
+
+  await popping;
+  expect(notices).toEqual([]);
+});
+
+test("after an error, a retried session that streams answers a new whenStreaming", async () => {
+  const { manager, sessions, bindings } = harness();
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  const first = manager.whenStreaming("com.example.app");
+  sessions[0].sink?.status({ state: "error", message: "Could not start com.example.app in its own window" });
+  expect(await first).toBe(false);
+
+  bindings[0].handlers.retry();
+  const second = manager.whenStreaming("com.example.app");
+  sessions[1].appStarted();
+  sessions[1].frame();
+  expect(await second).toBe(true);
 });

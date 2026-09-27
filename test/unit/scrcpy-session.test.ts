@@ -688,10 +688,26 @@ test("a pop-out session tells its listeners once the app's start has been sent, 
   const failing = new ScrcpySession(baseOpts(deps(async () => Promise.reject(new Error("socket closed"))), { role: POPOUT_ROLE }));
   let failedStarts = 0;
   failing.onAppStarted(() => failedStarts++);
-  await failing.start(fakeSink().sink);
+  const failed = fakeSink();
+  await failing.start(failed.sink);
   await flush();
   expect(failedStarts).toBe(0);
+  expect(failed.statuses.at(-1)).toEqual({ state: "error", message: "Could not start com.example.app in its own window" });
   await failing.stop();
+});
+
+test("a pop-out session with no control channel says its app could not be started", async () => {
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => ({ ...oneShotClient(streamWithOnePacket, { clipboard: new ReadableStream<string>({ start: () => {} }) }), controller: undefined }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  const { sink, statuses } = fakeSink();
+  await session.start(sink);
+  await flush();
+  expect(statuses.at(-1)).toEqual({ state: "error", message: "Could not start com.example.app in its own window" });
+  await session.stop();
 });
 
 test("a pop-out session starts its app once the display streams, and leaves audio and the clipboard alone", async () => {

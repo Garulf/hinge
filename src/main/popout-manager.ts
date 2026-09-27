@@ -64,12 +64,16 @@ const SAVE_BOUNDS_DEBOUNCE_MS = 500;
 /** Counted from the app's start: an app that refuses secondary displays opens on the phone screen instead, and its pop-out never gets a frame. */
 const REFUSAL_CHECK_MS = 5000;
 
-function watchFrames(sink: MediaSink, onFrame: () => void): MediaSink {
+function watchSink(sink: MediaSink, on: { frame(): void; error(): void }): MediaSink {
   return {
     ...sink,
     videoPacket: (packet) => {
-      if (packet.type === "data") onFrame();
+      if (packet.type === "data") on.frame();
       sink.videoPacket(packet);
+    },
+    status: (status) => {
+      if (status.state === "error") on.error();
+      sink.status(status);
     },
   };
 }
@@ -89,12 +93,15 @@ class SessionSlot implements PopoutSessionLike {
 
   constructor(
     private readonly log: (line: string) => void,
-    private readonly onAppFrame: () => void,
+    private readonly on: { appFrame(): void; error(): void },
   ) {}
 
   async start(sink: MediaSink): Promise<void> {
-    this.#sink = watchFrames(sink, () => {
-      if (this.#appRunning) this.onAppFrame();
+    this.#sink = watchSink(sink, {
+      frame: () => {
+        if (this.#appRunning) this.on.appFrame();
+      },
+      error: () => this.on.error(),
     });
     await this.#current?.start(this.#sink);
   }
@@ -201,7 +208,7 @@ export class PopoutManager {
     return this.#entries.size;
   }
 
-  /** True once the app's open pop-out has shown a frame; false if it closes first or is not open. */
+  /** True once the app's open pop-out has shown a frame; false if it closes or its session reports an error first, or it is not open. */
   whenStreaming(pkg: string): Promise<boolean> {
     const entry = this.#entries.get(pkg);
     if (!entry) return Promise.resolve(false);
@@ -230,7 +237,7 @@ export class PopoutManager {
     const content = window.contentBounds();
     const scale = window.scaleFactor();
     const geometry = displayGeometry(content.width, content.height, scale) ?? { width: MIN_DISPLAY_PX, height: MIN_DISPLAY_PX, dpi: Math.round(160 * scale) };
-    const slot = new SessionSlot(this.deps.log, () => this.#streamed(entry));
+    const slot = new SessionSlot(this.deps.log, { appFrame: () => this.#streamed(entry), error: () => this.#failed(entry) });
     const entry: Entry = {
       pkg,
       deviceId: phone.deviceId,
@@ -288,6 +295,11 @@ export class PopoutManager {
   #clearRefusalTimer(entry: Entry): void {
     if (entry.refusalTimer !== null) clearTimeout(entry.refusalTimer);
     entry.refusalTimer = null;
+  }
+
+  /** The window shows the error with its Retry; whoever waits for it to stream stops waiting. */
+  #failed(entry: Entry): void {
+    for (const resolve of entry.streamWaiters.splice(0)) resolve(false);
   }
 
   #streamed(entry: Entry): void {

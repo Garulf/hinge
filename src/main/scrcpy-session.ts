@@ -230,14 +230,20 @@ export class ScrcpySession implements MediaSource {
     this.#appStartedListeners.push(cb);
   }
 
-  #startApp(client: Client, pkg: string): void {
-    client.controller
-      ?.startApp(pkg)
-      .then(() => {
+  /** A start that cannot be sent is shown as the session's error, whose Retry starts a new session and sends it again. */
+  #startApp(client: Client, pkg: string, sink: MediaSink): void {
+    const controller = client.controller;
+    const sent = controller ? controller.startApp(pkg) : Promise.reject(new Error("no control channel"));
+    sent.then(
+      () => {
         if (this.#stopped) return;
         for (const cb of this.#appStartedListeners) cb();
-      })
-      .catch((e) => this.opts.log?.(`start app ${pkg} failed: ${String(e)}`));
+      },
+      (e: unknown) => {
+        this.opts.log?.(`start app ${pkg} failed: ${String(e)}`);
+        if (!this.#stopped) sink.status({ state: "error", message: `Could not start ${pkg} in its own window` });
+      },
+    );
   }
 
   /** client.clipboard blocks on backpressure once clipboardAutosync is on, so this must run for the life of every successful attempt, not just when a clipboard host happens to be wired. */
@@ -311,7 +317,7 @@ export class ScrcpySession implements MediaSource {
       sink.status({ state: "streaming", serial: this.opts.serial, model: this.opts.model, deviceId: this.opts.deviceId ?? this.opts.serial });
       sink.videoPacket(toWire(first.value));
       if (role.kind === "popout") {
-        this.#startApp(client, role.pkg);
+        this.#startApp(client, role.pkg, sink);
         this.#shownGeometry = role.geometry;
         this.#syncDisplaySize();
       }

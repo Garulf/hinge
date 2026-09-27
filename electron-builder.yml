@@ -5,6 +5,7 @@ files: ["out/**", "package.json", "build/icon.png"]
 artifactName: "hinge-${version}-${os}-${arch}.${ext}"
 extraResources:
   - { from: vendor/scrcpy-server-v4.1, to: vendor/scrcpy-server-v4.1 }
+  - { from: vendor/hinge-agent.jar, to: vendor/hinge-agent.jar }
   - { from: LICENSE-scrcpy, to: LICENSE-scrcpy }
   - { from: THIRD_PARTY_NOTICES.md, to: THIRD_PARTY_NOTICES.md }
 win:

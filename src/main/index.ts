@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, screen, type Tray, type WebContents } from "electron";
 import type { DisplayGeometry } from "../shared/popout";
 import { AdbHost } from "./adb-host";
+import { AppCatalog } from "./app-catalog";
 import type { ClipboardHost } from "./clipboard-sync";
 import { bindSource, DeviceSource, type ConnectedPhone, type NotificationMirrorStarter, type SessionFactory } from "./app-controller";
 import { launchRequest, parseArgs, reportStartupError } from "./cli";
@@ -67,6 +68,7 @@ interface BuiltSource {
   setMainVideo?: (on: boolean) => void;
   /** Stands in for a phone in replay mode, so pop-outs open at once. */
   replayPhone?: ConnectedPhone;
+  catalog?: AppCatalog;
 }
 
 /** How the source reports its phone to the pop-outs and the companion; both are built after the source, so they are looked up on every call. */
@@ -164,6 +166,7 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
   });
   const host = new AdbHost({ adbPath: paths.adb });
   await host.ensureServer();
+  const catalog = new AppCatalog({ agentPath: paths.agent, cacheDir: join(app.getPath("userData"), "app-icons"), log });
 
   const wireless = createWirelessDeps(host.client);
   const onConnected = (id: string): void => {
@@ -221,7 +224,7 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
       onIdentified,
       ...phoneOptions,
     });
-    return { source, closeRecording: async () => {}, ...phoneSessions, setMainVideo: (on) => source.setMainVideo(on) };
+    return { source, closeRecording: async () => {}, ...phoneSessions, catalog, setMainVideo: (on) => source.setMainVideo(on) };
   }
 
   const path = resolveOutputPath(opts.record, app.getPath("desktop"));
@@ -249,7 +252,7 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
     onIdentified,
     ...phoneOptions,
   });
-  return { source, closeRecording: closeRecordStream(opened.stream, writer), ...phoneSessions, setMainVideo: (on) => source.setMainVideo(on) };
+  return { source, closeRecording: closeRecordStream(opened.stream, writer), ...phoneSessions, catalog, setMainVideo: (on) => source.setMainVideo(on) };
 }
 
 const SHUTDOWN_LIMIT_MS = 5000;
@@ -336,7 +339,7 @@ async function runMode(opts: RunOptions): Promise<void> {
     },
     createSession: built.popoutSession ?? (() => noPopoutSession("No phone to open apps from")),
     bindPort: bindPopoutPort,
-    identify: async (_phone, pkg) => ({ label: pkg, icon: null }),
+    identify: async (phone, pkg) => (built.catalog ? built.catalog.identify(phone, pkg) : { label: pkg, icon: null }),
     workArea: () => screen.getDisplayMatching(win.getBounds()).workArea,
     savedBounds: () => null,
     saveBounds: () => {},
@@ -357,6 +360,7 @@ async function runMode(opts: RunOptions): Promise<void> {
 
   const companion = built.companion ? new CompanionOwner({ create: built.companion, sink: mainSink, log: logger.log }) : null;
   phoneHooks.onPhone = (phone) => {
+    built.catalog?.setPhone(phone);
     popouts.setPhone(phone);
     companion?.phone(phone);
   };

@@ -9,6 +9,7 @@ import { bindSource, DeviceSource, type ConnectedPhone, type NotificationMirrorS
 import { launchRequest, parseArgs, reportStartupError } from "./cli";
 import { CompanionOwner, type CompanionLike } from "./companion-owner";
 import { CompanionSession } from "./companion-session";
+import { dumpActivities, landedOnPhoneScreen, popOutCurrent } from "./current-app";
 import { AppShell } from "./app-shell";
 import { shutdownWithin } from "./lifecycle";
 import { createLogger, type Logger } from "./logger";
@@ -330,6 +331,10 @@ async function runMode(opts: RunOptions): Promise<void> {
   const setMainVideo = built.setMainVideo ?? (() => {});
 
   const showNotification = electronNotice();
+  const notice = (text: string): void => {
+    port.postMessage({ kind: "notice", text }, []);
+    if (!shell.mainVisible) showNotification(text);
+  };
   const popouts = new PopoutManager({
     createWindow: (o) => {
       const popout = createPopoutWindow(o);
@@ -343,11 +348,9 @@ async function runMode(opts: RunOptions): Promise<void> {
     workArea: () => screen.getDisplayMatching(win.getBounds()).workArea,
     savedBounds: () => null,
     saveBounds: () => {},
-    notice: (text) => {
-      port.postMessage({ kind: "notice", text }, []);
-      if (!shell.mainVisible) showNotification(text);
-    },
+    notice,
     log: logger.log,
+    checkRefused: (phone, pkg) => (phone === built.replayPhone ? Promise.resolve(false) : landedOnPhoneScreen(phone, pkg)),
   });
 
   let currentPhone: ConnectedPhone | null = null;
@@ -356,6 +359,7 @@ async function runMode(opts: RunOptions): Promise<void> {
     onStatus: (status) => placement?.status(status),
     onRendererMessage: (msg) => {
       if (msg.kind === "popout-open") popouts.open(msg.pkg);
+      else if (msg.kind === "popout-current") void popOutCurrent({ phone: () => currentPhone, dumpActivities, popouts, notice, log: logger.log });
       else if (msg.kind === "apps-request") void answerAppsRequest(built.catalog ?? null, currentPhone).then((answer) => port.postMessage(answer, []));
     },
   });

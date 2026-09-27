@@ -75,6 +75,7 @@ class FakeSession implements PopoutSessionLike {
   startCalls = 0;
   stopCalls = 0;
   resizes: DisplayGeometry[] = [];
+  sink: MediaSink | null = null;
   #finishStart!: () => void;
   readonly started = new Promise<void>((resolve) => {
     this.#finishStart = resolve;
@@ -86,13 +87,18 @@ class FakeSession implements PopoutSessionLike {
     readonly geometry: DisplayGeometry,
   ) {}
 
-  start(): Promise<void> {
+  start(sink: MediaSink): Promise<void> {
+    this.sink = sink;
     this.startCalls++;
     return this.started;
   }
 
   finishStart(): void {
     this.#finishStart();
+  }
+
+  frame(): void {
+    this.sink?.videoPacket({ type: "data", keyframe: true, pts: 0, data: new Uint8Array([0]) });
   }
 
   control(): void {}
@@ -114,13 +120,16 @@ interface Binding {
 
 const SINK: MediaSink = { videoStart: () => {}, videoPacket: () => {}, videoEnd: () => {}, status: () => {} };
 
-function harness(opts: { savedBounds?: Rect | null; identify?: (pkg: string) => Promise<AppIdentity> } = {}) {
+function harness(
+  opts: { savedBounds?: Rect | null; identify?: (pkg: string) => Promise<AppIdentity>; checkRefused?: (phone: ConnectedPhone, pkg: string) => Promise<boolean> } = {},
+) {
   const windows: FakeWindow[] = [];
   const sessions: FakeSession[] = [];
   const bindings: Binding[] = [];
   const notices: string[] = [];
   const saved: [string, string, Rect][] = [];
   const logs: string[] = [];
+  const refusalChecks: string[] = [];
   const deps: PopoutManagerDeps = {
     createWindow: (o) => {
       const w = new FakeWindow(o);
@@ -144,11 +153,15 @@ function harness(opts: { savedBounds?: Rect | null; identify?: (pkg: string) => 
     saveBounds: (deviceId, pkg, r) => saved.push([deviceId, pkg, r]),
     notice: (text) => notices.push(text),
     log: (line) => logs.push(line),
+    checkRefused: (phone, pkg) => {
+      refusalChecks.push(pkg);
+      return opts.checkRefused ? opts.checkRefused(phone, pkg) : Promise.resolve(false);
+    },
   };
   const manager = new PopoutManager(deps);
   const counts: number[] = [];
   manager.onCountChanged((n) => counts.push(n));
-  return { manager, windows, sessions, bindings, notices, saved, counts, logs };
+  return { manager, windows, sessions, bindings, notices, saved, counts, logs, refusalChecks };
 }
 
 function fold(deviceId = "R5CY", tag = "a"): ConnectedPhone {
@@ -399,4 +412,119 @@ test("closeAll closes every window even when one of them fails to close", async 
   expect(windows[1].closeCalls).toBe(1);
   expect(manager.count()).toBe(0);
   expect(logs.some((l) => l.includes("close failed"))).toBe(true);
+});
+
+test("a pop-out with no frame 5 s after it opened, whose app is resumed on the phone screen, closes with a notice", async () => {
+  vi.useFakeTimers();
+  const { manager, windows, sessions, notices, refusalChecks } = harness({
+    identify: async () => ({ label: "Example", icon: null }),
+    checkRefused: async () => true,
+  });
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  await vi.advanceTimersByTimeAsync(4999);
+  expect(refusalChecks).toEqual([]);
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(refusalChecks).toEqual(["com.example.app"]);
+  expect(windows[0].closeCalls).toBe(1);
+  expect(sessions[0].stopCalls).toBe(1);
+  expect(manager.count()).toBe(0);
+  expect(notices).toEqual(["Example can't run in its own window"]);
+});
+
+test("a pop-out that streamed before 5 s is never checked for refusal", async () => {
+  vi.useFakeTimers();
+  const { manager, windows, sessions, refusalChecks } = harness({ checkRefused: async () => true });
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  sessions[0].frame();
+
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(refusalChecks).toEqual([]);
+  expect(windows[0].closeCalls).toBe(0);
+  expect(manager.count()).toBe(1);
+});
+
+test("a slow pop-out whose app is not on the phone screen stays open, and a failed check only logs", async () => {
+  vi.useFakeTimers();
+  const { manager, windows, notices, logs } = harness({
+    checkRefused: async (_phone, pkg) => {
+      if (pkg === "a.broken") throw new Error("dumpsys timed out");
+      return false;
+    },
+  });
+  manager.setPhone(fold());
+  manager.open("a.slow");
+  manager.open("a.broken");
+
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(windows.map((w) => w.closeCalls)).toEqual([0, 0]);
+  expect(manager.count()).toBe(2);
+  expect(notices).toEqual([]);
+  expect(logs.some((l) => l.includes("dumpsys timed out"))).toBe(true);
+});
+
+test("a pop-out closed or streaming by the time the refusal check answers is left alone", async () => {
+  vi.useFakeTimers();
+  let answer!: (refused: boolean) => void;
+  const { manager, windows, sessions, notices } = harness({ checkRefused: () => new Promise((resolve) => (answer = resolve)) });
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  await vi.advanceTimersByTimeAsync(5000);
+  sessions[0].frame();
+  answer(true);
+  await vi.advanceTimersByTimeAsync(1);
+
+  expect(windows[0].closeCalls).toBe(0);
+  expect(notices).toEqual([]);
+});
+
+test("the refusal check is not run once the window has closed or the phone is gone", async () => {
+  vi.useFakeTimers();
+  const { manager, windows, refusalChecks } = harness({ checkRefused: async () => true });
+  manager.setPhone(fold());
+  manager.open("a.one");
+  manager.open("a.two");
+  windows[0].userClose();
+  manager.setPhone(null);
+
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(refusalChecks).toEqual([]);
+  expect(windows[1].closeCalls).toBe(0);
+});
+
+test("whenStreaming answers true on the pop-out's first frame, at once if it already streamed, and false when it closes first", async () => {
+  const { manager, windows, sessions } = harness();
+  manager.setPhone(fold());
+  manager.open("a.one");
+  manager.open("a.two");
+  const one = manager.whenStreaming("a.one");
+  const two = manager.whenStreaming("a.two");
+
+  sessions[0].sink?.videoPacket({ type: "configuration", data: new Uint8Array([1]) });
+  let settled = false;
+  void one.then(() => (settled = true));
+  await flush();
+  expect(settled).toBe(false);
+
+  sessions[0].frame();
+  expect(await one).toBe(true);
+  expect(await manager.whenStreaming("a.one")).toBe(true);
+  windows[1].userClose();
+  expect(await two).toBe(false);
+  expect(await manager.whenStreaming("a.never")).toBe(false);
+});
+
+test("label answers the identified label of an open pop-out, its package before that, and null when it is not open", async () => {
+  let identified!: (identity: AppIdentity) => void;
+  const { manager } = harness({ identify: () => new Promise((resolve) => (identified = resolve)) });
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  expect(manager.label("com.example.app")).toBe("com.example.app");
+
+  identified({ label: "Example", icon: null });
+  await flush();
+  expect(manager.label("com.example.app")).toBe("Example");
+  expect(manager.label("a.closed")).toBeNull();
 });

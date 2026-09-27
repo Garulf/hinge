@@ -4,7 +4,7 @@ import type { Adb } from "@yume-chan/adb";
 import { PushReadableStream } from "@yume-chan/stream-extra";
 import { parseAgentApps, parseAgentIcons, parseLauncherActivities, parseRecents, type AppEntry } from "../shared/app-catalog";
 import type { MainToRenderer } from "../shared/wire";
-import { runShellChecked } from "./adb-shell";
+import { runShellChecked, SHELL_TIMEOUT_MS, withinTimeout } from "./adb-shell";
 import type { ConnectedPhone } from "./app-controller";
 import type { AppIdentity } from "./popout-manager";
 
@@ -12,7 +12,6 @@ export const AGENT_REMOTE_PATH = "/data/local/tmp/hinge-agent.jar";
 const AGENT_COMMAND = `CLASSPATH=${AGENT_REMOTE_PATH} app_process / net.garulf.hinge.Agent`;
 const LAUNCHER_QUERY = "cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER";
 const RECENTS_DUMP = "dumpsys activity recents";
-const SHELL_TIMEOUT_MS = 15_000;
 const ICON_PX = 96;
 const ICON_BATCH = 20;
 const MAX_RECENTS = 8;
@@ -158,7 +157,7 @@ export class AppCatalog {
   }
 
   #ensurePushed(connection: Connection): Promise<void> {
-    connection.pushed ??= this.#bounded(this.#push(connection.adb, this.#opts.agentPath, AGENT_REMOTE_PATH), "pushing the agent", null).catch((e: unknown) => {
+    connection.pushed ??= withinTimeout(() => this.#push(connection.adb, this.#opts.agentPath, AGENT_REMOTE_PATH), "pushing the agent", this.#timeoutMs).catch((e: unknown) => {
       connection.pushed = null;
       throw e;
     });
@@ -205,19 +204,7 @@ export class AppCatalog {
   }
 
   #shell(adb: Adb, command: string, what: string): Promise<string> {
-    const abort = new AbortController();
-    return this.#bounded(this.#runShell(adb, command, abort.signal), what, abort);
-  }
-
-  #bounded<T>(work: Promise<T>, what: string, abort: AbortController | null): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        abort?.abort();
-        reject(new Error(`${what} timed out after ${this.#timeoutMs} ms`));
-      }, this.#timeoutMs);
-    });
-    return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+    return withinTimeout((signal) => this.#runShell(adb, command, signal), what, this.#timeoutMs);
   }
 }
 

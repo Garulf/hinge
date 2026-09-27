@@ -46,11 +46,25 @@ export interface PopoutManagerDeps {
   saveBounds(deviceId: string, pkg: string, r: Rect): void;
   notice(text: string): void;
   log(line: string): void;
+  /** Whether the app is resumed on the phone's own screen, read without sending the phone any input. */
+  checkRefused(phone: ConnectedPhone, pkg: string): Promise<boolean>;
 }
 
 export type OpenResult = "opened" | "focused" | "queued" | "limit";
 
 const LIMIT_NOTICE = `Up to ${MAX_POPOUTS} apps can be open at once`;
+/** An app that refuses secondary displays opens on the phone screen instead, and its pop-out never gets a frame. */
+const REFUSAL_CHECK_MS = 5000;
+
+function watchFrames(sink: MediaSink, onFrame: () => void): MediaSink {
+  return {
+    ...sink,
+    videoPacket: (packet) => {
+      if (packet.type === "data") onFrame();
+      sink.videoPacket(packet);
+    },
+  };
+}
 
 /**
  * The one session a window's port is bound to for the window's whole life.
@@ -62,11 +76,14 @@ class SessionSlot implements PopoutSessionLike {
   #sink: MediaSink | null = null;
   #closed = false;
 
-  constructor(private readonly log: (line: string) => void) {}
+  constructor(
+    private readonly log: (line: string) => void,
+    private readonly onFrame: () => void,
+  ) {}
 
   async start(sink: MediaSink): Promise<void> {
-    this.#sink = sink;
-    await this.#current?.start(sink);
+    this.#sink = watchFrames(sink, this.onFrame);
+    await this.#current?.start(this.#sink);
   }
 
   control(intent: ControlIntent): void {
@@ -104,6 +121,10 @@ interface Entry {
   geometry: DisplayGeometry;
   debouncer: ResizeDebouncer;
   status: (s: SessionStatus) => void;
+  label: string;
+  streamed: boolean;
+  streamWaiters: ((streamed: boolean) => void)[];
+  refusalTimer: ReturnType<typeof setTimeout>;
 }
 
 export class PopoutManager {
@@ -156,6 +177,19 @@ export class PopoutManager {
     return this.#entries.size;
   }
 
+  /** True once the app's open pop-out has shown a frame; false if it closes first or is not open. */
+  whenStreaming(pkg: string): Promise<boolean> {
+    const entry = this.#entries.get(pkg);
+    if (!entry) return Promise.resolve(false);
+    if (entry.streamed) return Promise.resolve(true);
+    return new Promise((resolve) => entry.streamWaiters.push(resolve));
+  }
+
+  /** The app's label while its pop-out is open, its package until it is identified. */
+  label(pkg: string): string | null {
+    return this.#entries.get(pkg)?.label ?? null;
+  }
+
   onCountChanged(cb: (n: number) => void): void {
     this.#countListeners.push(cb);
   }
@@ -172,7 +206,7 @@ export class PopoutManager {
     const window = this.deps.createWindow({ pkg, title: pkg, bounds: saved, content });
     const scale = window.scaleFactor();
     const geometry = displayGeometry(content.width, content.height, scale) ?? { width: MIN_DISPLAY_PX, height: MIN_DISPLAY_PX, dpi: Math.round(160 * scale) };
-    const slot = new SessionSlot(this.deps.log);
+    const slot = new SessionSlot(this.deps.log, () => this.#streamed(entry));
     const entry: Entry = {
       pkg,
       deviceId: phone.deviceId,
@@ -184,6 +218,10 @@ export class PopoutManager {
         slot.resize(g);
       }),
       status: () => {},
+      label: pkg,
+      streamed: false,
+      streamWaiters: [],
+      refusalTimer: setTimeout(() => this.#checkRefused(entry), REFUSAL_CHECK_MS),
     };
     entry.debouncer.prime(geometry);
     this.#entries.set(pkg, entry);
@@ -204,10 +242,32 @@ export class PopoutManager {
       .identify(phone, entry.pkg)
       .then((identity) => {
         if (this.#entries.get(entry.pkg) !== entry) return;
+        entry.label = identity.label;
         entry.window.setTitle(identity.label);
         if (identity.icon) entry.window.setIcon(identity.icon);
       })
       .catch((e) => this.deps.log(`identifying ${entry.pkg} failed: ${String(e)}`));
+  }
+
+  #streamed(entry: Entry): void {
+    if (entry.streamed) return;
+    entry.streamed = true;
+    clearTimeout(entry.refusalTimer);
+    for (const resolve of entry.streamWaiters.splice(0)) resolve(true);
+  }
+
+  #checkRefused(entry: Entry): void {
+    const phone = this.#phone;
+    const pending = () => this.#entries.get(entry.pkg) === entry && !entry.streamed;
+    if (!phone || phone.deviceId !== entry.deviceId || !pending()) return;
+    this.deps
+      .checkRefused(phone, entry.pkg)
+      .then((refused) => {
+        if (!refused || !pending()) return;
+        this.deps.notice(`${entry.label} can't run in its own window`);
+        return this.#close(entry);
+      })
+      .catch((e) => this.deps.log(`checking whether ${entry.pkg} runs in its own window failed: ${String(e)}`));
   }
 
   #openQueued(phone: ConnectedPhone): void {
@@ -255,6 +315,8 @@ export class PopoutManager {
     if (this.#entries.get(entry.pkg) !== entry) return;
     this.#entries.delete(entry.pkg);
     entry.debouncer.cancel();
+    clearTimeout(entry.refusalTimer);
+    for (const resolve of entry.streamWaiters.splice(0)) resolve(false);
     const stopped = entry.slot.stop();
     this.#countChanged();
     this.#saveBounds(entry);

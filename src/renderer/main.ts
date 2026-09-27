@@ -322,6 +322,9 @@ function onAction(action: HingeAction): void {
     case "scale-down":
       scaleBy(-1);
       break;
+    case "popout-current":
+      client?.send({ kind: "popout-current" });
+      break;
   }
 }
 

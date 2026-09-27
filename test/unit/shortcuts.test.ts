@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { ModifierTracker } from "../../src/shared/modifiers";
 import type { KeyEventLike } from "../../src/shared/keymap";
+import { popoutAllows } from "../../src/shared/popout";
 import { defaultModifiers, normaliseModifiers, ShortcutHandler, SHORTCUT_TABLE } from "../../src/shared/shortcuts";
 
 const HOME = 3;
@@ -79,7 +80,7 @@ test("control intents fire once on press", () => {
   }
 });
 
-test("hinge actions: f g w q i z Shift+z d, and F11 without MOD", () => {
+test("hinge actions: f g w q i z Shift+z d t, and F11 without MOD", () => {
   const cases: [string, boolean, string][] = [
     ["KeyF", false, "fullscreen"],
     ["KeyG", false, "pixel-perfect"],
@@ -89,6 +90,7 @@ test("hinge actions: f g w q i z Shift+z d, and F11 without MOD", () => {
     ["KeyZ", false, "pause"],
     ["KeyZ", true, "unpause"],
     ["KeyD", false, "center"],
+    ["KeyT", false, "popout-current"],
   ];
   for (const [code, shiftKey, action] of cases) {
     const { feed } = handler();
@@ -212,9 +214,9 @@ test("MOD defaults to left Alt alone on Windows, which reserves most Win+letter 
   expect(normaliseModifiers(["bogus"], defaultModifiers("win32"))).toEqual(["lalt"]);
 });
 
-test("the table covers every letter scrcpy documents plus hinge's d", () => {
+test("the table covers every letter scrcpy documents plus hinge's d and t", () => {
   expect(Object.keys(SHORTCUT_TABLE).sort()).toEqual(
-    ["ArrowDown", "ArrowUp", "Backspace", "KeyB", "KeyC", "KeyD", "KeyF", "KeyG", "KeyH", "KeyI", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyV", "KeyW", "KeyX", "KeyZ"].sort(),
+    ["ArrowDown", "ArrowUp", "Backspace", "KeyB", "KeyC", "KeyD", "KeyF", "KeyG", "KeyH", "KeyI", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT", "KeyV", "KeyW", "KeyX", "KeyZ"].sort(),
   );
 });
 
@@ -224,4 +226,10 @@ test("right Alt (AltGr on many layouts) and right Super are not MOD by default",
     feed(key("keydown", code, { altKey: code === "AltRight", metaKey: code === "MetaRight" }));
     expect(feed(key("keydown", "KeyD", { altKey: code === "AltRight", metaKey: code === "MetaRight" })), code).toBeNull();
   }
+});
+
+test("MOD+t pops the current app out from the main window only: a pop-out never takes it", () => {
+  expect(SHORTCUT_TABLE.KeyT).toEqual({ plain: { kind: "action", action: "popout-current" } });
+  expect(popoutAllows("KeyT", false)).toBe(false);
+  expect(popoutAllows("KeyT", true)).toBe(false);
 });

@@ -1,15 +1,17 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, screen, type Tray, type WebContents } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell as electronShell, type Tray, type WebContents } from "electron";
 import type { DisplayGeometry } from "../shared/popout";
 import { AdbHost } from "./adb-host";
 import { AppCatalog, answerAppsRequest } from "./app-catalog";
+import { appIconPath } from "./app-icon";
 import type { ClipboardHost } from "./clipboard-sync";
 import { bindSource, DeviceSource, type ConnectedPhone, type NotificationMirrorStarter, type SessionFactory } from "./app-controller";
 import { launchRequest, parseArgs, reportStartupError } from "./cli";
 import { CompanionOwner, type CompanionLike } from "./companion-owner";
 import { CompanionSession } from "./companion-session";
 import { dumpActivities, landedOnPhoneScreen, popOutCurrent } from "./current-app";
+import { createDesktopShortcut, type DesktopShortcutDeps } from "./desktop-shortcut";
 import { AppShell } from "./app-shell";
 import { shutdownWithin } from "./lifecycle";
 import { createLogger, type Logger } from "./logger";
@@ -354,12 +356,24 @@ async function runMode(opts: RunOptions): Promise<void> {
   });
 
   let currentPhone: ConnectedPhone | null = null;
+  const shortcutDeps: DesktopShortcutDeps = {
+    platform: process.platform,
+    execPath: process.execPath,
+    env: process.env,
+    userData: app.getPath("userData"),
+    appData: app.getPath("appData"),
+    home: app.getPath("home"),
+    identify: async (pkg) => (built.catalog && currentPhone ? built.catalog.identify(currentPhone, pkg) : { label: pkg, icon: null }),
+    fallbackIcon: async () => nativeImage.createFromPath(appIconPath()).resize({ width: 256, height: 256 }).toPNG(),
+    writeShortcutLink: (path, operation, options) => electronShell.writeShortcutLink(path, operation, options),
+  };
   const mainSink = bindSource(source, port, {
     logPath: logger.path,
     onStatus: (status) => placement?.status(status),
     onRendererMessage: (msg) => {
       if (msg.kind === "popout-open") popouts.open(msg.pkg);
       else if (msg.kind === "popout-current") void popOutCurrent({ phone: () => currentPhone, dumpActivities, popouts, notice, log: logger.log });
+      else if (msg.kind === "create-shortcut") void createDesktopShortcut(shortcutDeps, msg.pkg).then(notice);
       else if (msg.kind === "apps-request") void answerAppsRequest(built.catalog ?? null, currentPhone).then((answer) => port.postMessage(answer, []));
     },
   });

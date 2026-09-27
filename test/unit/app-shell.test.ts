@@ -171,3 +171,13 @@ test("an --app pop-out that opens and closes before 5 s quits hinge and never br
 
   expect(calls).toEqual(["quit"]);
 });
+
+test("quitting before an --app launch's 5 s are up never brings the main window up", async () => {
+  const { shell, calls } = harness(true);
+  shell.start();
+
+  shell.quitting();
+  await vi.advanceTimersByTimeAsync(SHOW_MAIN_WITHOUT_POPOUT_MS * 2);
+
+  expect(calls).toEqual([]);
+});

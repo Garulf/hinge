@@ -14,7 +14,7 @@ import { CompanionSession } from "./companion-session";
 import { dumpActivities, landedOnPhoneScreen, popOutCurrent } from "./current-app";
 import { createDesktopShortcut, type DesktopShortcutDeps } from "./desktop-shortcut";
 import { AppShell } from "./app-shell";
-import { shutdownWithin } from "./lifecycle";
+import { Shutdown, shutdownWithin } from "./lifecycle";
 import { createLogger, type Logger } from "./logger";
 import type { MediaSink, MediaSource } from "./media-source";
 import { launchAppOnPhone } from "./intents";
@@ -404,26 +404,10 @@ async function runMode(opts: RunOptions): Promise<void> {
   };
   phoneHooks.clipboardPush = (content) => companion?.beginPush(content) ?? 0n;
 
-  let shuttingDown: Promise<void> | null = null;
   let quitting = false;
   app.on("before-quit", () => {
     quitting = true;
   });
-  quitHinge = () => {
-    if (shuttingDown) return;
-    quitting = true;
-    shuttingDown = shutdownWithin(SHUTDOWN_LIMIT_MS, [
-      async () => {
-        await popouts.closeAll();
-        await settings.settled();
-      },
-      async () => companion?.stop(),
-      async () => {
-        await source.stop().catch(() => {});
-        await closeRecording();
-      },
-    ]).then(() => app.quit());
-  };
 
   const shell = new AppShell(
     {
@@ -439,6 +423,23 @@ async function runMode(opts: RunOptions): Promise<void> {
     { startHidden: opts.app !== null },
   );
   phoneHooks.showMain = () => shell.showMain();
+
+  const shutdown = new Shutdown(() => {
+    quitting = true;
+    shell.quitting();
+    void shutdownWithin(SHUTDOWN_LIMIT_MS, [
+      async () => {
+        await popouts.closeAll();
+        await settings.settled();
+      },
+      async () => companion?.stop(),
+      async () => {
+        await source.stop().catch(() => {});
+        await closeRecording();
+      },
+    ]).then(() => app.quit());
+  });
+  quitHinge = () => shutdown.request();
 
   win.on("close", (e) => {
     placement?.flush();
@@ -470,7 +471,7 @@ async function runMode(opts: RunOptions): Promise<void> {
     quitHinge();
   });
   app.on("window-all-closed", () => {
-    if (!shuttingDown) app.quit();
+    if (!shutdown.started) app.quit();
   });
 }
 

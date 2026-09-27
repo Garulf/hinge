@@ -67,6 +67,11 @@ export class AppShell {
     return outcome;
   }
 
+  /** hinge is quitting: the --app launch's wait must not bring the main window up during a slow quit. */
+  quitting(): void {
+    this.#cancelFallback();
+  }
+
   /** A second launch of hinge, with the app it asked for. */
   launch(app: string | null): void {
     if (app) this.#deps.popouts.open(app);

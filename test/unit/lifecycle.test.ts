@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { afterPopoutClosed, onMainWindowClose, shutdownWithin } from "../../src/main/lifecycle";
+import { afterPopoutClosed, onMainWindowClose, Shutdown, shutdownWithin } from "../../src/main/lifecycle";
 
 test("closing the main window hides it while pop-outs are open, and quits otherwise", () => {
   expect(onMainWindowClose({ popouts: 0 })).toBe("quit");
@@ -42,4 +42,20 @@ test("shutdown runs every step even when one fails, and finishes as soon as they
     },
   ]);
   expect(ran).toEqual(["a", "b"]);
+});
+
+test("a shutdown asked for again from inside its own first step runs once, and counts as started from its first line", () => {
+  const seen: boolean[] = [];
+  let runs = 0;
+  const shutdown: Shutdown = new Shutdown(() => {
+    runs++;
+    seen.push(shutdown.started);
+    shutdown.request();
+  });
+  expect(shutdown.started).toBe(false);
+
+  shutdown.request();
+  shutdown.request();
+  expect(runs).toBe(1);
+  expect(seen).toEqual([true]);
 });

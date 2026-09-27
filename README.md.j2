@@ -234,7 +234,12 @@ While the phone is streaming, its notifications appear on the PC too:
 ongoing, foreground-service, group-summary and below-default-importance
 ones are left out, and nothing pops while the hinge window is focused.
 Clicking one brings hinge to the front and opens the app on the phone.
-Turn it off in Settings.
+
+An incoming call shows the caller's contact name, or the number, in a
+notification that stays up while the phone rings and closes once the call
+is answered, declined or missed. Clicking it brings hinge to the front so
+you can answer on the mirror. Missed calls come through as the dialer's
+own notification. Both are turned off by the same setting in Settings.
 
 ### Files
 

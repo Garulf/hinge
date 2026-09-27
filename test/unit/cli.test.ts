@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { appFromArgv, parseArgs, reportStartupError } from "../../src/main/cli";
+import { appFromArgv, launchRequest, parseArgs, reportStartupError } from "../../src/main/cli";
 
 test("defaults to run mode", () => expect(parseArgs([])).toEqual({ mode: "run", serial: null, replay: null, record: null, userData: null, dryRunTransfers: false, app: null }));
 test("replay and serial", () => expect(parseArgs(["--replay", "a.hrec", "--serial", "X"])).toMatchObject({ mode: "run", serial: "X", replay: "a.hrec", record: null }));
@@ -14,6 +14,15 @@ test("no app in a plain second launch, or one whose --app has no package", () =>
   expect(appFromArgv(["/opt/hinge/hinge", "--no-sandbox"])).toBeNull();
   expect(appFromArgv(["/opt/hinge/hinge", "--app"])).toBeNull();
   expect(appFromArgv(["/opt/hinge/hinge", "--app", "--no-sandbox"])).toBeNull();
+});
+test("a second launch's app comes from the lock's additional data, whatever order its argv arrives in", () => {
+  expect(launchRequest({ app: "com.x" }, ["/opt/hinge/hinge", "com.y", "--app"])).toBe("com.x");
+  expect(launchRequest({ app: null }, ["/opt/hinge/hinge", "--app", "com.y"])).toBeNull();
+});
+test("without additional data a second launch falls back to its argv", () => {
+  expect(launchRequest(undefined, ["/opt/hinge/hinge", "--app", "com.y"])).toBe("com.y");
+  expect(launchRequest({ other: 1 }, ["/opt/hinge/hinge"])).toBeNull();
+  expect(launchRequest({ app: 5 }, ["/opt/hinge/hinge", "--app", "com.y"])).toBe("com.y");
 });
 test("probe with defaults", () => expect(parseArgs(["--probe"])).toEqual({ mode: "probe", serial: null, seconds: 90, out: null }));
 test("probe with seconds and out", () => expect(parseArgs(["--probe", "--seconds", "30", "--out", "r.json"])).toEqual({ mode: "probe", serial: null, seconds: 30, out: "r.json" }));

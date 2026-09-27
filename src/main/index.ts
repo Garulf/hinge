@@ -5,10 +5,11 @@ import type { DisplayGeometry } from "../shared/popout";
 import { AdbHost } from "./adb-host";
 import type { ClipboardHost } from "./clipboard-sync";
 import { bindSource, DeviceSource, type ConnectedPhone, type NotificationMirrorStarter, type SessionFactory } from "./app-controller";
-import { appFromArgv, parseArgs, reportStartupError } from "./cli";
+import { launchRequest, parseArgs, reportStartupError } from "./cli";
 import { CompanionOwner, type CompanionLike } from "./companion-owner";
 import { CompanionSession } from "./companion-session";
-import { afterPopoutClosed, onMainWindowClose } from "./lifecycle";
+import { AppShell } from "./app-shell";
+import { shutdownWithin } from "./lifecycle";
 import { createLogger, type Logger } from "./logger";
 import type { MediaSink, MediaSource } from "./media-source";
 import { launchAppOnPhone } from "./intents";
@@ -31,7 +32,7 @@ import { withDryRunTransfers } from "./dry-run-transfers";
 import { loadSettings, type SettingsStore } from "./settings";
 import { bridgeSettings } from "./settings-bridge";
 import { vendorPaths } from "./vendor-paths";
-import { createPhoneWindow } from "./window";
+import { createPhoneWindow, focusWindow } from "./window";
 import { DevicePlacement } from "./window-position";
 import { createWirelessDeps } from "./wireless";
 
@@ -71,6 +72,8 @@ interface BuiltSource {
 /** How the source reports its phone to the pop-outs and the companion; both are built after the source, so they are looked up on every call. */
 interface PhoneHooks {
   mainVideo: boolean;
+  /** A notification or call toast was clicked. */
+  showMain(): void;
   onPhone(phone: ConnectedPhone | null): void;
   clipboardPush(content: string): bigint;
 }
@@ -174,7 +177,7 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
       enabled: () => settings.current.mirrorNotifications,
       notifier,
       isWindowFocused: () => win.isFocused(),
-      focusWindow: () => focusWindow(win),
+      focusWindow: () => hooks.showMain(),
       log: mirrorLog,
     };
     const stops = await Promise.all([
@@ -249,29 +252,17 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
   return { source, closeRecording: closeRecordStream(opened.stream, writer), ...phoneSessions, setMainVideo: (on) => source.setMainVideo(on) };
 }
 
-/** Waits for source.stop() and the recording stream to finish, but never blocks quitting for more than a few seconds. */
-function shutdown(source: MediaSource, closeRecording: () => Promise<void>): Promise<void> {
-  return Promise.race([
-    (async () => {
-      await source.stop().catch(() => {});
-      await closeRecording();
-    })(),
-    new Promise<void>((resolve) => setTimeout(resolve, 5000)),
-  ]);
-}
+const SHUTDOWN_LIMIT_MS = 5000;
 
-/** A second launch hands over to the running window instead of opening another adb session on the same phone. */
-function holdSingleInstance(): boolean {
-  if (app.requestSingleInstanceLock()) return true;
+/**
+ * A second launch hands over to the running window instead of opening
+ * another adb session on the same phone. The app it asks for travels as the
+ * lock's data, since its argv can arrive reordered.
+ */
+function holdSingleInstance(requested: string | null): boolean {
+  if (app.requestSingleInstanceLock({ app: requested })) return true;
   app.quit();
   return false;
-}
-
-function focusWindow(win: BrowserWindow): void {
-  if (win.isDestroyed()) return;
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
 }
 
 function electronNotice(): (text: string) => void {
@@ -280,7 +271,7 @@ function electronNotice(): (text: string) => void {
 
 async function runMode(opts: RunOptions): Promise<void> {
   if (opts.userData) app.setPath("userData", opts.userData);
-  if (!holdSingleInstance()) return;
+  if (!holdSingleInstance(opts.app)) return;
   await app.whenReady();
   // Toasts on Windows are grouped and actioned by AppUserModelId; without a
   // matching one set explicitly, an installed, portable and unpacked build
@@ -290,6 +281,9 @@ async function runMode(opts: RunOptions): Promise<void> {
   const settingsPath = join(app.getPath("userData"), "settings.json");
   const settings = await loadSettings(settingsPath);
   let placement: DevicePlacement | null = null;
+  let quitHinge = (): void => {
+    if (!win.isDestroyed()) win.close();
+  };
   let workAreaChanged = (): void => {};
   const { win, port } = createPhoneWindow({
     onMoved: () => {
@@ -297,9 +291,11 @@ async function runMode(opts: RunOptions): Promise<void> {
       workAreaChanged();
     },
     showWhenReady: opts.app === null,
+    onQuit: () => quitHinge(),
   });
-  let secondLaunch = (_argv: string[]): void => focusWindow(win);
-  app.on("second-instance", (_event, argv) => secondLaunch(argv));
+  const earlyLaunches: (string | null)[] = [];
+  let secondLaunch = (requested: string | null): void => void earlyLaunches.push(requested);
+  app.on("second-instance", (_event, argv, _cwd, additionalData) => secondLaunch(launchRequest(additionalData, argv)));
   workAreaChanged = () => {
     if (!win.isDestroyed()) win.webContents.send("hinge:work-area-changed");
   };
@@ -319,7 +315,7 @@ async function runMode(opts: RunOptions): Promise<void> {
   });
   placement.preApply(settings.current.lastDevice);
 
-  const phoneHooks: PhoneHooks = { mainVideo: opts.app === null, onPhone: () => {}, clipboardPush: () => 0n };
+  const phoneHooks: PhoneHooks = { mainVideo: opts.app === null, showMain: () => {}, onPhone: () => {}, clipboardPush: () => 0n };
   let built: BuiltSource;
   try {
     built = await buildSource(opts, settings, logger.log, win, phoneHooks);
@@ -346,7 +342,7 @@ async function runMode(opts: RunOptions): Promise<void> {
     saveBounds: () => {},
     notice: (text) => {
       port.postMessage({ kind: "notice", text }, []);
-      if (!win.isDestroyed() && !win.isVisible()) showNotification(text);
+      if (!shell.mainVisible) showNotification(text);
     },
     log: logger.log,
   });
@@ -365,62 +361,61 @@ async function runMode(opts: RunOptions): Promise<void> {
     companion?.phone(phone);
   };
   phoneHooks.clipboardPush = (content) => companion?.beginPush(content) ?? 0n;
-  const mainVisible = (): boolean => !win.isDestroyed() && win.isVisible();
-  const refreshCompanion = (): void => companion?.wanted(mainVisible() || popouts.count() > 0);
-  win.on("show", refreshCompanion);
-  win.on("hide", refreshCompanion);
 
   let shuttingDown: Promise<void> | null = null;
   let quitting = false;
   app.on("before-quit", () => {
     quitting = true;
   });
-  const quitHinge = (): void => {
+  quitHinge = () => {
     if (shuttingDown) return;
     quitting = true;
-    shuttingDown = (async () => {
-      await Promise.all([popouts.closeAll(), companion?.stop()]);
-      await shutdown(source, closeRecording);
-    })().then(() => app.quit());
+    shuttingDown = shutdownWithin(SHUTDOWN_LIMIT_MS, [
+      () => popouts.closeAll(),
+      async () => companion?.stop(),
+      async () => {
+        await source.stop().catch(() => {});
+        await closeRecording();
+      },
+    ]).then(() => app.quit());
   };
 
-  const showMain = (): void => {
-    focusWindow(win);
-    setMainVideo(true);
-  };
-  const hideMain = (): void => {
-    win.hide();
-    setMainVideo(false);
-  };
+  const shell = new AppShell(
+    {
+      showWindow: () => focusWindow(win),
+      hideWindow: () => {
+        if (!win.isDestroyed()) win.hide();
+      },
+      setMainVideo,
+      companionWanted: (on) => companion?.wanted(on),
+      popouts,
+      quit: () => quitHinge(),
+    },
+    { startHidden: opts.app !== null },
+  );
+  phoneHooks.showMain = () => shell.showMain();
 
   win.on("close", (e) => {
     placement?.flush();
-    if (quitting || onMainWindowClose({ popouts: popouts.count() }) === "quit") return;
+    if (quitting || shell.closeRequested() === "quit") return;
     e.preventDefault();
-    hideMain();
   });
-  popouts.onCountChanged((n) => {
-    refreshCompanion();
-    if (afterPopoutClosed({ mainVisible: mainVisible(), popouts: n }) === "quit") quitHinge();
-  });
-  secondLaunch = (argv) => {
-    const pkg = appFromArgv(argv);
-    if (pkg) popouts.open(pkg);
-    else showMain();
-  };
+  secondLaunch = (requested) => shell.launch(requested);
 
   let tray: Tray | null = createTray({
-    showPhone: showMain,
+    showPhone: () => shell.showMain(),
     openApp: () => {
-      showMain();
+      shell.showMain();
       port.postMessage({ kind: "open-picker" }, []);
     },
-    quit: quitHinge,
+    quit: () => quitHinge(),
     log: logger.log,
   });
 
   if (built.replayPhone) popouts.setPhone(built.replayPhone);
+  shell.start();
   if (opts.app) popouts.open(opts.app);
+  for (const requested of earlyLaunches.splice(0)) shell.launch(requested);
 
   win.on("closed", () => {
     placement?.closed();

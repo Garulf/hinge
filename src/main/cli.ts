@@ -77,3 +77,12 @@ export function reportStartupError(e: unknown, opts: { packaged: boolean; platfo
   const channel = opts.packaged && opts.platform === "win32" ? "dialog" : "console";
   return { channel, message: String(e) };
 }
+
+/** The app a second launch asked for: the lock's additional data carries it exactly, the argv only as a fallback. */
+export function launchRequest(additionalData: unknown, argv: string[]): string | null {
+  if (typeof additionalData === "object" && additionalData !== null && "app" in additionalData) {
+    const { app } = additionalData;
+    if (app === null || typeof app === "string") return app;
+  }
+  return appFromArgv(argv);
+}

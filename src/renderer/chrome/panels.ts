@@ -254,7 +254,7 @@ export class SettingsPanel implements Panel {
       el("h3", { text: "Shortcut key (MOD)" }),
       modifierGrid,
       el("h3", { text: "Notifications" }),
-      el("label", { className: "check" }, [this.#mirrorNotifications, "Mirror phone notifications"]),
+      el("label", { className: "check" }, [this.#mirrorNotifications, "Mirror phone notifications and calls"]),
       el("h3", { text: "Stream" }),
       el("label", { className: "check" }, [this.#audio, "Play phone audio on this PC"]),
       el("div", { className: "grid" }, [

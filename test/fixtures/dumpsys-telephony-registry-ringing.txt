@@ -1,0 +1,37 @@
+last known state:
+  Phone Id=0
+    mCallState=1
+    mRingingCallState=5
+    mForegroundCallState=0
+    mBackgroundCallState=0
+    mPreciseCallState=Ringing call state: 5, Foreground call state: 0, Background call state: 0, Disconnect cause: -1, Precise disconnect cause: -1
+    mCallDisconnectCause=-1
+    mCallIncomingNumber=+15551234567
+    mServiceState=0(IN_SERVICE)
+    mVoiceActivationState= 0
+    mDataActivationState= 0
+    mUserMobileDataState= false
+    mSignalStrength=SignalStrength:{mCdma=Invalid,mGsm=Invalid,mWcdma=Invalid,mTdscdma=Invalid,mLte=Invalid,mNr=Invalid,primary=CellSignalStrength}
+    mMessageWaiting=false
+    mCallForwarding=false
+    mDataActivity=0
+    mDataConnectionState=2
+  Phone Id=1
+    mCallState=0
+    mRingingCallState=0
+    mForegroundCallState=0
+    mBackgroundCallState=0
+    mPreciseCallState=Ringing call state: 0, Foreground call state: 0, Background call state: 0, Disconnect cause: -1, Precise disconnect cause: -1
+    mCallDisconnectCause=-1
+    mCallIncomingNumber=
+    mServiceState=1(OUT_OF_SERVICE)
+    mMessageWaiting=false
+    mCallForwarding=false
+    mDataActivity=0
+    mDataConnectionState=0
+  mCarrierNetworkChangeState=false
+  mDefaultPhoneId=0
+  mDefaultSubId=1
+registrations: count=2
+  {callingPackage=com.android.phone callerUid=1001 binder=android.os.BinderProxy@1a2b3c events=[1, 3]}
+  {callingPackage=com.android.server.telecom callerUid=1000 binder=android.os.BinderProxy@4d5e6f events=[6]}

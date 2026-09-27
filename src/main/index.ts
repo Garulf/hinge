@@ -10,6 +10,7 @@ import type { MediaSink, MediaSource } from "./media-source";
 import { launchAppOnPhone } from "./intents";
 import { resolveOutputPath } from "./output-path";
 import { createQueuedWriter } from "./queued-writer";
+import { startCallWatcher } from "./call-watcher";
 import { startFoldMonitor } from "./fold-monitor";
 import { startNotificationMirror, type Notifier } from "./notification-mirror";
 import { runProbe } from "./probe";
@@ -91,10 +92,12 @@ type RunOptions = Extract<ReturnType<typeof parseArgs>, { mode: "run" }>;
 
 function electronNotifier(): Notifier {
   return {
-    show({ title, body }) {
-      const notification = new Notification({ title, body });
+    show({ title, body, persistent }) {
+      const notification = new Notification(
+        persistent ? { title, body, timeoutType: "never", urgency: "critical" } : { title, body },
+      );
       notification.show();
-      return { onClick: (cb) => notification.on("click", cb) };
+      return { onClick: (cb) => notification.on("click", cb), close: () => notification.close() };
     },
   };
 }
@@ -121,15 +124,22 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
   const onIdentified = (serial: string, id: string): Promise<void> => settings.adoptTransport(serial, id);
 
   const notifier = electronNotifier();
-  const notificationMirror: NotificationMirrorStarter = (adb, mirrorLog) =>
-    startNotificationMirror(adb, {
+  const notificationMirror: NotificationMirrorStarter = async (adb, mirrorLog) => {
+    const shared = {
       enabled: () => settings.current.mirrorNotifications,
       notifier,
       isWindowFocused: () => win.isFocused(),
       focusWindow: () => focusWindow(win),
-      launchApp: (pkg) => launchAppOnPhone(adb, pkg, mirrorLog),
       log: mirrorLog,
-    });
+    };
+    const stops = await Promise.all([
+      startNotificationMirror(adb, { ...shared, launchApp: (pkg) => launchAppOnPhone(adb, pkg, mirrorLog) }),
+      startCallWatcher(adb, shared),
+    ]);
+    return async () => {
+      await Promise.all(stops.map((stop) => stop()));
+    };
+  };
 
   const clipboardHost: ClipboardHost = { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) };
   const createSession: SessionFactory = (device, adb, deviceId) =>

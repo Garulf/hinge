@@ -15,6 +15,7 @@ function fakeNotifier(): { notifier: Notifier; shown: { title: string; body: str
         onClick(cb) {
           clickHandlers.push(cb);
         },
+        close() {},
       };
     },
   };

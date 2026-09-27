@@ -4,11 +4,19 @@ import { runShellText } from "./adb-shell";
 
 export interface NotifierHandle {
   onClick(cb: () => void): void;
+  close(): void;
+}
+
+export interface NotifierInput {
+  title: string;
+  body: string;
+  /** Stays up until close() instead of timing out. */
+  persistent?: boolean;
 }
 
 /** A PC-side notification popup; the real implementation wraps Electron's Notification. */
 export interface Notifier {
-  show(input: { title: string; body: string }): NotifierHandle;
+  show(input: NotifierInput): NotifierHandle;
 }
 
 export interface NotificationMirrorOpts {
@@ -27,7 +35,7 @@ export interface NotificationMirrorOpts {
 const DEFAULT_POLL_MS = 2000;
 const DUMPSYS_COMMAND = "dumpsys notification --noredact";
 
-function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
+export function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) {
       resolve();

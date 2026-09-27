@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { ScrcpySession, type ScrcpyServerDeps } from "../../src/main/scrcpy-session";
 import type { MediaSink } from "../../src/main/media-source";
-import { DEFAULT_STREAM_SETTINGS } from "../../src/main/scrcpy-init";
+import { DEFAULT_STREAM_SETTINGS, type SessionRole } from "../../src/main/scrcpy-init";
 import type { TransferDeps } from "../../src/main/transfers";
 import type { SessionStatus, TransferProgress } from "../../src/shared/wire";
 
@@ -72,6 +72,9 @@ function baseOpts(
     clipboardHost: { readText: () => Promise<string>; writeText: (t: string) => Promise<void> };
     transferDeps: Partial<TransferDeps>;
     settingsOverride: Partial<typeof DEFAULT_STREAM_SETTINGS>;
+    role: SessionRole;
+    companion: boolean;
+    clipboardPush: (content: string) => bigint;
   }>,
 ) {
   const { settingsOverride, ...rest } = extra ?? {};
@@ -653,5 +656,128 @@ test("a name with spaces and non-ASCII characters reaches the real adb.sync.writ
   expect(writes[0].path).toBe(`/sdcard/Download/${name}`);
   expect(new TextDecoder().decode(writes[0].bytes)).toBe("pdf-bytes");
 
+  await session.stop();
+});
+
+function streamWithOnePacket(): ReadableStream<{ type: "data"; data: Uint8Array }> {
+  return new ReadableStream({ start: (c) => c.enqueue({ type: "data", data: new Uint8Array([1]) }) });
+}
+
+const POPOUT_ROLE: SessionRole = { kind: "popout", pkg: "com.example.app", geometry: { width: 400, height: 856, dpi: 160 } };
+
+test("a pop-out session starts its app once the display streams, and leaves audio and the clipboard alone", async () => {
+  const startApps: unknown[] = [];
+  const controller = {
+    startApp: async (...args: unknown[]) => {
+      startApps.push(args);
+    },
+  };
+  const clipboard = new ReadableStream<string>({ start: () => {} });
+  let audioTouched = false;
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => ({
+      ...oneShotClient(streamWithOnePacket, { controller, clipboard }),
+      get audioStream(): never {
+        audioTouched = true;
+        throw new Error("a pop-out session must not read audio");
+      },
+    }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  const { sink, packets, audioEnds } = fakeSink();
+  await session.start(sink);
+  await flush();
+
+  expect(packets).toHaveLength(1);
+  expect(startApps).toEqual([["com.example.app"]]);
+  expect(audioEnds).toEqual([]);
+  expect(audioTouched).toBe(false);
+  expect(clipboard.locked).toBe(false);
+  await session.stop();
+});
+
+test("resize() asks the device to resize the virtual display, and is a no-op before the session starts", async () => {
+  const resizes: unknown[] = [];
+  const controller = {
+    startApp: async () => {},
+    resizeDisplay: async (m: unknown) => {
+      resizes.push(m);
+    },
+  };
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(streamWithOnePacket, { controller }) as never,
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  expect(() => session.resize({ width: 300, height: 600, dpi: 160 })).not.toThrow();
+
+  const { sink } = fakeSink();
+  await session.start(sink);
+  session.resize({ width: 480, height: 800, dpi: 160 });
+  await flush();
+
+  expect(resizes).toEqual([{ width: 480, height: 800 }]);
+  await session.stop();
+});
+
+test("a resize the device rejects is logged, not thrown", async () => {
+  const controller = {
+    startApp: async () => {},
+    resizeDisplay: async () => {
+      throw new Error("display gone");
+    },
+  };
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(streamWithOnePacket, { controller }) as never,
+  };
+  const logs: string[] = [];
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE, log: (l) => logs.push(l) }));
+  const { sink } = fakeSink();
+  await session.start(sink);
+  session.resize({ width: 480, height: 800, dpi: 160 });
+  await flush();
+
+  expect(logs.some((l) => l.includes("display gone"))).toBe(true);
+  await session.stop();
+});
+
+test("a main session with a companion pastes with the companion's clipboard sequence and leaves audio and the clipboard stream alone", async () => {
+  const setClipboardCalls: unknown[] = [];
+  const controller = {
+    setClipboard: async (m: unknown) => {
+      setClipboardCalls.push(m);
+    },
+  };
+  const clipboard = new ReadableStream<string>({ start: () => {} });
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(streamWithOnePacket, { controller, clipboard }) as never,
+  };
+  const pushed: string[] = [];
+  const session = new ScrcpySession(
+    baseOpts(deps, {
+      companion: true,
+      clipboardPush: (content) => {
+        pushed.push(content);
+        return 42n;
+      },
+      clipboardHost: { readText: async () => "from the pc", writeText: async () => {} },
+    }),
+  );
+  const { sink, audioEnds } = fakeSink();
+  await session.start(sink);
+  session.control({ type: "clipboard-paste", asText: false });
+  await flush();
+
+  expect(pushed).toEqual(["from the pc"]);
+  expect(setClipboardCalls).toEqual([{ content: "from the pc", sequence: 42n, paste: true }]);
+  expect(audioEnds).toEqual([]);
+  expect(clipboard.locked).toBe(false);
   await session.stop();
 });

@@ -7,8 +7,9 @@ import { PushReadableStream } from "@yume-chan/stream-extra";
 import { createClipboardSync, type ClipboardHost, type ClipboardSync } from "./clipboard-sync";
 import { applyIntent, type ApplyIntentDeps } from "./intents";
 import type { MediaSink, MediaSource } from "./media-source";
-import { buildInit, type StreamSettings } from "./scrcpy-init";
+import { buildInit, type SessionRole, type StreamSettings } from "./scrcpy-init";
 import { createTransferQueue, defaultOpenFile, type TransferDeps, type TransferQueue } from "./transfers";
+import type { DisplayGeometry } from "../shared/popout";
 import { toWire, toWireAudio, type ControlIntent } from "../shared/wire";
 
 /**
@@ -99,6 +100,11 @@ export class ScrcpySession implements MediaSource {
       clipboardHost?: ClipboardHost;
       /** Overrides for tests; production uses PackageManager/adb.sync/controller.scanFile against opts.adb. */
       transferDeps?: Partial<TransferDeps>;
+      role?: SessionRole;
+      /** A companion session carries this phone's audio and clipboard, so this one leaves both alone. */
+      companion?: boolean;
+      /** The companion's echo-suppressed clipboard push, used for clipboard-paste when this session has no clipboard sync of its own. */
+      clipboardPush?: (content: string) => bigint;
     },
   ) {
     this.#deps = { ...defaultDeps, ...opts.deps };
@@ -165,6 +171,14 @@ export class ScrcpySession implements MediaSource {
     this.#transfers.enqueue(localPaths);
   }
 
+  resize(g: DisplayGeometry): void {
+    const controller = this.#client?.controller;
+    if (!controller) return;
+    controller
+      .resizeDisplay({ width: g.width, height: g.height })
+      .catch((e) => this.opts.log?.(`resize display failed: ${String(e)}`));
+  }
+
   async stop(): Promise<void> {
     this.#stopped = true;
     this.#clipboardSync?.stop();
@@ -178,8 +192,21 @@ export class ScrcpySession implements MediaSource {
     if (!host) return {};
     return {
       readPcClipboard: () => host.readText(),
-      beginClipboardPush: (content) => this.#clipboardSync?.beginPush(content) ?? 0n,
+      beginClipboardPush: this.opts.clipboardPush ?? ((content) => this.#clipboardSync?.beginPush(content) ?? 0n),
     };
+  }
+
+  get #role(): SessionRole {
+    return this.opts.role ?? { kind: "main" };
+  }
+
+  /** Only a main session with no companion streams audio and syncs the clipboard itself. */
+  get #ownsMedia(): boolean {
+    return this.#role.kind === "main" && !this.opts.companion;
+  }
+
+  #startApp(client: Client, pkg: string): void {
+    client.controller?.startApp(pkg).catch((e) => this.opts.log?.(`start app ${pkg} failed: ${String(e)}`));
   }
 
   /** client.clipboard blocks on backpressure once clipboardAutosync is on, so this must run for the life of every successful attempt, not just when a clipboard host happens to be wired. */
@@ -267,7 +294,7 @@ export class ScrcpySession implements MediaSource {
       await this.#deps.pushServer(this.opts.adb, jar);
       if (this.#stopped) return "stopped";
 
-      const options = new AdbScrcpyOptions4_1(buildInit(this.opts.settings, attempt) as never);
+      const options = new AdbScrcpyOptions4_1(buildInit(this.opts.settings, attempt, this.#role, this.opts.companion) as never);
       const startPromise = this.#deps.startClient(this.opts.adb, options);
       client = await this.#withTimeout(startPromise, "scrcpy server did not start within", () => {
         // The timeout already moved on to the next attempt (or gave up); a
@@ -308,8 +335,12 @@ export class ScrcpySession implements MediaSource {
       });
       sink.status({ state: "streaming", serial: this.opts.serial, model: this.opts.model, deviceId: this.opts.deviceId ?? this.opts.serial });
       sink.videoPacket(toWire(first.value));
-      this.#startClipboardSync(client);
-      void this.#startAudio(client, sink);
+      const role = this.#role;
+      if (role.kind === "popout") this.#startApp(client, role.pkg);
+      if (this.#ownsMedia) {
+        this.#startClipboardSync(client);
+        void this.#startAudio(client, sink);
+      }
       void this.#pump(reader, sink);
       return "started";
     } catch (e) {

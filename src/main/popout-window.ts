@@ -1,4 +1,4 @@
-import { BrowserWindow, nativeImage, screen } from "electron";
+import { BrowserWindow, nativeImage, screen, type WebContents } from "electron";
 import { appIconPath } from "./app-icon";
 import type { PopoutWindow, Rect } from "./popout-manager";
 import { trackedPort } from "./tracked-port";
@@ -11,7 +11,8 @@ export interface PopoutWindowOptions {
   content: { width: number; height: number };
 }
 
-export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow {
+/** webContents lets main tell the pop-out's renderer apart from the main window's. */
+export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow & { readonly webContents: WebContents } {
   const win = new BrowserWindow({
     frame: true,
     resizable: true,
@@ -44,6 +45,7 @@ export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow {
 
   return {
     port,
+    webContents: win.webContents,
     focus: () => {
       if (win.isDestroyed()) return;
       if (win.isMinimized()) win.restore();

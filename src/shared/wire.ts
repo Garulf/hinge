@@ -106,6 +106,8 @@ export type MainToRenderer =
   | { kind: "devices"; devices: DeviceSummary[] }
   /** Something the user asked for could not happen (too many pop-outs, say); shown as a toast. */
   | { kind: "notice"; text: string }
+  /** The tray's "Open app…": show the app picker. */
+  | { kind: "open-picker" }
   | PostureMessage;
 
 export type RendererToMain =

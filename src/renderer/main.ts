@@ -362,7 +362,7 @@ window.addEventListener("drop", (e) => {
   client?.send({ kind: "drop-files", paths });
 });
 
-type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" | "devices" }>;
+type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" | "devices" | "notice" | "open-picker" }>;
 
 function onStreamMessage(msg: StreamMessage): void {
   switch (msg.kind) {
@@ -402,7 +402,8 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
     else if (msg.kind === "transfer-progress") chrome.toast(transferToast(msg.progress));
     else if (msg.kind === "device-command-result") commands.result(msg.id, msg.result);
     else if (msg.kind === "devices") chrome.devicesChanged(msg.devices);
-    else streamGate.push(msg);
+    else if (msg.kind === "notice") chrome.toast({ id: "notice", text: msg.text });
+    else if (msg.kind !== "open-picker") streamGate.push(msg);
   });
   client.send({ kind: "ready" });
 });

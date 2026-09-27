@@ -26,11 +26,22 @@ export interface SettingsWindow {
   setAlwaysOnTop(flag: boolean): void;
 }
 
-/** Serves the store to one window's renderer, pushes every change back to it, and applies the window-level settings. */
-export function bridgeSettings(win: SettingsWindow, store: SettingsStore, ipc: SettingsIpc, path: string): void {
+/**
+ * Serves the store to one window's renderer, pushes every change back to it,
+ * and applies the window-level settings. `readers` (the pop-outs) may read
+ * the settings and are sent every change, but never save.
+ */
+export function bridgeSettings(
+  win: SettingsWindow,
+  store: SettingsStore,
+  ipc: SettingsIpc,
+  path: string,
+  readers: () => Iterable<SettingsWindow["webContents"]> = () => [],
+): void {
   const fromWindow = (event: { sender: unknown }) => event.sender === win.webContents;
+  const fromReader = (event: { sender: unknown }) => fromWindow(event) || [...readers()].some((reader) => reader === event.sender);
   ipc.handle("hinge:settings-path", (event) => (fromWindow(event) ? path : null));
-  ipc.handle("hinge:settings-get", (event) => (fromWindow(event) ? store.current : null));
+  ipc.handle("hinge:settings-get", (event) => (fromReader(event) ? store.current : null));
   ipc.handle("hinge:settings-save", (event, patch) => (fromWindow(event) ? store.save(sanitisePatch(patch)) : undefined));
   ipc.handle("hinge:settings-save-device", (event, id, patch) => {
     if (!fromWindow(event) || typeof id !== "string" || id === "") return undefined;
@@ -44,5 +55,6 @@ export function bridgeSettings(win: SettingsWindow, store: SettingsStore, ipc: S
       win.setAlwaysOnTop(alwaysOnTop);
     }
     win.webContents.send("hinge:settings", settings);
+    for (const reader of readers()) reader.send("hinge:settings", settings);
   });
 }

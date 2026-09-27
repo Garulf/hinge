@@ -1,13 +1,20 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, screen } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, screen, type Tray, type WebContents } from "electron";
+import type { DisplayGeometry } from "../shared/popout";
 import { AdbHost } from "./adb-host";
 import type { ClipboardHost } from "./clipboard-sync";
-import { bindSource, DeviceSource, type NotificationMirrorStarter, type SessionFactory } from "./app-controller";
-import { parseArgs, reportStartupError } from "./cli";
+import { bindSource, DeviceSource, type ConnectedPhone, type NotificationMirrorStarter, type SessionFactory } from "./app-controller";
+import { appFromArgv, parseArgs, reportStartupError } from "./cli";
+import { CompanionOwner, type CompanionLike } from "./companion-owner";
+import { CompanionSession } from "./companion-session";
+import { afterPopoutClosed, onMainWindowClose } from "./lifecycle";
 import { createLogger, type Logger } from "./logger";
 import type { MediaSink, MediaSource } from "./media-source";
 import { launchAppOnPhone } from "./intents";
+import { PopoutManager, type PopoutManagerDeps, type PopoutSessionLike } from "./popout-manager";
+import { bindPopoutPort } from "./popout-port";
+import { createPopoutWindow } from "./popout-window";
 import { resolveOutputPath } from "./output-path";
 import { createQueuedWriter } from "./queued-writer";
 import { startCallWatcher } from "./call-watcher";
@@ -19,6 +26,7 @@ import { teeToRecording } from "./recorder";
 import { ReplaySource } from "./replay-source";
 import { ScrcpySession } from "./scrcpy-session";
 import { toStreamSettings } from "./scrcpy-init";
+import { createTray } from "./tray";
 import { withDryRunTransfers } from "./dry-run-transfers";
 import { loadSettings, type SettingsStore } from "./settings";
 import { bridgeSettings } from "./settings-bridge";
@@ -52,6 +60,37 @@ function errorSource(message: string): MediaSource {
 interface BuiltSource {
   source: MediaSource;
   closeRecording: () => Promise<void>;
+  /** What a pop-out streams from; absent when there is no phone to stream. */
+  popoutSession?: PopoutManagerDeps["createSession"];
+  companion?: (phone: ConnectedPhone) => CompanionLike;
+  setMainVideo?: (on: boolean) => void;
+  /** Stands in for a phone in replay mode, so pop-outs open at once. */
+  replayPhone?: ConnectedPhone;
+}
+
+/** How the source reports its phone to the pop-outs and the companion; both are built after the source, so they are looked up on every call. */
+interface PhoneHooks {
+  mainVideo: boolean;
+  onPhone(phone: ConnectedPhone | null): void;
+  clipboardPush(content: string): bigint;
+}
+
+const REPLAY_PHONE: ConnectedPhone = { adb: null as never, serial: "replay", deviceId: "replay", model: null };
+
+/** For the e2e test: replays the same recording in a pop-out, and records each display resize in __hingePopoutResizes. */
+function replayPopoutSession(file: string): PopoutSessionLike {
+  const replay = ReplaySource.fromFile(file, { loop: false });
+  const resizes = globalThis as { __hingePopoutResizes?: DisplayGeometry[] };
+  return {
+    start: async (sink) => (await replay).start(sink),
+    control: (intent) => void replay.then((r) => r.control(intent)).catch(() => {}),
+    stop: async () => (await replay).stop(),
+    resize: (g) => (resizes.__hingePopoutResizes ??= []).push(g),
+  };
+}
+
+function noPopoutSession(message: string): PopoutSessionLike {
+  return { ...errorSource(message), resize: () => {} };
 }
 
 /** Opens the write stream up front so a bad path or a permission error surfaces before mirroring starts, instead of crashing mid-session. */
@@ -102,10 +141,16 @@ function electronNotifier(): Notifier {
   };
 }
 
-async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logger["log"], win: BrowserWindow): Promise<BuiltSource> {
+async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logger["log"], win: BrowserWindow, hooks: PhoneHooks): Promise<BuiltSource> {
   if (opts.replay) {
-    const replay = await ReplaySource.fromFile(opts.replay, { loop: false });
-    return { source: opts.dryRunTransfers ? withDryRunTransfers(replay) : replay, closeRecording: async () => {} };
+    const file = opts.replay;
+    const replay = await ReplaySource.fromFile(file, { loop: false });
+    return {
+      source: opts.dryRunTransfers ? withDryRunTransfers(replay) : replay,
+      closeRecording: async () => {},
+      popoutSession: () => replayPopoutSession(file),
+      replayPhone: REPLAY_PHONE,
+    };
   }
 
   const paths = vendorPaths({
@@ -142,17 +187,23 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
   };
 
   const clipboardHost: ClipboardHost = { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) };
+  const videoSessionOptions = () => ({
+    serverPath: paths.scrcpyServer,
+    settings: toStreamSettings(settings.current),
+    log,
+    clipboardHost,
+    companion: true,
+    clipboardPush: (content: string) => hooks.clipboardPush(content),
+  });
   const createSession: SessionFactory = (device, adb, deviceId) =>
-    new ScrcpySession({
-      adb,
-      serial: device.serial,
-      model: device.model,
-      deviceId,
-      serverPath: paths.scrcpyServer,
-      settings: toStreamSettings(settings.current),
-      log,
-      clipboardHost,
-    });
+    new ScrcpySession({ adb, serial: device.serial, model: device.model, deviceId, ...videoSessionOptions() });
+  const phoneSessions = {
+    popoutSession: (phone: ConnectedPhone, pkg: string, geometry: DisplayGeometry) =>
+      new ScrcpySession({ adb: phone.adb, serial: phone.serial, model: phone.model, deviceId: phone.deviceId, ...videoSessionOptions(), role: { kind: "popout", pkg, geometry } }),
+    companion: (phone: ConnectedPhone) =>
+      new CompanionSession({ adb: phone.adb, serverPath: paths.scrcpyServer, settings: toStreamSettings(settings.current), clipboardHost, log }),
+  };
+  const phoneOptions = { mainVideo: hooks.mainVideo, onPhone: (phone: ConnectedPhone | null) => hooks.onPhone(phone) };
 
   if (!opts.record) {
     const source = new DeviceSource({
@@ -165,8 +216,9 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
       wireless,
       onConnected,
       onIdentified,
+      ...phoneOptions,
     });
-    return { source, closeRecording: async () => {} };
+    return { source, closeRecording: async () => {}, ...phoneSessions, setMainVideo: (on) => source.setMainVideo(on) };
   }
 
   const path = resolveOutputPath(opts.record, app.getPath("desktop"));
@@ -192,8 +244,9 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
     wireless,
     onConnected,
     onIdentified,
+    ...phoneOptions,
   });
-  return { source, closeRecording: closeRecordStream(opened.stream, writer) };
+  return { source, closeRecording: closeRecordStream(opened.stream, writer), ...phoneSessions, setMainVideo: (on) => source.setMainVideo(on) };
 }
 
 /** Waits for source.stop() and the recording stream to finish, but never blocks quitting for more than a few seconds. */
@@ -221,6 +274,10 @@ function focusWindow(win: BrowserWindow): void {
   win.focus();
 }
 
+function electronNotice(): (text: string) => void {
+  return (text) => new Notification({ title: "hinge", body: text }).show();
+}
+
 async function runMode(opts: RunOptions): Promise<void> {
   if (opts.userData) app.setPath("userData", opts.userData);
   if (!holdSingleInstance()) return;
@@ -239,13 +296,16 @@ async function runMode(opts: RunOptions): Promise<void> {
       placement?.moved();
       workAreaChanged();
     },
+    showWhenReady: opts.app === null,
   });
-  app.on("second-instance", () => focusWindow(win));
+  let secondLaunch = (_argv: string[]): void => focusWindow(win);
+  app.on("second-instance", (_event, argv) => secondLaunch(argv));
   workAreaChanged = () => {
     if (!win.isDestroyed()) win.webContents.send("hinge:work-area-changed");
   };
   screen.on("display-metrics-changed", workAreaChanged);
-  bridgeSettings(win, settings, ipcMain, settingsPath);
+  const popoutContents = new Set<WebContents>();
+  bridgeSettings(win, settings, ipcMain, settingsPath, () => popoutContents);
   placement = new DevicePlacement({
     getContentBounds: () => win.getContentBounds(),
     setContentBounds: (bounds) => win.setContentBounds(bounds),
@@ -258,26 +318,116 @@ async function runMode(opts: RunOptions): Promise<void> {
     restored: () => workAreaChanged(),
   });
   placement.preApply(settings.current.lastDevice);
-  win.on("close", () => placement?.flush());
 
-  let source: MediaSource;
-  let closeRecording: () => Promise<void> = async () => {};
+  const phoneHooks: PhoneHooks = { mainVideo: opts.app === null, onPhone: () => {}, clipboardPush: () => 0n };
+  let built: BuiltSource;
   try {
-    const built = await buildSource(opts, settings, logger.log, win);
-    source = built.source;
-    closeRecording = built.closeRecording;
+    built = await buildSource(opts, settings, logger.log, win, phoneHooks);
   } catch (e) {
     logger.log(`buildSource failed: ${String(e)}`);
-    source = errorSource(String(e));
+    built = { source: errorSource(String(e)), closeRecording: async () => {} };
   }
+  const { source, closeRecording } = built;
+  const setMainVideo = built.setMainVideo ?? (() => {});
 
-  bindSource(source, port, { logPath: logger.path, onStatus: (status) => placement?.status(status) });
+  const showNotification = electronNotice();
+  const popouts = new PopoutManager({
+    createWindow: (o) => {
+      const popout = createPopoutWindow(o);
+      popoutContents.add(popout.webContents);
+      popout.onClosed(() => popoutContents.delete(popout.webContents));
+      return popout;
+    },
+    createSession: built.popoutSession ?? (() => noPopoutSession("No phone to open apps from")),
+    bindPort: bindPopoutPort,
+    identify: async (_phone, pkg) => ({ label: pkg, icon: null }),
+    workArea: () => screen.getDisplayMatching(win.getBounds()).workArea,
+    savedBounds: () => null,
+    saveBounds: () => {},
+    notice: (text) => {
+      port.postMessage({ kind: "notice", text }, []);
+      if (!win.isDestroyed() && !win.isVisible()) showNotification(text);
+    },
+    log: logger.log,
+  });
+
+  const mainSink = bindSource(source, port, {
+    logPath: logger.path,
+    onStatus: (status) => placement?.status(status),
+    onRendererMessage: (msg) => {
+      if (msg.kind === "popout-open") popouts.open(msg.pkg);
+    },
+  });
+
+  const companion = built.companion ? new CompanionOwner({ create: built.companion, sink: mainSink, log: logger.log }) : null;
+  phoneHooks.onPhone = (phone) => {
+    popouts.setPhone(phone);
+    companion?.phone(phone);
+  };
+  phoneHooks.clipboardPush = (content) => companion?.beginPush(content) ?? 0n;
+  const mainVisible = (): boolean => !win.isDestroyed() && win.isVisible();
+  const refreshCompanion = (): void => companion?.wanted(mainVisible() || popouts.count() > 0);
+  win.on("show", refreshCompanion);
+  win.on("hide", refreshCompanion);
 
   let shuttingDown: Promise<void> | null = null;
+  let quitting = false;
+  app.on("before-quit", () => {
+    quitting = true;
+  });
+  const quitHinge = (): void => {
+    if (shuttingDown) return;
+    quitting = true;
+    shuttingDown = (async () => {
+      await Promise.all([popouts.closeAll(), companion?.stop()]);
+      await shutdown(source, closeRecording);
+    })().then(() => app.quit());
+  };
+
+  const showMain = (): void => {
+    focusWindow(win);
+    setMainVideo(true);
+  };
+  const hideMain = (): void => {
+    win.hide();
+    setMainVideo(false);
+  };
+
+  win.on("close", (e) => {
+    placement?.flush();
+    if (quitting || onMainWindowClose({ popouts: popouts.count() }) === "quit") return;
+    e.preventDefault();
+    hideMain();
+  });
+  popouts.onCountChanged((n) => {
+    refreshCompanion();
+    if (afterPopoutClosed({ mainVisible: mainVisible(), popouts: n }) === "quit") quitHinge();
+  });
+  secondLaunch = (argv) => {
+    const pkg = appFromArgv(argv);
+    if (pkg) popouts.open(pkg);
+    else showMain();
+  };
+
+  let tray: Tray | null = createTray({
+    showPhone: showMain,
+    openApp: () => {
+      showMain();
+      port.postMessage({ kind: "open-picker" }, []);
+    },
+    quit: quitHinge,
+    log: logger.log,
+  });
+
+  if (built.replayPhone) popouts.setPhone(built.replayPhone);
+  if (opts.app) popouts.open(opts.app);
+
   win.on("closed", () => {
     placement?.closed();
     screen.off("display-metrics-changed", workAreaChanged);
-    shuttingDown = shutdown(source, closeRecording).then(() => app.quit());
+    tray?.destroy();
+    tray = null;
+    quitHinge();
   });
   app.on("window-all-closed", () => {
     if (!shuttingDown) app.quit();

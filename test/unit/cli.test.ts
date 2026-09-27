@@ -1,11 +1,20 @@
 import { expect, test } from "vitest";
-import { parseArgs, reportStartupError } from "../../src/main/cli";
+import { appFromArgv, parseArgs, reportStartupError } from "../../src/main/cli";
 
-test("defaults to run mode", () => expect(parseArgs([])).toEqual({ mode: "run", serial: null, replay: null, record: null, userData: null, dryRunTransfers: false }));
+test("defaults to run mode", () => expect(parseArgs([])).toEqual({ mode: "run", serial: null, replay: null, record: null, userData: null, dryRunTransfers: false, app: null }));
 test("replay and serial", () => expect(parseArgs(["--replay", "a.hrec", "--serial", "X"])).toMatchObject({ mode: "run", serial: "X", replay: "a.hrec", record: null }));
 test("a separate settings folder and dry-run transfers, for tests", () =>
   expect(parseArgs(["--replay", "a.hrec", "--user-data", "/tmp/h", "--dry-run-transfers"])).toMatchObject({ userData: "/tmp/h", dryRunTransfers: true }));
 test("record", () => expect(parseArgs(["--record", "out.hrec"])).toMatchObject({ mode: "run", record: "out.hrec" }));
+test("an app to pop out", () => expect(parseArgs(["--app", "com.example.chat"])).toMatchObject({ mode: "run", app: "com.example.chat" }));
+test("the app from a second launch's argv, among Electron and Chromium switches", () =>
+  expect(appFromArgv(["/opt/hinge/hinge", "--no-sandbox", "--app", "com.x", "--allow-file-access"])).toBe("com.x"));
+test("the app in its --app=pkg form", () => expect(appFromArgv(["/opt/hinge/hinge", "--app=com.x"])).toBe("com.x"));
+test("no app in a plain second launch, or one whose --app has no package", () => {
+  expect(appFromArgv(["/opt/hinge/hinge", "--no-sandbox"])).toBeNull();
+  expect(appFromArgv(["/opt/hinge/hinge", "--app"])).toBeNull();
+  expect(appFromArgv(["/opt/hinge/hinge", "--app", "--no-sandbox"])).toBeNull();
+});
 test("probe with defaults", () => expect(parseArgs(["--probe"])).toEqual({ mode: "probe", serial: null, seconds: 90, out: null }));
 test("probe with seconds and out", () => expect(parseArgs(["--probe", "--seconds", "30", "--out", "r.json"])).toEqual({ mode: "probe", serial: null, seconds: 30, out: "r.json" }));
 test("ignores electron and chromium switches", () => expect(parseArgs(["--no-sandbox", "--enable-logging", "."]).mode).toBe("run"));

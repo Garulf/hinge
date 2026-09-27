@@ -1,5 +1,5 @@
 export type Mode =
-  | { mode: "run"; serial: string | null; replay: string | null; record: string | null; userData: string | null; dryRunTransfers: boolean }
+  | { mode: "run"; serial: string | null; replay: string | null; record: string | null; userData: string | null; dryRunTransfers: boolean; app: string | null }
   | { mode: "probe"; serial: string | null; seconds: number; out: string | null };
 
 export function parseArgs(argv: string[]): Mode {
@@ -11,6 +11,7 @@ export function parseArgs(argv: string[]): Mode {
   let out: string | null = null;
   let userData: string | null = null;
   let dryRunTransfers = false;
+  let app: string | null = null;
 
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -39,6 +40,9 @@ export function parseArgs(argv: string[]): Mode {
       case "--user-data":
         userData = argv[++i] ?? null;
         break;
+      case "--app":
+        app = argv[++i] ?? null;
+        break;
       case "--dry-run-transfers":
         dryRunTransfers = true;
         break;
@@ -48,7 +52,19 @@ export function parseArgs(argv: string[]): Mode {
   }
 
   if (probe) return { mode: "probe", serial, seconds, out };
-  return { mode: "run", serial, replay, record, userData, dryRunTransfers };
+  return { mode: "run", serial, replay, record, userData, dryRunTransfers, app };
+}
+
+/** A second launch's argv has Electron's and Chromium's own switches mixed in, possibly in the --switch=value form. */
+export function appFromArgv(argv: string[]): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith("--app=")) return arg.slice("--app=".length) || null;
+    if (arg !== "--app") continue;
+    const next = argv[i + 1];
+    return next && !next.startsWith("--") ? next : null;
+  }
+  return null;
 }
 
 /**

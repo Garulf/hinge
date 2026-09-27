@@ -19,8 +19,8 @@ export function loadPage(win: BrowserWindow, page: "index.html" | "popout.html")
   else void win.loadFile(join(import.meta.dirname, "../renderer", page));
 }
 
-/** onMoved fires when a drag ends or the window system reports a finished move. */
-export function createPhoneWindow(opts?: { onMoved?: () => void }): { win: BrowserWindow; port: PortLike } {
+/** onMoved fires when a drag ends or the window system reports a finished move. showWhenReady false keeps the window hidden until shown by hand. */
+export function createPhoneWindow(opts?: { onMoved?: () => void; showWhenReady?: boolean }): { win: BrowserWindow; port: PortLike } {
   const win = new BrowserWindow({
     width: 360,
     height: 760,
@@ -36,7 +36,7 @@ export function createPhoneWindow(opts?: { onMoved?: () => void }): { win: Brows
     show: false,
     webPreferences: pageWebPreferences(),
   });
-  win.once("ready-to-show", () => win.show());
+  if (opts?.showWhenReady ?? true) win.once("ready-to-show", () => win.show());
   loadPage(win, "index.html");
 
   const port = trackedPort(win);

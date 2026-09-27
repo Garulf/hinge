@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Adb } from "@yume-chan/adb";
 import { PushReadableStream } from "@yume-chan/stream-extra";
 import { parseAgentApps, parseAgentIcons, parseLauncherActivities, parseRecents, type AppEntry } from "../shared/app-catalog";
+import type { MainToRenderer } from "../shared/wire";
 import { runShellChecked } from "./adb-shell";
 import type { ConnectedPhone } from "./app-controller";
 import type { AppIdentity } from "./popout-manager";
@@ -217,5 +218,17 @@ export class AppCatalog {
       }, this.#timeoutMs);
     });
     return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+  }
+}
+
+export type AppsMessage = Extract<MainToRenderer, { kind: "apps" }>;
+
+/** The main window's "apps-request", answered for the phone connected now. */
+export async function answerAppsRequest(catalog: AppCatalog | null, phone: ConnectedPhone | null): Promise<AppsMessage> {
+  if (!catalog || !phone) return { kind: "apps", apps: [], recents: [], icons: {}, error: "No phone connected" };
+  try {
+    return { kind: "apps", ...(await catalog.apps(phone)) };
+  } catch (e) {
+    return { kind: "apps", apps: [], recents: [], icons: {}, error: `Could not list the phone's apps: ${reasonOf(e)}` };
   }
 }

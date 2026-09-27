@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, screen, type Tray, type WebContents } from "electron";
 import type { DisplayGeometry } from "../shared/popout";
 import { AdbHost } from "./adb-host";
-import { AppCatalog } from "./app-catalog";
+import { AppCatalog, answerAppsRequest } from "./app-catalog";
 import type { ClipboardHost } from "./clipboard-sync";
 import { bindSource, DeviceSource, type ConnectedPhone, type NotificationMirrorStarter, type SessionFactory } from "./app-controller";
 import { launchRequest, parseArgs, reportStartupError } from "./cli";
@@ -350,16 +350,19 @@ async function runMode(opts: RunOptions): Promise<void> {
     log: logger.log,
   });
 
+  let currentPhone: ConnectedPhone | null = null;
   const mainSink = bindSource(source, port, {
     logPath: logger.path,
     onStatus: (status) => placement?.status(status),
     onRendererMessage: (msg) => {
       if (msg.kind === "popout-open") popouts.open(msg.pkg);
+      else if (msg.kind === "apps-request") void answerAppsRequest(built.catalog ?? null, currentPhone).then((answer) => port.postMessage(answer, []));
     },
   });
 
   const companion = built.companion ? new CompanionOwner({ create: built.companion, sink: mainSink, log: logger.log }) : null;
   phoneHooks.onPhone = (phone) => {
+    currentPhone = phone;
     built.catalog?.setPhone(phone);
     popouts.setPhone(phone);
     companion?.phone(phone);

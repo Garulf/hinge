@@ -174,6 +174,9 @@ const chrome = new Chrome(document.body, {
   settingsPath: () => window.hinge.settingsPath(),
   onAction: (action) => onAction(action),
   currentSerial: () => currentSerial,
+  requestApps: () => client?.send({ kind: "apps-request" }),
+  popOut: (pkg) => client?.send({ kind: "popout-open", pkg }),
+  createShortcut: (pkg) => client?.send({ kind: "create-shortcut", pkg }),
 });
 
 function applySettings(next: Settings): void {
@@ -347,7 +350,7 @@ window.addEventListener("drop", (e) => {
   client?.send({ kind: "drop-files", paths });
 });
 
-type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" | "devices" | "notice" | "open-picker" }>;
+type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" | "devices" | "notice" | "open-picker" | "apps" }>;
 
 function onStreamMessage(msg: StreamMessage): void {
   switch (msg.kind) {
@@ -388,7 +391,9 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
     else if (msg.kind === "device-command-result") commands.result(msg.id, msg.result);
     else if (msg.kind === "devices") chrome.devicesChanged(msg.devices);
     else if (msg.kind === "notice") chrome.toast({ id: "notice", text: msg.text });
-    else if (msg.kind !== "open-picker") streamGate.push(msg);
+    else if (msg.kind === "open-picker") chrome.openPicker();
+    else if (msg.kind === "apps") chrome.appsListed(msg);
+    else streamGate.push(msg);
   });
   client.send({ kind: "ready" });
 });

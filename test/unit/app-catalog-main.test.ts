@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { beforeEach, expect, test } from "vitest";
 import type { Adb } from "@yume-chan/adb";
 import type { ConnectedPhone } from "../../src/main/app-controller";
-import { AGENT_REMOTE_PATH, AppCatalog, type AppCatalogOptions } from "../../src/main/app-catalog";
+import { AGENT_REMOTE_PATH, AppCatalog, answerAppsRequest, type AppCatalogOptions } from "../../src/main/app-catalog";
 import type { AppEntry } from "../../src/shared/app-catalog";
 
 // Both *-aosp.txt fixtures are written from the AOSP dump formats, not captured from a real phone.
@@ -293,4 +293,21 @@ test("identify answers with the package name when the agent fails", async () => 
     return undefined;
   };
   expect(await catalog().identify(phone(), "com.example.chat")).toEqual({ label: "com.example.chat", icon: null });
+});
+
+test("with no phone, an apps request says so", async () => {
+  expect(await answerAppsRequest(catalog(), null)).toEqual({ kind: "apps", apps: [], recents: [], icons: {}, error: "No phone connected" });
+  expect(await answerAppsRequest(null, phone())).toEqual({ kind: "apps", apps: [], recents: [], icons: {}, error: "No phone connected" });
+});
+
+test("with a phone, an apps request answers with the catalog's apps", async () => {
+  const answer = await answerAppsRequest(catalog(), phone());
+  expect(answer.kind).toBe("apps");
+  expect(answer.apps).toEqual(fake.apps);
+  expect(answer.error).toBeNull();
+});
+
+test("an apps request whose listing throws still gets an answer", async () => {
+  const broken = { apps: async () => { throw new Error("disk on fire"); } } as unknown as AppCatalog;
+  expect(await answerAppsRequest(broken, phone())).toEqual({ kind: "apps", apps: [], recents: [], icons: {}, error: "Could not list the phone's apps: disk on fire" });
 });

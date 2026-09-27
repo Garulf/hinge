@@ -58,3 +58,24 @@ test("a pop-out app window streams from the replay, resizes its display and quit
   await app.evaluate(({ BrowserWindow }, pkg) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === pkg)!.close(), PKG);
   await quit;
 });
+
+test("the Apps button opens the picker, which asks main for the phone's apps and says why there are none", async () => {
+  test.setTimeout(120_000);
+  const app = await launch("test/fixtures/synthetic-fold.hrec", []);
+  try {
+    const page = await app.firstWindow();
+    const picker = page.getByRole("dialog", { name: "Apps" });
+    // The replay opens and rotates the phone, moving the menu out from under the pointer, so hover and click are retried until one lands.
+    const openPicker = async () => {
+      await page.mouse.move((await page.evaluate(() => innerWidth)) / 2, 8);
+      await page.locator('[data-button="apps"]').click({ timeout: 2000 }).catch(() => {});
+      return picker.isVisible();
+    };
+    await expect.poll(openPicker, { timeout: 60_000, intervals: [500] }).toBe(true);
+    await expect(picker.getByRole("textbox", { name: "Search apps" })).toBeFocused();
+    await expect(picker.locator("[data-picker-error]")).toHaveText("No phone connected", { timeout: 10_000 });
+    await expect(picker).not.toHaveAttribute("aria-busy", "true");
+  } finally {
+    await app.close();
+  }
+});

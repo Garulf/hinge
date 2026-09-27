@@ -1,13 +1,15 @@
+import type { AppEntry } from "../../shared/app-catalog";
+import { pickerSections } from "../../shared/picker";
 import type { Settings, SettingsPatch, ShortcutModifier } from "../../shared/settings";
 import { normaliseModifiers, SHORTCUT_MODIFIERS } from "../../shared/shortcuts";
-import type { DeviceCommand, DeviceCommandResult, DeviceSummary } from "../../shared/wire";
+import type { DeviceCommand, DeviceCommandResult, DeviceSummary, MainToRenderer } from "../../shared/wire";
 import { connectAddress, validHostPort, validPairingCode, type DeviceCommands } from "./device-commands";
 import { el } from "./dom";
 import type { Size } from "./hit-zone";
 import type { ToastInput } from "./toast-queue";
 import { deviceResultMessage, PAIR_INPUT_MESSAGES, type DeviceMessage } from "./toast-text";
 
-export type PanelName = "device" | "colour" | "settings";
+export type PanelName = "apps" | "device" | "colour" | "settings";
 
 export interface Panel {
   readonly node: HTMLElement;
@@ -304,5 +306,89 @@ export class SettingsPanel implements Panel {
       return;
     }
     this.#deps.save({ shortcutModifiers: [...picked] });
+  }
+}
+
+export type AppsListing = Omit<Extract<MainToRenderer, { kind: "apps" }>, "kind">;
+
+export interface PickerPanelDeps {
+  requestApps(): void;
+  popOut(pkg: string): void;
+  createShortcut(pkg: string): void;
+}
+
+export class PickerPanel implements Panel {
+  readonly size = { w: 340, h: 480 };
+  readonly node: HTMLElement;
+  readonly #deps: PickerPanelDeps;
+  readonly #search = el("input", { attrs: { type: "text", placeholder: "Search apps", "aria-label": "Search apps", spellcheck: "false" } });
+  readonly #error = el("div", { className: "status error", attrs: { role: "status", "data-picker-error": "", hidden: "" } });
+  readonly #body = el("div");
+  #listing: AppsListing | null = null;
+
+  constructor(deps: PickerPanelDeps) {
+    this.#deps = deps;
+    this.#search.addEventListener("input", () => this.#render());
+    this.#search.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const first = this.#listing && pickerSections(this.#listing.apps, this.#listing.recents, this.#search.value).all[0];
+      if (first) deps.popOut(first.pkg);
+    });
+    const refresh = el("button", { text: "Refresh", on: { click: () => this.#request() } });
+    this.node = panelNode("Apps", [this.#search, this.#error, this.#body], refresh);
+  }
+
+  opened(): void {
+    this.#search.value = "";
+    this.#request();
+    this.#search.focus();
+  }
+
+  settingsChanged(): void {}
+
+  listed(listing: AppsListing): void {
+    this.#listing = listing;
+    this.#render();
+  }
+
+  #request(): void {
+    this.#listing = null;
+    this.#render();
+    this.#deps.requestApps();
+  }
+
+  #render(): void {
+    const listing = this.#listing;
+    this.#error.hidden = !listing?.error;
+    this.#error.textContent = listing?.error ?? "";
+    if (!listing) {
+      this.node.setAttribute("aria-busy", "true");
+      this.#body.replaceChildren(el("div", { className: "empty", text: "Loading apps..." }));
+      return;
+    }
+    this.node.removeAttribute("aria-busy");
+    const { recents, all } = pickerSections(listing.apps, listing.recents, this.#search.value);
+    const sections: HTMLElement[] = [];
+    if (recents.length > 0) sections.push(el("h3", { text: "Recent" }), this.#grid(recents, listing.icons));
+    if (all.length > 0) sections.push(el("h3", { text: "All apps" }), this.#grid(all, listing.icons));
+    else if (listing.apps.length > 0) sections.push(el("div", { className: "empty", text: "No apps match" }));
+    else if (!listing.error) sections.push(el("div", { className: "empty", text: "No apps found on the phone" }));
+    this.#body.replaceChildren(...sections);
+  }
+
+  #grid(apps: AppEntry[], icons: Record<string, string>): HTMLElement {
+    return el("div", { className: "hinge-apps" }, apps.map((app) => this.#tile(app, icons[app.pkg])));
+  }
+
+  #tile(app: AppEntry, icon: string | undefined): HTMLElement {
+    const glyph = icon
+      ? el("img", { className: "icon", attrs: { src: icon, alt: "", draggable: "false" } })
+      : el("span", { className: "icon letter", text: (app.label.trim()[0] ?? "?").toUpperCase(), attrs: { "aria-hidden": "true" } });
+    const open = el("button", { className: "open", title: `Open ${app.label} in its own window`, attrs: { "data-app": app.pkg }, on: { click: () => this.#deps.popOut(app.pkg) } }, [
+      glyph,
+      el("span", { className: "label", text: app.label }),
+    ]);
+    const shortcut = el("button", { className: "shortcut", text: "Shortcut", title: `Create a desktop shortcut for ${app.label}`, on: { click: () => this.#deps.createShortcut(app.pkg) } });
+    return el("div", { className: "tile" }, [open, shortcut]);
   }
 }

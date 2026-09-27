@@ -1,3 +1,4 @@
+import type { AppEntry } from "./app-catalog";
 import type { PostureReading } from "./posture";
 
 export type WireMediaPacket =
@@ -108,6 +109,8 @@ export type MainToRenderer =
   | { kind: "notice"; text: string }
   /** The tray's "Open app…": show the app picker. */
   | { kind: "open-picker" }
+  /** The answer to "apps-request"; icons are data: URLs by package, error says why the list is partial or empty. */
+  | { kind: "apps"; apps: AppEntry[]; recents: string[]; icons: Record<string, string>; error: string | null }
   | PostureMessage;
 
 export type RendererToMain =

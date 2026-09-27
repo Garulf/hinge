@@ -3,6 +3,7 @@ import type { Adb } from "@yume-chan/adb";
 import type { PostureReading } from "../shared/posture";
 import type { AppRequest, AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
+import { abortableDelay } from "./abortable-delay";
 import type { MediaSink, MediaSource } from "./media-source";
 import { dedupeDevices, deviceIdentity, deviceStatus, pickDevice, transportOf, type DeviceSummary } from "./transport";
 import { connectOrAlreadyConnected, pairNewDevice, switchDeviceToWifi, type WirelessDeps } from "./wireless";
@@ -171,6 +172,11 @@ export interface ConnectedPhone {
   serial: string;
   deviceId: string;
   model: string | null;
+}
+
+/** The same phone over the same transport: a new transport to the same phone is a reconnect. */
+export function samePhone(a: ConnectedPhone | null, b: ConnectedPhone | null): boolean {
+  return a === b || (a !== null && b !== null && a.adb === b.adb && a.deviceId === b.deviceId);
 }
 
 interface Connection {
@@ -464,7 +470,7 @@ export class DeviceSource implements MediaSource {
 
   async #reconnect(signal: AbortSignal): Promise<void> {
     let attempt = 0;
-    const delay = this.opts.delay ?? defaultDelay;
+    const delay = this.opts.delay ?? abortableDelay;
     while (!this.#stopped) {
       await delay(RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)], signal);
       if (this.#stopped) return;
@@ -552,7 +558,7 @@ export class DeviceSource implements MediaSource {
   }
 
   async #tcpReconnectLoop(address: string, controller: AbortController): Promise<void> {
-    const delay = this.opts.delay ?? defaultDelay;
+    const delay = this.opts.delay ?? abortableDelay;
     let attempt = 0;
     while (!this.#stopped && !controller.signal.aborted) {
       await delay(SESSION_RETRY_DELAYS_MS[Math.min(attempt, SESSION_RETRY_DELAYS_MS.length - 1)], controller.signal);
@@ -760,7 +766,7 @@ export class DeviceSource implements MediaSource {
     this.#sink?.status({ state: "error", message: `${base} (retrying in ${Math.round(delayMs / 1000)}s)` });
     const controller = new AbortController();
     this.#sessionRetryAbort = controller;
-    const delay = this.opts.delay ?? defaultDelay;
+    const delay = this.opts.delay ?? abortableDelay;
     void delay(delayMs, controller.signal).then(() => {
       // Superseded (a newer retry started) or cancelled (device-list change or stop): the
       // cancelling code path already decided what happens next, do nothing here.
@@ -776,22 +782,4 @@ export class DeviceSource implements MediaSource {
     this.#sessionRetryAbort = null;
     this.#sessionRetryAttempt = 0;
   }
-}
-
-function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
 }

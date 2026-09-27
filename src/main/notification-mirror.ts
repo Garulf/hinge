@@ -1,5 +1,6 @@
 import type { Adb } from "@yume-chan/adb";
 import { diffNotifications, isMirrorable, parseNotifications, type NotificationRecord } from "../shared/notifications";
+import { abortableDelay } from "./abortable-delay";
 import { runShellText } from "./adb-shell";
 
 export interface NotifierHandle {
@@ -35,24 +36,6 @@ export interface NotificationMirrorOpts {
 const DEFAULT_POLL_MS = 2000;
 const DUMPSYS_COMMAND = "dumpsys notification --noredact";
 
-export function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-}
-
 /**
  * Polls `dumpsys notification --noredact` every pollMs and mirrors any new
  * or reposted notification (see shared/notifications.ts for the diff and
@@ -66,7 +49,7 @@ export async function startNotificationMirror(adb: Adb, opts: NotificationMirror
 
   const runShell = opts.runShell ?? runShellText;
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
-  const wait = opts.delay ?? defaultDelay;
+  const wait = opts.delay ?? abortableDelay;
   const controller = new AbortController();
 
   let known = new Map<string, number>();

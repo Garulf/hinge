@@ -33,7 +33,7 @@ export interface Timers {
   clear(handle: TimerHandle): void;
 }
 
-const globalTimers: Timers = {
+export const globalTimers: Timers = {
   set: (fn, ms) => setTimeout(fn, ms),
   clear: (handle) => clearTimeout(handle),
 };

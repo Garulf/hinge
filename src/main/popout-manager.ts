@@ -1,7 +1,7 @@
 import { displayGeometry, initialContentSize, MAX_POPOUTS, MIN_DISPLAY_PX, RESIZE_DEBOUNCE_MS, ResizeDebouncer, type DisplayGeometry } from "../shared/popout";
 import { isPackageName } from "../shared/package-name";
 import type { ControlIntent, SessionStatus } from "../shared/wire";
-import type { ConnectedPhone, PortLike } from "./app-controller";
+import { samePhone, type ConnectedPhone, type PortLike } from "./app-controller";
 import type { MediaSink, MediaSource } from "./media-source";
 
 export interface Rect {
@@ -212,7 +212,7 @@ export class PopoutManager {
       if (previous) this.#showReconnecting(previous);
       return;
     }
-    if (previous && previous.adb === phone.adb && previous.deviceId === phone.deviceId) {
+    if (samePhone(previous, phone)) {
       this.#openQueued(phone);
       return;
     }

@@ -1,5 +1,5 @@
-import type { Timers } from "../shared/popout";
-import type { ConnectedPhone } from "./app-controller";
+import { globalTimers, type Timers } from "../shared/popout";
+import { samePhone, type ConnectedPhone } from "./app-controller";
 import type { AudioSink } from "./audio-forward";
 
 export const COMPANION_RESTART_DELAYS_MS = [1000, 2000, 4000, 8000];
@@ -16,15 +16,6 @@ export interface CompanionOwnerDeps {
   sink: AudioSink;
   log?: (line: string) => void;
   timers?: Timers;
-}
-
-const globalTimers: Timers = {
-  set: (fn, ms) => setTimeout(fn, ms),
-  clear: (handle) => clearTimeout(handle),
-};
-
-function samePhone(a: ConnectedPhone | null, b: ConnectedPhone | null): boolean {
-  return a === b || (a !== null && b !== null && a.adb === b.adb && a.deviceId === b.deviceId);
 }
 
 /**

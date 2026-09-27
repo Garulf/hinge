@@ -2,6 +2,7 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isPackageName } from "../shared/package-name";
 import { desktopEntry, launcherTarget, pngSize, pngToIco, shortcutFileName } from "../shared/shortcut-files";
+import { reasonOf } from "./error-text";
 import type { AppIdentity } from "./popout-manager";
 
 /** The part of Electron's ShortcutDetails that hinge sets. */
@@ -34,10 +35,6 @@ export interface DesktopShortcutDeps {
 const APP_USER_MODEL_ID = "net.garulf.hinge";
 const DESKTOP_ENTRY_MODE = 0o644;
 const DEFAULT_ICON_SIZE = { width: 256, height: 256 };
-
-function reasonOf(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 async function writeIcon(deps: DesktopShortcutDeps, fileName: string, bytes: Uint8Array): Promise<string> {
   const dir = join(deps.userData, "shortcut-icons");

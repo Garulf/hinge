@@ -1,7 +1,8 @@
 import type { Adb } from "@yume-chan/adb";
 import { incomingCallBody, parseCallState, parseContactName, phoneLookupCommand } from "../shared/calls";
 import { runShellChecked, withinTimeout } from "./adb-shell";
-import { defaultDelay, type Notifier, type NotifierHandle } from "./notification-mirror";
+import { abortableDelay } from "./abortable-delay";
+import type { Notifier, NotifierHandle } from "./notification-mirror";
 
 export interface CallWatcherOpts {
   /** Read at start(), like the notification mirror it shares a setting with. */
@@ -34,7 +35,7 @@ export async function startCallWatcher(adb: Adb, opts: CallWatcherOpts): Promise
   const runShell = (command: string, what: string): Promise<string> =>
     withinTimeout((signal) => (opts.runShell ?? runShellChecked)(adb, command, signal), what);
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
-  const wait = opts.delay ?? defaultDelay;
+  const wait = opts.delay ?? abortableDelay;
   const controller = new AbortController();
 
   let ringing = false;

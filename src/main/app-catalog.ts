@@ -5,6 +5,7 @@ import { PushReadableStream } from "@yume-chan/stream-extra";
 import { parseAgentApps, parseAgentIcons, parseLauncherActivities, parseRecents, type AppEntry } from "../shared/app-catalog";
 import type { MainToRenderer } from "../shared/wire";
 import { runShellChecked, SHELL_TIMEOUT_MS, withinTimeout } from "./adb-shell";
+import { reasonOf } from "./error-text";
 import type { ConnectedPhone } from "./app-controller";
 import type { AppIdentity } from "./popout-manager";
 
@@ -54,10 +55,6 @@ async function pushLocalFile(adb: Adb, local: string, remote: string): Promise<v
       controller.close();
     }),
   });
-}
-
-function reasonOf(e: unknown): string {
-  return String(e).replace(/^Error:\s*/, "");
 }
 
 function chunks<T>(items: T[], size: number): T[][] {

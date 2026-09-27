@@ -1,5 +1,5 @@
 import { isPackageName } from "../shared/package-name";
-import type { Timers } from "../shared/popout";
+import { globalTimers, type Timers } from "../shared/popout";
 import { afterPopoutClosed, onMainWindowClose } from "./lifecycle";
 import type { PopoutManager } from "./popout-manager";
 
@@ -18,11 +18,6 @@ export interface AppShellDeps {
   log(line: string): void;
   timers?: Timers;
 }
-
-const globalTimers: Timers = {
-  set: (fn, ms) => setTimeout(fn, ms),
-  clear: (handle) => clearTimeout(handle),
-};
 
 /**
  * Whether the main window is shown, tracked here rather than read back from

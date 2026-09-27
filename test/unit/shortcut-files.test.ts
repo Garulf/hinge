@@ -1,24 +1,24 @@
 import { expect, test } from "vitest";
 import { isPackageName } from "../../src/shared/package-name";
-import { desktopEntry, launcherTarget, pngToIco, pngWidth, shortcutFileName } from "../../src/shared/shortcut-files";
+import { desktopEntry, launcherTarget, pngSize, pngToIco, shortcutFileName } from "../../src/shared/shortcut-files";
 
 const FAKE_PNG = new Uint8Array([1, 2, 3]);
 
-test("an ICO wraps the PNG in one 32-bit entry at offset 22, with 0 standing for 256 px", () => {
-  expect([...pngToIco(FAKE_PNG, 256)]).toEqual([0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 32, 0, 3, 0, 0, 0, 22, 0, 0, 0, 1, 2, 3]);
-  expect([...pngToIco(FAKE_PNG, 48)]).toEqual([0, 0, 1, 0, 1, 0, 48, 48, 0, 0, 1, 0, 32, 0, 3, 0, 0, 0, 22, 0, 0, 0, 1, 2, 3]);
+test("an ICO wraps the PNG in one 32-bit entry at offset 22, with its own width and height and 0 standing for 256 px or more", () => {
+  expect([...pngToIco(FAKE_PNG, { width: 256, height: 512 })]).toEqual([0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 32, 0, 3, 0, 0, 0, 22, 0, 0, 0, 1, 2, 3]);
+  expect([...pngToIco(FAKE_PNG, { width: 48, height: 32 })]).toEqual([0, 0, 1, 0, 1, 0, 48, 32, 0, 0, 1, 0, 32, 0, 3, 0, 0, 0, 22, 0, 0, 0, 1, 2, 3]);
 });
 
 test("the ICO's resource size is little-endian over all four bytes", () => {
-  const ico = pngToIco(new Uint8Array(0x010203), 96);
+  const ico = pngToIco(new Uint8Array(0x010203), { width: 96, height: 96 });
   expect([...ico.subarray(14, 18)]).toEqual([0x03, 0x02, 0x01, 0x00]);
   expect(ico.length).toBe(22 + 0x010203);
 });
 
-test("a PNG's width comes from its IHDR, and anything else has none", () => {
-  const header = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x01, 0x00, 0, 0, 0x01, 0x00];
-  expect(pngWidth(new Uint8Array(header))).toBe(256);
-  expect(pngWidth(FAKE_PNG)).toBeNull();
+test("a PNG's width and height come from its IHDR, and anything else has none", () => {
+  const header = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x01, 0x00, 0, 0, 0x00, 0x60];
+  expect(pngSize(new Uint8Array(header))).toEqual({ width: 256, height: 96 });
+  expect(pngSize(FAKE_PNG)).toBeNull();
 });
 
 test("a desktop entry quotes an Exec path with a space and leaves the Name as it is", () => {
@@ -64,6 +64,20 @@ test("a shortcut file name loses characters Windows forbids, control characters 
   expect(shortcutFileName("Ünïcode Chat", "com.a")).toBe("Ünïcode Chat");
 });
 
+test("a Windows device name, bare or with an extension and in any case, gets a suffix so it can be a file", () => {
+  for (const [label, name] of [
+    ["CON", "CON_"],
+    ["nul", "nul_"],
+    ["Aux.chat", "Aux_.chat"],
+    ["com1", "com1_"],
+    ["LPT9. ", "LPT9_"],
+    ["prn .x", "prn_ .x"],
+  ]) {
+    expect(shortcutFileName(label, "com.a"), label).toBe(name);
+  }
+  for (const label of ["CONSOLE", "com10", "Contacts", "LPT", "com0"]) expect(shortcutFileName(label, "com.a"), label).toBe(label);
+});
+
 test("the launcher is the portable exe on Windows, the AppImage on Linux, else the running executable", () => {
   const execPath = "/usr/lib/hinge/hinge";
   expect(launcherTarget({ platform: "win32", execPath, env: { PORTABLE_EXECUTABLE_FILE: "D:\\hinge.exe" } })).toBe("D:\\hinge.exe");
@@ -77,4 +91,8 @@ test("the launcher is the portable exe on Windows, the AppImage on Linux, else t
 test("only a real package name is used in a file name", () => {
   for (const pkg of ["com.example.chat", "com.sec.android.app.launcher", "a_b.C9"]) expect(isPackageName(pkg), pkg).toBe(true);
   for (const pkg of ["", "../x", "a/b", "com..x", ".com", "com.", "a b", "a\\b"]) expect(isPackageName(pkg), pkg).toBe(false);
+});
+
+test("a desktop entry without an icon has no Icon line", () => {
+  expect(desktopEntry({ label: "x", exec: "/h", pkg: "com.a", icon: null })).not.toContain("Icon=");
 });

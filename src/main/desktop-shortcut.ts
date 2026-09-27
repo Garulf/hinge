@@ -1,15 +1,15 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isPackageName } from "../shared/package-name";
-import { desktopEntry, launcherTarget, pngToIco, pngWidth, shortcutFileName } from "../shared/shortcut-files";
+import { desktopEntry, launcherTarget, pngSize, pngToIco, shortcutFileName } from "../shared/shortcut-files";
 import type { AppIdentity } from "./popout-manager";
 
 /** The part of Electron's ShortcutDetails that hinge sets. */
 export interface ShortcutLinkOptions {
   target: string;
   args: string;
-  icon: string;
-  iconIndex: number;
+  icon?: string;
+  iconIndex?: number;
   description: string;
   appUserModelId: string;
 }
@@ -23,14 +23,17 @@ export interface DesktopShortcutDeps {
   appData: string;
   home: string;
   identify(pkg: string): Promise<AppIdentity>;
-  /** hinge's own icon as a PNG, for an app whose icon is unknown. */
+  /** hinge's own icon as a PNG, for an app whose icon is unknown; empty when it cannot be read. */
   fallbackIcon(): Promise<Uint8Array>;
   writeShortcutLink(path: string, operation: "create", options: ShortcutLinkOptions): boolean;
+  /** null when there is no link at the path. */
+  readShortcutLink(path: string): { args?: string } | null;
+  log(line: string): void;
 }
 
 const APP_USER_MODEL_ID = "net.garulf.hinge";
 const DESKTOP_ENTRY_MODE = 0o644;
-const DEFAULT_ICON_PX = 256;
+const DEFAULT_ICON_SIZE = { width: 256, height: 256 };
 
 function reasonOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -44,28 +47,45 @@ async function writeIcon(deps: DesktopShortcutDeps, fileName: string, bytes: Uin
   return path;
 }
 
-async function writeWindowsLink(deps: DesktopShortcutDeps, pkg: string, label: string, png: Uint8Array): Promise<void> {
-  const icon = await writeIcon(deps, `${pkg}.ico`, pngToIco(png, pngWidth(png) ?? DEFAULT_ICON_PX));
+/** The label's link, unless another app's link already has that name. */
+function linkPath(deps: DesktopShortcutDeps, programs: string, label: string, args: string, pkg: string): string {
+  const name = shortcutFileName(label, pkg);
+  const path = join(programs, `${name}.lnk`);
+  const existing = deps.readShortcutLink(path);
+  return existing === null || existing.args === args ? path : join(programs, `${name} (${pkg}).lnk`);
+}
+
+async function writeWindowsLink(deps: DesktopShortcutDeps, pkg: string, label: string, png: Uint8Array | null): Promise<void> {
+  const icon = png ? await writeIcon(deps, `${pkg}.ico`, pngToIco(png, pngSize(png) ?? DEFAULT_ICON_SIZE)) : null;
   const programs = join(deps.appData, "Microsoft", "Windows", "Start Menu", "Programs");
   await mkdir(programs, { recursive: true });
-  const written = deps.writeShortcutLink(join(programs, `${shortcutFileName(label, pkg)}.lnk`), "create", {
+  const args = `--app ${pkg}`;
+  const written = deps.writeShortcutLink(linkPath(deps, programs, label, args, pkg), "create", {
     target: launcherTarget(deps),
-    args: `--app ${pkg}`,
-    icon,
-    iconIndex: 0,
+    args,
+    ...(icon === null ? {} : { icon, iconIndex: 0 }),
     description: label,
     appUserModelId: APP_USER_MODEL_ID,
   });
   if (!written) throw new Error("Windows did not write the shortcut");
 }
 
-async function writeLinuxEntry(deps: DesktopShortcutDeps, pkg: string, label: string, png: Uint8Array): Promise<void> {
-  const icon = await writeIcon(deps, `${pkg}.png`, png);
+async function writeLinuxEntry(deps: DesktopShortcutDeps, pkg: string, label: string, png: Uint8Array | null): Promise<void> {
+  const icon = png ? await writeIcon(deps, `${pkg}.png`, png) : null;
   const applications = join(deps.env.XDG_DATA_HOME || join(deps.home, ".local", "share"), "applications");
   await mkdir(applications, { recursive: true });
   const entry = join(applications, `hinge-${pkg}.desktop`);
   await writeFile(entry, desktopEntry({ label, exec: launcherTarget(deps), pkg, icon }), { mode: DESKTOP_ENTRY_MODE });
   await chmod(entry, DESKTOP_ENTRY_MODE);
+}
+
+/** The app's icon, else hinge's; null when neither has any bytes. */
+async function shortcutIcon(deps: DesktopShortcutDeps, identity: AppIdentity, pkg: string): Promise<Uint8Array | null> {
+  if (identity.icon && identity.icon.length > 0) return identity.icon;
+  const fallback = await deps.fallbackIcon();
+  if (fallback.length > 0) return fallback;
+  deps.log(`no icon for the ${pkg} shortcut: neither the app's nor hinge's could be read`);
+  return null;
 }
 
 /** Writes a Start menu link or a desktop entry that opens the app in its own window; answers with the notice to show. */
@@ -75,7 +95,7 @@ export async function createDesktopShortcut(deps: DesktopShortcutDeps, pkg: stri
   try {
     const identity = await deps.identify(pkg);
     label = identity.label;
-    const png = identity.icon ?? (await deps.fallbackIcon());
+    const png = await shortcutIcon(deps, identity, pkg);
     if (deps.platform === "win32") await writeWindowsLink(deps, pkg, label, png);
     else if (deps.platform === "linux") await writeLinuxEntry(deps, pkg, label, png);
     else throw new Error("shortcuts are made on Windows and Linux only");

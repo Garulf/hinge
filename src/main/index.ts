@@ -375,6 +375,14 @@ async function runMode(opts: RunOptions): Promise<void> {
     identify: async (pkg) => (built.catalog && currentPhone ? built.catalog.identify(currentPhone, pkg) : { label: pkg, icon: null }),
     fallbackIcon: async () => nativeImage.createFromPath(appIconPath()).resize({ width: 256, height: 256 }).toPNG(),
     writeShortcutLink: (path, operation, options) => electronShell.writeShortcutLink(path, operation, options),
+    readShortcutLink: (path) => {
+      try {
+        return electronShell.readShortcutLink(path);
+      } catch {
+        return null;
+      }
+    },
+    log: logger.log,
   };
   const mainSink = bindSource(source, port, {
     logPath: logger.path,

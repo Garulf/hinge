@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
@@ -13,11 +13,13 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function harness(o: { platform: NodeJS.Platform; identity?: AppIdentity; env?: Record<string, string | undefined>; linkResult?: boolean }) {
+function harness(o: { platform: NodeJS.Platform; identity?: AppIdentity; env?: Record<string, string | undefined>; linkResult?: boolean; fallback?: Uint8Array }) {
   const root = mkdtempSync(join(tmpdir(), "hinge-shortcut-"));
   dirs.push(root);
   const links: [string, "create", ShortcutLinkOptions][] = [];
   const identified: string[] = [];
+  const logs: string[] = [];
+  const existing = new Map<string, ShortcutLinkOptions>();
   const deps: DesktopShortcutDeps = {
     platform: o.platform,
     execPath: "/opt/hinge/hinge",
@@ -29,13 +31,16 @@ function harness(o: { platform: NodeJS.Platform; identity?: AppIdentity; env?: R
       identified.push(pkg);
       return o.identity ?? { label: "Chat", icon: APP_PNG };
     },
-    fallbackIcon: async () => HINGE_PNG,
+    fallbackIcon: async () => o.fallback ?? HINGE_PNG,
     writeShortcutLink: (path, operation, options) => {
       links.push([path, operation, options]);
+      if (o.linkResult ?? true) existing.set(path, options);
       return o.linkResult ?? true;
     },
+    readShortcutLink: (path) => existing.get(path) ?? null,
+    log: (line) => logs.push(line),
   };
-  return { root, deps, links, identified };
+  return { root, deps, links, identified, logs };
 }
 
 test("on Linux the app's icon and a desktop entry that opens it are written under the home folder", async () => {
@@ -91,4 +96,37 @@ test("a failure is answered with its reason, and a package name that is not one 
   const bad = harness({ platform: "linux" });
   expect(await createDesktopShortcut(bad.deps, "../../evil")).toBe("Could not create a shortcut: ../../evil is not an app package name");
   expect(bad.identified).toEqual([]);
+});
+
+function programs(root: string, name: string): string {
+  return join(root, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", name);
+}
+
+test("two apps with the same label get their own Start menu links, and making one again replaces its own", async () => {
+  const { root, deps, links } = harness({ platform: "win32", identity: { label: "Chat", icon: APP_PNG } });
+  await createDesktopShortcut(deps, "com.example.chat");
+  await createDesktopShortcut(deps, "com.other.chat");
+  await createDesktopShortcut(deps, "com.example.chat");
+  await createDesktopShortcut(deps, "com.other.chat");
+
+  expect(links.map(([path, , options]) => [path, options.args])).toEqual([
+    [programs(root, "Chat.lnk"), "--app com.example.chat"],
+    [programs(root, "Chat (com.other.chat).lnk"), "--app com.other.chat"],
+    [programs(root, "Chat.lnk"), "--app com.example.chat"],
+    [programs(root, "Chat (com.other.chat).lnk"), "--app com.other.chat"],
+  ]);
+});
+
+test("when hinge's own icon cannot be read either, the shortcut is made without one and that is logged", async () => {
+  const linux = harness({ platform: "linux", identity: { label: "Chat", icon: null }, fallback: new Uint8Array(0) });
+  expect(await createDesktopShortcut(linux.deps, "com.example.chat")).toBe("Shortcut created for Chat");
+  expect(existsSync(join(linux.root, "userData", "shortcut-icons", "com.example.chat.png"))).toBe(false);
+  expect(readFileSync(join(linux.root, "home", ".local", "share", "applications", "hinge-com.example.chat.desktop"), "utf8")).not.toContain("Icon=");
+  expect(linux.logs.some((l) => l.includes("no icon"))).toBe(true);
+
+  const windows = harness({ platform: "win32", identity: { label: "Chat", icon: new Uint8Array(0) }, fallback: new Uint8Array(0) });
+  expect(await createDesktopShortcut(windows.deps, "com.example.chat")).toBe("Shortcut created for Chat");
+  expect(existsSync(join(windows.root, "userData", "shortcut-icons", "com.example.chat.ico"))).toBe(false);
+  expect(windows.links[0][2]).not.toHaveProperty("icon");
+  expect(windows.links[0][2]).not.toHaveProperty("iconIndex");
 });

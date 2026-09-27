@@ -1,16 +1,20 @@
 const ICONDIR_BYTES = 6;
 const ICONDIRENTRY_BYTES = 16;
 
+export interface PixelSize {
+  width: number;
+  height: number;
+}
+
 /** A one-image ICO holding the PNG as it is, which Windows Vista and later read. */
-export function pngToIco(png: Uint8Array, size: number): Uint8Array {
+export function pngToIco(png: Uint8Array, size: PixelSize): Uint8Array {
   const offset = ICONDIR_BYTES + ICONDIRENTRY_BYTES;
   const ico = new Uint8Array(offset + png.length);
   const view = new DataView(ico.buffer);
   view.setUint16(2, 1, true);
   view.setUint16(4, 1, true);
-  const side = size >= 256 ? 0 : size;
-  view.setUint8(6, side);
-  view.setUint8(7, side);
+  view.setUint8(6, icoSide(size.width));
+  view.setUint8(7, icoSide(size.height));
   view.setUint16(10, 1, true);
   view.setUint16(12, 32, true);
   view.setUint32(14, png.length, true);
@@ -19,12 +23,19 @@ export function pngToIco(png: Uint8Array, size: number): Uint8Array {
   return ico;
 }
 
+/** An ICONDIRENTRY side is one byte, with 0 meaning 256 px or more. */
+function icoSide(px: number): number {
+  return px >= 256 ? 0 : px;
+}
+
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const IHDR_WIDTH_OFFSET = 16;
+const IHDR_HEIGHT_OFFSET = 20;
 
-export function pngWidth(png: Uint8Array): number | null {
-  if (png.length < IHDR_WIDTH_OFFSET + 4 || PNG_SIGNATURE.some((byte, i) => png[i] !== byte)) return null;
-  return new DataView(png.buffer, png.byteOffset, png.byteLength).getUint32(IHDR_WIDTH_OFFSET);
+export function pngSize(png: Uint8Array): PixelSize | null {
+  if (png.length < IHDR_HEIGHT_OFFSET + 4 || PNG_SIGNATURE.some((byte, i) => png[i] !== byte)) return null;
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  return { width: view.getUint32(IHDR_WIDTH_OFFSET), height: view.getUint32(IHDR_HEIGHT_OFFSET) };
 }
 
 /** Desktop Entry spec: a string value keeps to one line, and a backslash is itself escaped. */
@@ -40,14 +51,14 @@ function execArgument(arg: string): string {
   return quoted.replace(/%/g, "%%");
 }
 
-export function desktopEntry(o: { label: string; exec: string; pkg: string; icon: string }): string {
+export function desktopEntry(o: { label: string; exec: string; pkg: string; icon: string | null }): string {
   const exec = [o.exec, "--app", o.pkg].map(execArgument).join(" ");
   return [
     "[Desktop Entry]",
     "Type=Application",
     `Name=${stringValue(o.label)}`,
     `Exec=${stringValue(exec)}`,
-    `Icon=${stringValue(o.icon)}`,
+    ...(o.icon === null ? [] : [`Icon=${stringValue(o.icon)}`]),
     "Terminal=false",
     "Categories=Utility;",
     "StartupWMClass=hinge",
@@ -56,11 +67,13 @@ export function desktopEntry(o: { label: string; exec: string; pkg: string; icon
 }
 
 const FORBIDDEN_IN_FILE_NAMES = /[<>:"/\\|?*\u0000-\u001f\u007f]/g;
+/** Windows keeps these names for devices, whatever the case and whatever extension follows. */
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?=\s*(\.|$))/i;
 
 /** The label made safe as a Windows file name, without its extension. */
 export function shortcutFileName(label: string, pkg: string): string {
   const name = label.replace(FORBIDDEN_IN_FILE_NAMES, "_").trim().replace(/[. ]+$/, "");
-  return name === "" ? pkg : name;
+  return name === "" ? pkg : name.replace(WINDOWS_DEVICE_NAME, "$1_");
 }
 
 /** The executable a shortcut should start: the portable exe or AppImage the user actually has, not the copy unpacked to a temp folder. */

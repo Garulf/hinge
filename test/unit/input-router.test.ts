@@ -620,6 +620,24 @@ test("a press made while paused sends nothing after resuming, not a move or an u
   expect(sent).toEqual([]);
 });
 
+test("the wheel over the frame scales the phone like MOD+wheel, even while paused", () => {
+  const onAction = vi.fn();
+  const { canvas, sent } = setupWith({ paused: () => true, onAction });
+  canvas.fire("wheel", { deltaX: 0, deltaY: -100, buttons: 0, ...SIDE_BEZEL });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 60, buttons: 0, ...TOP_BEZEL });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 60, buttons: 0, ...OFF_PHONE });
+  expect(onAction.mock.calls.map(([a]) => a)).toEqual(["scale-up", "scale-down"]);
+  expect(sent).toEqual([]);
+});
+
+test("the wheel over the lit screen still scrolls the phone", () => {
+  const onAction = vi.fn();
+  const { canvas, sent } = setup({ onAction });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, ...CENTER });
+  expect(onAction).not.toHaveBeenCalled();
+  expect(sent[0]).toMatchObject({ type: "scroll" });
+});
+
 test("MOD+wheel does not scale while Center eases the turn back", () => {
   const onAction = vi.fn();
   const { canvas, sent } = setup({ onAction, view: CENTERING });

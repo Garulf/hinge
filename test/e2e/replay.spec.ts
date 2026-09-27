@@ -18,6 +18,7 @@ interface Stats {
   brightness: { cover: number; inner: number };
   view: { t: number; active: boolean };
   modelRotation: { yaw: number; pitch: number };
+  scaling?: boolean;
   laidOut: boolean;
 }
 
@@ -508,19 +509,29 @@ test("hover menu on the top edge, transfer toasts for a drop, and a colourway ch
     await writeFile("test-results/colour-rim.json", JSON.stringify({ before, after }, null, 2));
     expect(after - before).toBeGreaterThan(40);
 
+    const pxPerMm = (s: Stats) => (s as Stats & { pxPerMm: number }).pxPerMm;
     const unscaled = await stats(page);
     await page.mouse.move(unscaled.window.w / 2, unscaled.window.h / 2);
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, 100);
     await page.keyboard.up("Alt");
-    const smaller = await waitFor(page, "the phone to shrink a step", (s) => s.settled && s.laidOut && s.window.w < unscaled.window.w, 20_000);
-    expect((smaller as Stats & { pxPerMm: number }).pxPerMm / (unscaled as Stats & { pxPerMm: number }).pxPerMm).toBeCloseTo(0.9, 2);
+    await waitFor(page, "the phone to shrink a step", (s) => s.settled && !s.scaling && pxPerMm(s) < pxPerMm(unscaled), 20_000);
+    const smaller = await windowAtRest(page);
+    expect(pxPerMm(smaller) / pxPerMm(unscaled)).toBeCloseTo(0.9, 2);
     expect(smaller.window.w / unscaled.window.w).toBeCloseTo(0.9, 1);
 
-    await page.mouse.move(10, smaller.window.h / 2);
+    const frame = await sideOfCase(page, smaller.window.h / 2);
+    await page.mouse.move(frame.x, frame.y);
+    await page.mouse.wheel(0, -100);
+    await waitFor(page, "the wheel on the frame to grow the phone a step", (s) => s.settled && !s.scaling && pxPerMm(s) > pxPerMm(smaller), 20_000);
+    const regrown = await windowAtRest(page);
+    expect(regrown.window.w).toBeCloseTo(unscaled.window.w, -1);
+    expect(pxPerMm(regrown) / pxPerMm(unscaled)).toBeCloseTo(1, 2);
+
+    await page.mouse.move(10, regrown.window.h / 2);
     await expect(menu).not.toHaveClass(/shown/, { timeout: 5000 });
-    await drag(app, page, await sideOfCase(page, smaller.window.h / 2), { x: 100, y: 0 });
-    await waitFor(page, "the turned phone", (s) => s.view.t === 1 && s.window.w * s.window.h > smaller.window.w * smaller.window.h, 20_000);
+    await drag(app, page, await sideOfCase(page, regrown.window.h / 2), { x: 100, y: 0 });
+    await waitFor(page, "the turned phone", (s) => s.view.t === 1 && s.window.w * s.window.h > regrown.window.w * regrown.window.h, 20_000);
     const turned = await windowAtRest(page);
     await page.mouse.move(turned.window.w / 2, 8);
     await expect(menu).toHaveClass(/shown/, { timeout: 5000 });
@@ -754,7 +765,7 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, 100);
     await page.keyboard.up("Alt");
-    const smaller = (await waitFor(page, "a turned phone to scale down a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm < unscaled.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
+    const smaller = (await waitFor(page, "a turned phone to scale down a step", (s) => !s.scaling && (s as Stats & { pxPerMm: number }).pxPerMm < unscaled.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
     expect(smaller.pxPerMm / unscaled.pxPerMm).toBeCloseTo(0.9, 2);
     expect(smaller.modelRotation).toEqual({ yaw: -60, pitch: 45 });
 
@@ -767,7 +778,7 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     await page.keyboard.down("Alt");
     await page.mouse.wheel(0, -100);
     await page.keyboard.up("Alt");
-    const bigger = (await waitFor(page, "a turned phone to scale up a step", (s) => (s as Stats & { pxPerMm: number }).pxPerMm > smaller.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
+    const bigger = (await waitFor(page, "a turned phone to scale up a step", (s) => !s.scaling && (s as Stats & { pxPerMm: number }).pxPerMm > smaller.pxPerMm, 10_000)) as Stats & { pxPerMm: number };
     expect(bigger.pxPerMm / smaller.pxPerMm).toBeCloseTo(1 / 0.9, 2);
     expect(bigger.modelRotation).toEqual({ yaw: 18, pitch: -9 });
   } finally {

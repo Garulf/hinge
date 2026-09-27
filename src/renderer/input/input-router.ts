@@ -269,18 +269,18 @@ export class InputRouter {
     window.hinge.beginDrag();
   }
 
+  /** MOD+wheel anywhere, or the wheel anywhere off the lit screen, scales the phone; on the screen it scrolls. */
   #onWheel(e: WheelEvent): void {
     e.preventDefault();
     if (this.#scene.view().active) return;
-    if (this.#shortcuts.modHeld()) {
-      const steps = this.#wheelSteps.add(e.deltaY);
-      for (let i = 0; i < Math.abs(steps); i++) this.#onAction(steps > 0 ? "scale-down" : "scale-up");
+    const hit = this.#hitOf(e);
+    if (this.#shortcuts.modHeld() || !hit) {
+      this.#scaleByWheel(e.deltaY);
       return;
     }
     if (this.#paused()) return;
-    const hit = this.#hitOf(e);
     const size = this.#videoSize();
-    if (!hit || !size) return;
+    if (!size) return;
     const feel = this.#scrolling();
     const delta = wheelToScroll(e.deltaX, e.deltaY, feel.speed);
     const notch = isWheelNotch(e as WheelEvent & ChromiumWheelDeltas);
@@ -294,6 +294,11 @@ export class InputRouter {
     if (this.#scrollFrameAt !== null) return;
     this.#sendScroll(FRAME_MS, notch ? feel.smoothingMs : 0);
     this.#scheduleScroll(e.timeStamp);
+  }
+
+  #scaleByWheel(deltaY: number): void {
+    const steps = this.#wheelSteps.add(deltaY);
+    for (let i = 0; i < Math.abs(steps); i++) this.#onAction(steps > 0 ? "scale-down" : "scale-up");
   }
 
   #swipeNotch(units: { x: number; y: number }, at: { x: number; y: number }, size: { w: number; h: number }, time: number): void {

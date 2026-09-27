@@ -1,6 +1,10 @@
 import { defaultPxPerMm, FOLD7_BODY } from "../shared/layout";
 import { fitPxPerMm, nextPxPerMm, pixelPerfectPxPerMm } from "../shared/scale";
 import type { Rotation } from "../shared/screen-uv";
+import { Spring } from "../shared/spring";
+
+const EASE_MS = 180;
+const EASED_PX_PER_MM = 0.002;
 
 export interface ScaleDeps {
   /** Hands the new scale to the scene; the window follows on the next tick. */
@@ -11,9 +15,11 @@ export interface ScaleDeps {
 
 /**
  * The phone's size on screen in CSS px per mm: the default fills 85 percent
- * of the work area height, MOD+wheel steps it by 10 percent, MOD+g snaps
- * the lit screen to 1:1, and fullscreen fits the phone to the screen and
- * gives the windowed size back afterwards.
+ * of the work area height, MOD+wheel (or the wheel over the frame) steps it
+ * by 10 percent, MOD+g snaps the lit screen to 1:1, and fullscreen fits the
+ * phone to the screen and gives the windowed size back afterwards. A scale
+ * the user picks eases in over a few frames; the steps themselves stay on
+ * the 10 percent grid.
  */
 export class ScaleController {
   readonly #deps: ScaleDeps;
@@ -21,6 +27,8 @@ export class ScaleController {
   #max = Infinity;
   #workArea: { w: number; h: number } | null = null;
   #windowed: number | null = null;
+  readonly #shown = new Spring({ value: 0, settleMs: EASE_MS });
+  #easing = false;
   #fullscreen: number | null = null;
   #device: { id: string; saved: number | null } | null = null;
 
@@ -28,18 +36,33 @@ export class ScaleController {
     this.#deps = deps;
   }
 
+  /** The scale on screen this frame, which trails a step while it eases in. */
   get pxPerMm(): number | null {
-    return this.#fullscreen ?? this.#windowed;
+    return this.#fullscreen ?? (this.#windowed === null ? null : this.#shown.value);
+  }
+
+  /** True while the scale on screen is still easing toward a step. */
+  get easing(): boolean {
+    return this.#easing;
   }
 
   get fullscreen(): boolean {
     return this.#fullscreen !== null;
   }
 
-  /** Scale as a percentage of the default, for a toast. */
+  /** The scale being stepped to as a percentage of the default, for a toast. */
   percent(): number | null {
-    const current = this.pxPerMm;
+    const current = this.#fullscreen ?? this.#windowed;
     return current === null || this.#base === null ? null : Math.round((current / this.#base) * 100);
+  }
+
+  /** Moves an eased scale on by one frame. */
+  tick(dtMs: number): void {
+    if (!this.#easing) return;
+    this.#shown.step(dtMs);
+    this.#shown.snapIfSettled(EASED_PX_PER_MM);
+    this.#easing = !this.#shown.settled(0);
+    if (this.#fullscreen === null) this.#deps.apply(this.#shown.value);
   }
 
   setWorkArea(area: { w: number; h: number }): void {
@@ -85,17 +108,22 @@ export class ScaleController {
   leaveFullscreen(): void {
     if (this.#fullscreen === null) return;
     this.#fullscreen = null;
-    if (this.#windowed !== null) this.#deps.apply(this.#windowed);
+    if (this.#windowed !== null) this.#deps.apply(this.#shown.value);
   }
 
   #choose(pxPerMm: number): void {
     if (this.#device) this.#device.saved = pxPerMm;
-    this.#setWindowed(pxPerMm);
+    this.#windowed = pxPerMm;
+    this.#shown.target = pxPerMm;
+    this.#easing = true;
     this.#deps.persist(pxPerMm);
   }
 
   #setWindowed(pxPerMm: number): void {
     this.#windowed = pxPerMm;
+    this.#shown.target = this.#shown.value = pxPerMm;
+    this.#shown.velocity = 0;
+    this.#easing = false;
     if (this.#fullscreen === null) this.#deps.apply(pxPerMm);
   }
 }

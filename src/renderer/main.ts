@@ -160,7 +160,12 @@ function sizeWindow(out: DirectorOutput, rotation: Rotation, view: ViewState): v
 // hold off for longer than the check is meant to wait.
 setInterval(() => windowSizer.verify({ w: innerWidth, h: innerHeight }, performance.now()), 100);
 
+let lastTickAt: number | null = null;
+
 function onTick(out: DirectorOutput, rotation: Rotation, view: ViewState): void {
+  const now = performance.now();
+  scale.tick(lastTickAt === null ? 0 : now - lastTickAt);
+  lastTickAt = now;
   logPhase(out, rotation);
   sizeWindow(out, rotation, view);
 }
@@ -422,6 +427,7 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
       view: scene.view(),
       brightness: { cover: out?.coverBrightness ?? 0, inner: out?.innerBrightness ?? 0 },
       pxPerMm: scale.pxPerMm,
+      scaling: scale.easing,
       paused: display.paused,
       modelRotation: scene.modelRotation(),
       turn: scene.turnState(),

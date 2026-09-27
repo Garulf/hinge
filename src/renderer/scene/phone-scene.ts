@@ -638,8 +638,9 @@ export class PhoneScene implements FrameTarget {
   }
 
   /**
-   * Aims the perspective camera for the blend at the centre of the unturned
-   * pose, so the turn cannot move what the camera looks at.
+   * Aims the perspective camera for the blend at the work view's centre, at
+   * the depth of the unturned pose, so neither the turn nor a fold can move
+   * what the camera looks at.
    */
   #aimShowcase(): void {
     const { w, h } = this.#fitMargin();

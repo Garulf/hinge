@@ -26,13 +26,15 @@ export interface Box {
 
 const rad = (deg: number) => (deg * Math.PI) / 180;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-const lerpVec = (a: Vec3, b: Vec3, t: number): Vec3 => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), z: lerp(a.z, b.z, t) });
 
 /**
  * The perspective camera between the work view (t 0) and the showcase (t 1).
  * The lens widens from a near-orthographic 1 degree to 18 while the front of
  * the phone keeps the work view's scale, so the phone is the same size in
  * both views. An orbit swings the camera around the phone at that distance.
+ * Only the depth it looks at follows the phone: across it, the camera stays
+ * on the work view's centre, since the pose's own centre moves with the
+ * hinge and would drag the fixed half along with a fold.
  */
 export function blendedCamera(input: {
   t: number;
@@ -44,7 +46,7 @@ export function blendedCamera(input: {
 }): CameraRig {
   const { t, subject } = input;
   const fovDeg = lerp(NEAR_ORTHO_FOV_DEG, SHOWCASE_FOV_DEG, t);
-  const target = lerpVec(input.workCentre, lerpVec(subject.min, subject.max, 0.5), t);
+  const target = { ...input.workCentre, z: lerp(input.workCentre.z, (subject.min.z + subject.max.z) / 2, t) };
   const distance = subject.max.z - target.z + input.workHalfHeight / Math.tan(rad(fovDeg) / 2);
   const yaw = rad(input.yawDeg * t);
   const pitch = rad(input.pitchDeg * t);

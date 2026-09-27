@@ -36,10 +36,20 @@ function recordHead(block: string): string {
   return start < 0 ? block : block.slice(0, start);
 }
 
+function headerLine(block: string): string {
+  const end = block.indexOf("\n");
+  return end < 0 ? block : block.slice(0, end);
+}
+
+/** The key line, else the key in the header's `key=<key>: Notification(`. */
+function keyOf(block: string): string | null {
+  return field(recordHead(block), "key") ?? /\bkey=(\S+): Notification\(/.exec(headerLine(block))?.[1] ?? null;
+}
+
 /** From the key's `userId|pkg|id|tag|uid`, else the header line's `pkg=`; empty unless it is a package name. */
 function packageOf(key: string | null, block: string): string {
   const fromKey = key?.split("|")[1];
-  const fromHeader = /^[^\n]*?\bpkg=(\S+)/.exec(block)?.[1];
+  const fromHeader = /\bpkg=(\S+)/.exec(headerLine(block))?.[1];
   const pkg = fromKey ?? fromHeader ?? "";
   return isPackageName(pkg) ? pkg : "";
 }
@@ -77,7 +87,7 @@ function toFlags(raw: string | null): number {
 export function parseNotifications(dumpsysText: string): NotificationRecord[] {
   const blocks = dumpsysText.split(RECORD_HEADER).slice(1);
   return blocks.map((block) => {
-    const key = field(recordHead(block), "key");
+    const key = keyOf(block);
     const pkg = packageOf(key, block);
     const postTime = Number(field(block, "postTime") ?? field(block, "when") ?? "0");
     const flags = toFlags(field(block, "flags"));

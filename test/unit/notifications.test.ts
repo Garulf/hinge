@@ -71,7 +71,7 @@ test("parseNotifications takes the package from the record's key, never from a p
   expect(message.key).toBe("0|com.example.chat|5|null|10201");
 });
 
-test("parseNotifications falls back to the header's package when the record has no key line", () => {
+test("parseNotifications falls back to the header's key and package when the record has no key line", () => {
   const block = [
     "  NotificationRecord(0x9a8b7c6: pkg=com.example.chat user=UserHandle{0} id=5 tag=null key=0|com.example.chat|5|null|10201: Notification(channel=messages pri=0 flags=0x10))",
     "    flags=0x10",
@@ -80,7 +80,9 @@ test("parseNotifications falls back to the header's package when the record has 
     "pkg=x;reboot",
     "      }",
   ].join("\n");
-  expect(parseNotifications(block)[0].pkg).toBe("com.example.chat");
+  const [message] = parseNotifications(block);
+  expect(message.pkg).toBe("com.example.chat");
+  expect(message.key).toBe("0|com.example.chat|5|null|10201");
 });
 
 test("parseNotifications leaves the package empty when the record names no valid package", () => {

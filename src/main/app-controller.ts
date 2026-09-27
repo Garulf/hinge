@@ -250,9 +250,7 @@ export class DeviceSource implements MediaSource {
       void session?.stop();
       return;
     }
-    const connection = this.#connection;
-    if (this.#stopped || !connection || connection.run !== this.#runToken || this.#session) return;
-    void this.#startVideo(connection);
+    if (!this.#stopped) this.#resumeVideo();
   }
 
   async start(sink: MediaSink): Promise<void> {
@@ -516,9 +514,19 @@ export class DeviceSource implements MediaSource {
     }
     this.#cancelTcpReconnect();
     if (!device) return;
-    if (this.#sessionSerial === device.serial) return;
+    if (this.#sessionSerial === device.serial) {
+      this.#resumeVideo();
+      return;
+    }
     this.#teardownSession(device);
     this.#connect(device);
+  }
+
+  /** Starts the main video on the open connection when it has none, unless a retry backoff is still pending. */
+  #resumeVideo(): void {
+    const connection = this.#connection;
+    if (!this.#mainVideo || this.#session || this.#sessionRetryAbort || !connection || connection.run !== this.#runToken) return;
+    void this.#startVideo(connection);
   }
 
   /**
@@ -653,7 +661,6 @@ export class DeviceSource implements MediaSource {
         if (status.state === "streaming") {
           this.#sessionEverStreamed = true;
           this.#sessionRetryAttempt = 0;
-          this.#reconnectEligible = { serial: device.serial, id };
         }
         if (status.state === "error") this.#lastSessionError = status.message;
         sink.status(status);
@@ -668,9 +675,12 @@ export class DeviceSource implements MediaSource {
       session.ended?.then(() => this.#onSessionEnded(started));
       await session.start(observedSink);
     } catch (e) {
-      // setMainVideo(false) already dropped this session: its failure is not the connection's.
-      if (session && this.#session !== session) return;
-      this.#onRunFailed(run, e);
+      // Dropped already (setMainVideo(false) or a teardown): its failure is not the connection's.
+      if (this.#stopped || run !== this.#runToken || (session && this.#session !== session)) return;
+      this.#session = null;
+      this.opts.log?.(`session start failed: ${String(e)}`);
+      this.#lastSessionError = String(e);
+      this.#beginSessionRetry();
     }
   }
 
@@ -723,13 +733,8 @@ export class DeviceSource implements MediaSource {
    */
   #onSessionEnded(session: MediaSource): void {
     if (this.#stopped || this.#session !== session) return;
-    this.#runToken++;
     const streamed = this.#sessionEverStreamed;
     this.#session = null;
-    this.#sessionSerial = null;
-    this.#connection = null;
-    void this.#stopPostureSampler();
-    void this.#stopNotificationMirrorSampler();
     void session.stop();
     if (streamed) {
       this.#sessionRetryAttempt = 0;

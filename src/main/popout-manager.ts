@@ -1,4 +1,5 @@
 import { displayGeometry, initialContentSize, MAX_POPOUTS, MIN_DISPLAY_PX, RESIZE_DEBOUNCE_MS, ResizeDebouncer, type DisplayGeometry } from "../shared/popout";
+import { isPackageName } from "../shared/package-name";
 import type { ControlIntent, SessionStatus } from "../shared/wire";
 import type { ConnectedPhone, PortLike } from "./app-controller";
 import type { MediaSink, MediaSource } from "./media-source";
@@ -57,7 +58,7 @@ export interface PopoutManagerDeps {
   checkRefused(phone: ConnectedPhone, pkg: string): Promise<boolean>;
 }
 
-export type OpenResult = "opened" | "focused" | "queued" | "limit";
+export type OpenResult = "opened" | "focused" | "queued" | "limit" | "invalid";
 
 const LIMIT_NOTICE = `Up to ${MAX_POPOUTS} apps can be open at once`;
 const SAVE_BOUNDS_DEBOUNCE_MS = 500;
@@ -181,6 +182,10 @@ export class PopoutManager {
   constructor(private readonly deps: PopoutManagerDeps) {}
 
   open(pkg: string): OpenResult {
+    if (!isPackageName(pkg)) {
+      this.deps.log(`not opening ${JSON.stringify(pkg)}: not an app package`);
+      return "invalid";
+    }
     const existing = this.#entries.get(pkg);
     if (existing) {
       existing.window.focus();

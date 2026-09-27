@@ -9,8 +9,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function harness(startHidden: boolean) {
+function harness(startHidden: boolean, openResult: "opened" | "queued" = "queued") {
   const calls: string[] = [];
+  const notices: string[] = [];
   const companion: boolean[] = [];
   const opened: string[] = [];
   let count = 0;
@@ -25,11 +26,13 @@ function harness(startHidden: boolean) {
         count: () => count,
         open: (pkg) => {
           opened.push(pkg);
-          return "queued";
+          return openResult;
         },
         onCountChanged: (cb) => countListeners.push(cb),
       },
       quit: () => calls.push("quit"),
+      notice: (text) => notices.push(text),
+      log: () => {},
     },
     { startHidden },
   );
@@ -37,7 +40,7 @@ function harness(startHidden: boolean) {
     count = n;
     for (const cb of countListeners) cb(n);
   };
-  return { shell, calls, companion, opened, setCount };
+  return { shell, calls, companion, opened, setCount, notices };
 }
 
 test("the companion is wanted as soon as the shell starts with the main window shown, without waiting for a show event", () => {
@@ -180,4 +183,30 @@ test("quitting before an --app launch's 5 s are up never brings the main window 
   await vi.advanceTimersByTimeAsync(SHOW_MAIN_WITHOUT_POPOUT_MS * 2);
 
   expect(calls).toEqual([]);
+});
+
+test("a second launch whose app waits for the phone says so", () => {
+  const { shell, notices } = harness(true, "queued");
+  shell.start();
+
+  shell.launch("com.example.chat");
+  expect(notices).toEqual(["Waiting for the phone to open com.example.chat"]);
+});
+
+test("a second launch whose app opens at once needs no notice", () => {
+  const { shell, notices } = harness(true, "opened");
+  shell.start();
+
+  shell.launch("com.example.chat");
+  expect(notices).toEqual([]);
+});
+
+test("a launch asking for something that is not an app package opens nothing and shows the main window with a notice", () => {
+  const { shell, calls, opened, notices } = harness(true);
+  shell.start();
+
+  shell.launch("x;reboot");
+  expect(opened).toEqual([]);
+  expect(calls).toEqual(["show", "video true"]);
+  expect(notices).toEqual(["Not an app package: x;reboot"]);
 });

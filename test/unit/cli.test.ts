@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { appFromArgv, launchRequest, parseArgs, reportStartupError } from "../../src/main/cli";
+import { appFromArgv, launchRequest, parseArgs, reportStartupError, splitRequestedApp } from "../../src/main/cli";
 
 test("defaults to run mode", () => expect(parseArgs([])).toEqual({ mode: "run", serial: null, replay: null, record: null, userData: null, dryRunTransfers: false, app: null }));
 test("replay and serial", () => expect(parseArgs(["--replay", "a.hrec", "--serial", "X"])).toMatchObject({ mode: "run", serial: "X", replay: "a.hrec", record: null }));
@@ -7,6 +7,13 @@ test("a separate settings folder and dry-run transfers, for tests", () =>
   expect(parseArgs(["--replay", "a.hrec", "--user-data", "/tmp/h", "--dry-run-transfers"])).toMatchObject({ userData: "/tmp/h", dryRunTransfers: true }));
 test("record", () => expect(parseArgs(["--record", "out.hrec"])).toMatchObject({ mode: "run", record: "out.hrec" }));
 test("an app to pop out", () => expect(parseArgs(["--app", "com.example.chat"])).toMatchObject({ mode: "run", app: "com.example.chat" }));
+test("an --app with no package before the next switch takes no app and leaves that switch alone", () =>
+  expect(parseArgs(["--app", "--serial", "X"])).toMatchObject({ mode: "run", app: null, serial: "X" }));
+test("an --app naming a package opens it; anything else is rejected, to show the main window with a notice", () => {
+  expect(splitRequestedApp("com.example.chat")).toEqual({ app: "com.example.chat", rejected: null });
+  expect(splitRequestedApp("x;reboot")).toEqual({ app: null, rejected: "x;reboot" });
+  expect(splitRequestedApp(null)).toEqual({ app: null, rejected: null });
+});
 test("the app from a second launch's argv, among Electron and Chromium switches", () =>
   expect(appFromArgv(["/opt/hinge/hinge", "--no-sandbox", "--app", "com.x", "--allow-file-access"])).toBe("com.x"));
 test("the app in its --app=pkg form", () => expect(appFromArgv(["/opt/hinge/hinge", "--app=com.x"])).toBe("com.x"));

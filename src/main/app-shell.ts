@@ -1,3 +1,4 @@
+import { isPackageName } from "../shared/package-name";
 import type { Timers } from "../shared/popout";
 import { afterPopoutClosed, onMainWindowClose } from "./lifecycle";
 import type { PopoutManager } from "./popout-manager";
@@ -12,6 +13,9 @@ export interface AppShellDeps {
   companionWanted(on: boolean): void;
   popouts: Pick<PopoutManager, "count" | "open" | "onCountChanged">;
   quit(): void;
+  /** Shown in the main window, or as a system notification while it is hidden. */
+  notice(text: string): void;
+  log(line: string): void;
   timers?: Timers;
 }
 
@@ -74,8 +78,17 @@ export class AppShell {
 
   /** A second launch of hinge, with the app it asked for. */
   launch(app: string | null): void {
-    if (app) this.#deps.popouts.open(app);
-    else this.showMain();
+    if (app === null) {
+      this.showMain();
+      return;
+    }
+    if (!isPackageName(app)) {
+      this.#deps.log(`not opening ${JSON.stringify(app)}: not an app package`);
+      this.showMain();
+      this.#deps.notice(`Not an app package: ${app}`);
+      return;
+    }
+    if (this.#deps.popouts.open(app) === "queued") this.#deps.notice(`Waiting for the phone to open ${app}`);
   }
 
   #hideMain(): void {

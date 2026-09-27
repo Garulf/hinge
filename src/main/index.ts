@@ -8,7 +8,7 @@ import { AppCatalog, answerAppsRequest } from "./app-catalog";
 import { appIconPath } from "./app-icon";
 import type { ClipboardHost } from "./clipboard-sync";
 import { bindSource, DeviceSource, type ConnectedPhone, type NotificationMirrorStarter, type SessionFactory } from "./app-controller";
-import { launchRequest, parseArgs, reportStartupError } from "./cli";
+import { launchRequest, parseArgs, reportStartupError, splitRequestedApp } from "./cli";
 import { CompanionOwner, type CompanionLike } from "./companion-owner";
 import { CompanionSession } from "./companion-session";
 import { dumpActivities, landedOnPhoneScreen, popOutCurrent } from "./current-app";
@@ -285,6 +285,7 @@ function electronNotice(): (text: string) => void {
 async function runMode(opts: RunOptions): Promise<void> {
   if (opts.userData) app.setPath("userData", opts.userData);
   if (!holdSingleInstance(opts.app)) return;
+  const { app: startApp, rejected: rejectedApp } = splitRequestedApp(opts.app);
   await app.whenReady();
   // Toasts on Windows are grouped and actioned by AppUserModelId; without a
   // matching one set explicitly, an installed, portable and unpacked build
@@ -303,7 +304,7 @@ async function runMode(opts: RunOptions): Promise<void> {
       placement?.moved();
       workAreaChanged();
     },
-    showWhenReady: opts.app === null,
+    showWhenReady: startApp === null,
     onQuit: () => quitHinge(),
   });
   const earlyLaunches: (string | null)[] = [];
@@ -328,7 +329,7 @@ async function runMode(opts: RunOptions): Promise<void> {
   });
   placement.preApply(settings.current.lastDevice);
 
-  const phoneHooks: PhoneHooks = { mainVideo: opts.app === null, showMain: () => {}, onPhone: () => {}, clipboardPush: () => 0n };
+  const phoneHooks: PhoneHooks = { mainVideo: startApp === null, showMain: () => {}, onPhone: () => {}, clipboardPush: () => 0n };
   let built: BuiltSource;
   try {
     built = await buildSource(opts, settings, logger.log, win, phoneHooks);
@@ -419,8 +420,10 @@ async function runMode(opts: RunOptions): Promise<void> {
       companionWanted: (on) => companion?.wanted(on),
       popouts,
       quit: () => quitHinge(),
+      notice,
+      log: logger.log,
     },
-    { startHidden: opts.app !== null },
+    { startHidden: startApp !== null },
   );
   phoneHooks.showMain = () => shell.showMain();
 
@@ -460,7 +463,8 @@ async function runMode(opts: RunOptions): Promise<void> {
 
   if (built.replayPhone) popouts.setPhone(built.replayPhone);
   shell.start();
-  if (opts.app) popouts.open(opts.app);
+  if (startApp) popouts.open(startApp);
+  if (rejectedApp) shell.launch(rejectedApp);
   for (const requested of earlyLaunches.splice(0)) shell.launch(requested);
 
   win.on("closed", () => {

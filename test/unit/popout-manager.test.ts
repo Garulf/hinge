@@ -248,6 +248,16 @@ test("opening the same app again before anything resolves focuses its window", (
   expect(windows[0].focusCalls).toBe(1);
 });
 
+test("a name that is not an app package opens nothing and is only logged", () => {
+  const { manager, windows, sessions, logs } = harness();
+  manager.setPhone(fold());
+
+  expect(manager.open("x;reboot")).toBe("invalid");
+  expect(windows).toHaveLength(0);
+  expect(sessions).toHaveLength(0);
+  expect(logs.some((l) => l.includes("x;reboot"))).toBe(true);
+});
+
 test("a fifth app is refused with a notice", () => {
   const { manager, windows, notices } = harness();
   manager.setPhone(fold());

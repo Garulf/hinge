@@ -12,6 +12,8 @@ import { FlatInput, videoRectIn, type VideoRect } from "./flat-input";
 /** Holds the latest decoded frame, closing the one it replaces, so a resize or a status can redraw it. */
 class LatestFrame implements FrameTarget {
   disposed = false;
+  /** Every frame of the window's life, across streams. */
+  received = 0;
   #frame: VideoFrame | null = null;
 
   constructor(private readonly changed: () => void) {}
@@ -23,6 +25,7 @@ class LatestFrame implements FrameTarget {
   setFrame(frame: VideoFrame): void {
     this.#frame?.close();
     this.#frame = frame;
+    this.received++;
     this.changed();
   }
 
@@ -182,7 +185,7 @@ void receivePort().then((port) => {
 
 (window as unknown as { __hingePopout: unknown }).__hingePopout = {
   get framesDecoded() {
-    return pipe.stats().framesDecoded;
+    return frames.received;
   },
   get videoSize() {
     return videoSize;

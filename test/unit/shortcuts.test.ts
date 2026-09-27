@@ -88,7 +88,7 @@ test("hinge actions: f g w q i z Shift+z d, and F11 without MOD", () => {
     ["KeyI", false, "toggle-fps"],
     ["KeyZ", false, "pause"],
     ["KeyZ", true, "unpause"],
-    ["KeyD", false, "toggle-view"],
+    ["KeyD", false, "center"],
   ];
   for (const [code, shiftKey, action] of cases) {
     const { feed } = handler();

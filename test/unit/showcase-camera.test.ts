@@ -1,5 +1,6 @@
+import * as THREE from "three";
 import { expect, test } from "vitest";
-import { blendedCamera, SHOWCASE_LIMITS, SHOWCASE_REST, type Vec3 } from "../../src/shared/showcase-camera";
+import { blendedCamera, showcaseReach, type Vec3 } from "../../src/shared/showcase-camera";
 
 const deg = (d: number) => (d * Math.PI) / 180;
 
@@ -14,19 +15,13 @@ const BASE = {
   workCentre: { x: 0, y: 0, z: 0 },
   workHalfHeight: HALF.y,
   subject: SUBJECT,
-  yawDeg: SHOWCASE_REST.yaw,
-  pitchDeg: SHOWCASE_REST.pitch,
 };
 
 function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
-test("the showcase rest pose is straight on: yaw and pitch both 0", () => {
-  expect(SHOWCASE_REST).toEqual({ yaw: 0, pitch: 0 });
-});
-
-test("at rest the showcase camera looks straight down the work view's centre at the phone's depth, offset along +Z with no yaw or pitch", () => {
+test("at t 1 the camera looks straight down the work view's centre at the phone's depth, offset along +Z", () => {
   const rig = blendedCamera({ ...BASE, t: 1 });
   expect(rig.position.x).toBeCloseTo(BASE.workCentre.x, 9);
   expect(rig.position.y).toBeCloseTo(BASE.workCentre.y, 9);
@@ -78,34 +73,50 @@ test("in fullscreen, with room to spare, the showcase still keeps the work view'
   expect((rig.position.z - SUBJECT.max.z) * Math.tan(deg(9))).toBeCloseTo(0.2, 12);
 });
 
-test("an orbit swings the camera around the phone at the rest distance, so the phone never shrinks or grows", () => {
-  const rest = blendedCamera({ ...BASE, t: 1 });
-  const restDistance = distance(rest.position, rest.target);
-  for (const yaw of [SHOWCASE_LIMITS.yaw[0], -30, 30, SHOWCASE_LIMITS.yaw[1]]) {
-    for (const pitch of [SHOWCASE_LIMITS.pitch[0], 0, 20, SHOWCASE_LIMITS.pitch[1]]) {
-      const rig = blendedCamera({ ...BASE, t: 1, yawDeg: yaw, pitchDeg: pitch });
-      const d = distance(rig.position, rig.target);
-      expect(d).toBeCloseTo(restDistance, 12);
-      expect(rig.fovDeg).toBe(rest.fovDeg);
-      expect((rig.position.x - rig.target.x) / d).toBeCloseTo(Math.sin(deg(yaw)) * Math.cos(deg(pitch)), 9);
-      expect((rig.position.y - rig.target.y) / d).toBeCloseTo(Math.sin(deg(pitch)), 9);
-      expect((rig.position.z - rig.target.z) / d).toBeCloseTo(Math.cos(deg(yaw)) * Math.cos(deg(pitch)), 9);
-      expect(rig.near).toBeLessThan(d - 0.2);
-      expect(rig.far).toBeGreaterThan(d + 0.2);
-    }
+test("the camera moves smoothly across the blend: no step between close values of t is a jump", () => {
+  let previous = blendedCamera({ ...BASE, t: 0.001 });
+  for (let i = 2; i <= 1000; i++) {
+    const rig = blendedCamera({ ...BASE, t: i / 1000 });
+    const previousSpan = distance(previous.position, previous.target) * Math.tan(deg(previous.fovDeg) / 2);
+    const span = distance(rig.position, rig.target) * Math.tan(deg(rig.fovDeg) / 2);
+    expect(Math.abs(span - previousSpan)).toBeLessThan(0.001);
+    expect(distance(rig.target, previous.target)).toBeLessThan(0.001);
+    previous = rig;
   }
 });
 
-test("the camera moves smoothly across the blend: no step between close values of t is a jump", () => {
-  for (const orbit of [{ yawDeg: 0, pitchDeg: 0 }, { yawDeg: 50, pitchDeg: -10 }]) {
-    let previous = blendedCamera({ ...BASE, ...orbit, t: 0.001 });
-    for (let i = 2; i <= 1000; i++) {
-      const rig = blendedCamera({ ...BASE, ...orbit, t: i / 1000 });
-      const previousSpan = distance(previous.position, previous.target) * Math.tan(deg(previous.fovDeg) / 2);
-      const span = distance(rig.position, rig.target) * Math.tan(deg(rig.fovDeg) / 2);
-      expect(Math.abs(span - previousSpan)).toBeLessThan(0.001);
-      expect(distance(rig.target, previous.target)).toBeLessThan(0.001);
-      previous = rig;
+function furthestTurnedCorner(workCentre: Vec3): number {
+  const aspect = 1.1;
+  const corners = [0, 1, 2, 3, 4, 5, 6, 7].map(
+    (i) => new THREE.Vector3(i & 1 ? SUBJECT.max.x : SUBJECT.min.x, i & 2 ? SUBJECT.max.y : SUBJECT.min.y, i & 4 ? SUBJECT.max.z : SUBJECT.min.z),
+  );
+  const centre = new THREE.Vector3(CENTRE.x, CENTRE.y, CENTRE.z);
+  const rig = blendedCamera({ ...BASE, workCentre, t: 1 });
+  const camera = new THREE.PerspectiveCamera(rig.fovDeg, aspect, rig.near, rig.far);
+  camera.position.set(rig.position.x, rig.position.y, rig.position.z);
+  camera.lookAt(rig.target.x, rig.target.y, rig.target.z);
+  camera.updateMatrixWorld();
+  let furthest = 0;
+  for (let yaw = -180; yaw < 180; yaw += 5) {
+    for (let pitch = -60; pitch <= 60; pitch += 5) {
+      const turn = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(deg(-pitch), deg(yaw), 0, "XYZ"));
+      for (const corner of corners) {
+        const ndc = corner.clone().sub(centre).applyMatrix4(turn).add(centre).project(camera);
+        furthest = Math.max(furthest, Math.abs(ndc.x) * aspect * BASE.workHalfHeight, Math.abs(ndc.y) * BASE.workHalfHeight);
+      }
     }
   }
+  return furthest;
+}
+
+test("the showcase's reach bounds every corner of the phone however it is turned, and a turn can come close to it", () => {
+  const reach = showcaseReach(SUBJECT, CENTRE, BASE.workHalfHeight);
+  const furthest = furthestTurnedCorner(CENTRE);
+  expect(furthest).toBeLessThanOrEqual(reach);
+  expect(furthest).toBeGreaterThan(0.95 * reach);
+});
+
+test("mid-fold, with the phone's centre off the work view's, the showcase's reach still bounds every turned corner", () => {
+  expect(furthestTurnedCorner(BASE.workCentre)).toBeLessThanOrEqual(showcaseReach(SUBJECT, BASE.workCentre, BASE.workHalfHeight));
+  expect(showcaseReach(SUBJECT, BASE.workCentre, BASE.workHalfHeight)).toBeGreaterThan(showcaseReach(SUBJECT, CENTRE, BASE.workHalfHeight));
 });

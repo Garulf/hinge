@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { clampModelAngles, MODEL_REST, ModelRotation, RotateGesture } from "../../src/shared/model-rotation";
+import { clampModelAngles, FULL_LOOK_DEG, MODEL_REST, ModelRotation, offAxisDeg, RotateGesture, turnBlend } from "../../src/shared/model-rotation";
 
 test("the angle follows the pointer's offset from the press point at 0.3 degrees per pixel, up tilting the top away", () => {
   const gesture = new RotateGesture();
@@ -187,4 +187,34 @@ test("another kind of press between two Alt clicks breaks the double click", () 
   gesture.otherPress();
   gesture.press({ x: 0, y: 0 }, MODEL_REST, 100);
   expect(gesture.release({ x: 0, y: 0 }, 120)).toBe("keep");
+});
+
+test("the blend is exactly 0 straight on and 1 from the full look's angle", () => {
+  expect(turnBlend({ yaw: 0, pitch: 0 })).toBe(0);
+  expect(turnBlend({ yaw: FULL_LOOK_DEG, pitch: 0 })).toBe(1);
+  expect(turnBlend({ yaw: 180, pitch: 0 })).toBe(1);
+  expect(turnBlend({ yaw: 0, pitch: -FULL_LOOK_DEG / 2 })).toBeCloseTo(0.5, 9);
+});
+
+test("the blend eases in, so the first degree of a turn hardly changes the look", () => {
+  expect(turnBlend({ yaw: 0.3, pitch: 0 })).toBeLessThan(0.001);
+  let previous = 0;
+  for (let deg = 0.5; deg <= 40; deg += 0.5) {
+    const t = turnBlend({ yaw: deg, pitch: 0 });
+    expect(t).toBeGreaterThanOrEqual(previous);
+    expect(t - previous).toBeLessThan(0.05);
+    previous = t;
+  }
+});
+
+test("off axis combines yaw and pitch into the angle between the screen's normal and the view", () => {
+  expect(offAxisDeg({ yaw: 60, pitch: 0 })).toBeCloseTo(60, 9);
+  expect(offAxisDeg({ yaw: 0, pitch: -45 })).toBeCloseTo(45, 9);
+  expect(offAxisDeg({ yaw: 180, pitch: 0 })).toBeCloseTo(180, 9);
+  expect(offAxisDeg({ yaw: 60, pitch: 60 })).toBeCloseTo((Math.acos(0.25) * 180) / Math.PI, 9);
+});
+
+test("the smallest turn off rest still moves the look off the work view", () => {
+  expect(turnBlend({ yaw: 1e-6, pitch: 0 })).toBeGreaterThan(0);
+  expect(turnBlend({ yaw: 0, pitch: 1e-6 })).toBeGreaterThan(0);
 });

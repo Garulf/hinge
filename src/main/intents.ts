@@ -1,3 +1,5 @@
+import type { Adb } from "@yume-chan/adb";
+import { runShellText } from "./adb-shell";
 import type { ControlIntent, TouchAction } from "../shared/wire";
 
 export interface ControllerLike {
@@ -115,5 +117,28 @@ export function applyIntent(c: ControllerLike, intent: ControlIntent, deps?: App
         await c.setClipboard({ content, sequence, paste: true });
       })();
     }
+  }
+}
+
+export interface LaunchAppDeps {
+  runShell?: (adb: Adb, command: string) => Promise<string>;
+}
+
+/** The component name resolve-activity --brief prints is its last non-empty line; earlier lines (if any) are match diagnostics. */
+function lastNonEmptyLine(text: string): string | null {
+  const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  return lines.length > 0 ? lines[lines.length - 1] : null;
+}
+
+/** Resolves pkg's launcher activity on the phone and starts it there. A failure to resolve or start is logged, never thrown at the caller. */
+export async function launchAppOnPhone(adb: Adb, pkg: string, log: (line: string) => void, deps: LaunchAppDeps = {}): Promise<void> {
+  const runShell = deps.runShell ?? runShellText;
+  try {
+    const resolved = await runShell(adb, `cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER ${pkg}`);
+    const component = lastNonEmptyLine(resolved);
+    if (!component || !component.includes("/")) throw new Error(`could not resolve a launcher activity for ${pkg}`);
+    await runShell(adb, `am start -n ${component}`);
+  } catch (e) {
+    log(`could not launch ${pkg} on the phone: ${String(e)}`);
   }
 }

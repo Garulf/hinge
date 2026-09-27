@@ -3,7 +3,7 @@ import type { ModifierKey, ModifierTracker } from "./modifiers";
 import type { ControlIntent } from "./wire";
 
 export type HingeAction =
-  | "toggle-view"
+  | "center"
   | "fullscreen"
   | "pixel-perfect"
   | "fit"
@@ -74,7 +74,7 @@ export const SHORTCUT_TABLE: Record<string, { plain?: Binding; shift?: Binding }
   KeyI: { plain: action("toggle-fps") },
   KeyQ: { plain: action("quit") },
   KeyZ: { plain: action("pause"), shift: action("unpause") },
-  KeyD: { plain: action("toggle-view") },
+  KeyD: { plain: action("center") },
 };
 
 function bindingFor(code: string, shift: boolean): Binding | undefined {

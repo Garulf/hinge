@@ -148,12 +148,19 @@ export type FoldMonitorStarter = (
   log: (line: string) => void,
 ) => Promise<() => Promise<void>>;
 
+/** Same shape as notification-mirror.ts's startNotificationMirror, already bound to its own settings/notifier/window deps by the caller. */
+export type NotificationMirrorStarter = (
+  adb: Adb,
+  log: (line: string) => void,
+) => Promise<() => Promise<void>>;
+
 export class DeviceSource implements MediaSource {
   #sink: MediaSink | null = null;
   #dispose: (() => Promise<void>) | null = null;
   #session: MediaSource | null = null;
   #sessionSerial: string | null = null;
   #stopPosture: (() => Promise<void>) | null = null;
+  #stopNotifications: (() => Promise<void>) | null = null;
   #reconnecting = false;
   #reconnectAbort: AbortController | null = null;
   #lastDevices: DeviceSummary[] = [];
@@ -185,6 +192,8 @@ export class DeviceSource implements MediaSource {
       recordSink?: (sink: MediaSink) => MediaSink;
       /** Started for every connected live session (not only while recording) and stopped with it. */
       foldMonitor?: FoldMonitorStarter;
+      /** Started for every connected live session, alongside foldMonitor; the closure itself decides whether mirroring is on. */
+      notificationMirror?: NotificationMirrorStarter;
       /** Absent in contexts with no adb server access (e.g. replay): TCP reconnect and device-panel commands are then both unavailable. */
       wireless?: WirelessDeps;
       /** Fired with the phone's identity whenever a device is chosen to connect to (automatic pick or chooseDevice()), so the caller can remember it as the last device. */
@@ -357,6 +366,7 @@ export class DeviceSource implements MediaSource {
     this.#session = null;
     this.#sessionSerial = null;
     await this.#stopPostureSampler();
+    await this.#stopNotificationMirrorSampler();
     await session?.stop();
     await this.#dispose?.().catch(() => {});
     this.#dispose = null;
@@ -506,12 +516,19 @@ export class DeviceSource implements MediaSource {
     this.#session = null;
     this.#sessionSerial = null;
     void this.#stopPostureSampler();
+    void this.#stopNotificationMirrorSampler();
     if (session) void session.stop();
   }
 
   async #stopPostureSampler(): Promise<void> {
     const stop = this.#stopPosture;
     this.#stopPosture = null;
+    await stop?.().catch(() => {});
+  }
+
+  async #stopNotificationMirrorSampler(): Promise<void> {
+    const stop = this.#stopNotifications;
+    this.#stopNotifications = null;
     await stop?.().catch(() => {});
   }
 
@@ -557,6 +574,7 @@ export class DeviceSource implements MediaSource {
       if (this.#stopped || this.#runToken !== run) return;
 
       if (this.opts.foldMonitor) void this.#startFoldMonitor(run, adb, sink);
+      if (this.opts.notificationMirror) void this.#startNotificationMirror(run, adb);
 
       const session = this.opts.createSession(device, adb, id);
       this.#session = session;
@@ -588,6 +606,22 @@ export class DeviceSource implements MediaSource {
     this.#stopPosture = stop;
   }
 
+  /** Same shape as #startFoldMonitor: started without being awaited, its stop function only published once this run is still current. */
+  async #startNotificationMirror(run: number, adb: Adb): Promise<void> {
+    let stop: (() => Promise<void>) | null = null;
+    try {
+      stop = await this.opts.notificationMirror!(adb, this.opts.log ?? (() => {}));
+    } catch (e) {
+      this.opts.log?.(`notification mirror failed to start: ${String(e)}`);
+      return;
+    }
+    if (this.#stopped || this.#runToken !== run) {
+      await stop().catch(() => {});
+      return;
+    }
+    this.#stopNotifications = stop;
+  }
+
   /**
    * Matched against the session object, not the device serial: a session
    * that was already superseded by a newer one on the identical serial (a
@@ -600,6 +634,7 @@ export class DeviceSource implements MediaSource {
     this.#session = null;
     this.#sessionSerial = null;
     void this.#stopPostureSampler();
+    void this.#stopNotificationMirrorSampler();
     void session.stop();
     if (streamed) {
       this.#sessionRetryAttempt = 0;

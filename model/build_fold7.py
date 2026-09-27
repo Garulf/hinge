@@ -32,9 +32,9 @@ PROFILE_ROUND_SEGMENTS = 5
 SCREEN_GRID_STEP_MM = 2.5
 CREASE_LOOP_COUNT = 24
 HINGE_FILL_HALF_WIDTH_MM = 3.5
-HINGE_FILL_BOTTOM_MM = 4.0
-HINGE_FILL_TOP_MM = 4.06
-DISPLAY_PANEL_HEIGHT_MM = 3.95
+HINGE_FILL_CLEARANCE_MM = 0.06
+HINGE_FILL_THICKNESS_MM = 0.06
+DISPLAY_PANEL_BELOW_FILL_MM = 0.05
 DISPLAY_PANEL_MARGIN_MM = 1.6
 SMOOTH_ANGLE_DEG = 40.0
 LENS_SEGMENTS = 128
@@ -298,13 +298,25 @@ def build_back_glass(phone):
     return mesh_object("BackGlass", bm, slots, phone.fixed_half)
 
 
+def inner_screen_height_mm():
+    return P.spec.body_open_thickness_mm - P.est.inner_screen_recess_mm
+
+
+def hinge_fill_top_mm():
+    return inner_screen_height_mm() - P.spec.crease_depth_mm - HINGE_FILL_CLEARANCE_MM
+
+
+def hinge_fill_bottom_mm():
+    return hinge_fill_top_mm() - HINGE_FILL_THICKNESS_MM
+
+
 def build_display_panel(phone, side):
     margin = DISPLAY_PANEL_MARGIN_MM
     outer = P.half_width_mm - margin
     inner = HINGE_FILL_HALF_WIDTH_MM - 0.2
     u0, u1 = (inner, outer) if side > 0 else (-outer, -inner)
     v0, v1 = -P.half_height_mm + margin, P.half_height_mm - margin
-    z = DISPLAY_PANEL_HEIGHT_MM
+    z = hinge_fill_bottom_mm() - DISPLAY_PANEL_BELOW_FILL_MM
     bm = bmesh.new()
     verts = [bm.verts.new(phone_to_blender(u, v, z)) for u, v in ((u0, v0), (u1, v0), (u1, v1), (u0, v1))]
     bm.faces.new(verts)
@@ -324,6 +336,19 @@ def crease_loop_positions():
 def cover_weight(x_mm):
     half_band = P.spec.crease_band_width_mm / 2
     return smoothstep((half_band - x_mm) / (2 * half_band))
+
+
+def crease_dip_mm(x_mm):
+    half_band = P.spec.crease_band_width_mm / 2
+    if abs(x_mm) >= half_band:
+        return 0.0
+    return P.spec.crease_depth_mm * (1.0 + math.cos(math.pi * x_mm / half_band)) / 2
+
+
+def press_crease(bm):
+    for vert in bm.verts:
+        x, y, z = blender_to_phone(vert.co)
+        vert.co = phone_to_blender(x, y, z - crease_dip_mm(x))
 
 
 def screen_cuts(u0, u1, v0, v1, extra_u=()):
@@ -367,9 +392,9 @@ def build_inner_screen(phone):
     slots = Slots(phone.materials, "screen_border", "screen_inner")
     bm = bmesh.new()
     cuts_u, cuts_v = screen_cuts(-half_w, half_w, -half_h, half_h, crease_loop_positions())
-    height = s.body_open_thickness_mm - e.inner_screen_recess_mm
-    screen_panel(bm, outer, active, height, PHONE_PLUS_Z_IN_BLENDER, cuts_u, cuts_v,
+    screen_panel(bm, outer, active, inner_screen_height_mm(), PHONE_PLUS_Z_IN_BLENDER, cuts_u, cuts_v,
                  slots["screen_border"], slots["screen_inner"])
+    press_crease(bm)
     obj = mesh_object("InnerScreen", bm, slots, phone.fixed_half, shading="smooth")
     assign_uvs(obj.data, lambda x, y: ((x + active_w) / (2 * active_w), (y + active_h) / (2 * active_h)))
     assign_crease_weights(obj).object = phone.rig
@@ -390,7 +415,7 @@ def build_hinge_fill(phone):
     half_w = HINGE_FILL_HALF_WIDTH_MM
     half_h = P.half_height_mm - P.est.frame_front_rim_width_mm - 0.05
     bm = bmesh.new()
-    bottom, top = HINGE_FILL_BOTTOM_MM, HINGE_FILL_TOP_MM
+    bottom, top = hinge_fill_bottom_mm(), hinge_fill_top_mm()
     corners = [(u, v) for u, v in ((-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h))]
     low = [bm.verts.new(phone_to_blender(u, v, bottom)) for u, v in corners]
     high = [bm.verts.new(phone_to_blender(u, v, top)) for u, v in corners]

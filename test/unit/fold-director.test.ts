@@ -491,7 +491,7 @@ test("posture flickering between half and open with the cover lit does not cycle
   expect(out.angle).toBe(0);
 });
 
-test("the displayed angle blends from the work angle to the true angle, so a view toggle mid-fold stays continuous", () => {
+test("the displayed angle blends from the work angle to the true angle, so turning the phone mid-fold stays continuous", () => {
   const drive = (d: FoldDirector) => {
     d.streamClass(COVER);
     d.firstFrame();
@@ -501,13 +501,14 @@ test("the displayed angle blends from the work angle to the true angle, so a vie
     d.firstFrame();
   };
   const work = new FoldDirector();
-  const showcase = new FoldDirector({ view: "showcase" });
+  const showcase = new FoldDirector();
+  showcase.setBlend(1);
   const blended = new FoldDirector();
   for (const d of [work, showcase, blended]) drive(d);
 
   for (let i = 0; i < 60; i++) {
     const blend = Math.min(1, Math.max(0, (i - 5) / 37));
-    blended.setView(blend > 0 ? "showcase" : "work", blend);
+    blended.setBlend(blend);
     const a = work.tick(16).angle;
     const b = showcase.tick(16).angle;
     const out = blended.tick(16);
@@ -519,15 +520,15 @@ test("the displayed angle blends from the work angle to the true angle, so a vie
   expect(rest.trueAngle).toBe(100);
 });
 
-test("setView without a blend shows the whole view it names", () => {
+test("a blend of 1 shows the true angle and 0 the work angle", () => {
   const director = new FoldDirector();
   director.streamClass(INNER);
   director.firstFrame();
   director.posture(reading({ posture: "half" }));
   ticks(director, 70);
-  director.setView("showcase");
+  director.setBlend(1);
   expect(director.tick(16).angle).toBe(100);
-  director.setView("work");
+  director.setBlend(0);
   expect(director.tick(16).angle).toBe(180);
 });
 

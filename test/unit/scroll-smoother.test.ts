@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { ScrollSmoother, SMALLEST_SLICE, wheelToScroll } from "../../src/shared/scroll-smoother";
+import { isWheelNotch, ScrollSmoother, SMALLEST_SLICE, wheelToScroll } from "../../src/shared/scroll-smoother";
 
 function drain(s: ScrollSmoother, smoothingMs: number, frameMs = 16): { x: number; y: number }[] {
   const slices: { x: number; y: number }[] = [];
@@ -83,4 +83,12 @@ test("clear drops everything still to come", () => {
   s.add(1, 1);
   s.clear();
   expect(s.idle).toBe(true);
+});
+
+test("isWheelNotch tells a mouse wheel's whole notches from a touchpad's fine steps", () => {
+  expect(isWheelNotch({ wheelDeltaX: 0, wheelDeltaY: -120 })).toBe(true);
+  expect(isWheelNotch({ wheelDeltaX: 240, wheelDeltaY: 0 })).toBe(true);
+  expect(isWheelNotch({ wheelDeltaX: 0, wheelDeltaY: -14 })).toBe(false);
+  expect(isWheelNotch({ wheelDeltaX: 0, wheelDeltaY: 0 })).toBe(false);
+  expect(isWheelNotch({})).toBe(true);
 });

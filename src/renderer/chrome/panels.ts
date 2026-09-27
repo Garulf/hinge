@@ -216,12 +216,17 @@ const NUMERIC_CHOICES: Record<NumericSetting, [number, string][]> = {
 };
 
 export class SettingsPanel implements Panel {
-  readonly size = { w: 300, h: 490 };
+  readonly size = { w: 300, h: 540 };
   readonly node: HTMLElement;
   readonly #deps: SettingsPanelDeps;
   readonly #modifiers = new Map<ShortcutModifier, HTMLInputElement>();
   readonly #audio = el("input", { attrs: { type: "checkbox" } });
+  readonly #mirrorNotifications = el("input", { attrs: { type: "checkbox" } });
   readonly #codec = el("select", {}, [el("option", { text: "H.264", attrs: { value: "h264" } }), el("option", { text: "H.265", attrs: { value: "h265" } })]);
+  readonly #wheelStyle = el("select", {}, [
+    el("option", { text: "Finger swipe", attrs: { value: "swipe" } }),
+    el("option", { text: "Scroll steps", attrs: { value: "events" } }),
+  ]);
   readonly #numeric = new Map<NumericSetting, HTMLSelectElement>();
   readonly #path = el("div", { className: "path" });
   #settings: Settings | null = null;
@@ -235,7 +240,9 @@ export class SettingsPanel implements Panel {
       modifierGrid.append(el("label", { className: "check" }, [box, MODIFIER_LABELS[modifier]]));
     }
     this.#audio.addEventListener("change", () => deps.save({ audio: this.#audio.checked }));
+    this.#mirrorNotifications.addEventListener("change", () => deps.save({ mirrorNotifications: this.#mirrorNotifications.checked }));
     this.#codec.addEventListener("change", () => deps.save({ videoCodec: this.#codec.value as Settings["videoCodec"] }));
+    this.#wheelStyle.addEventListener("change", () => deps.save({ wheelStyle: this.#wheelStyle.value as Settings["wheelStyle"] }));
     const numericFields = (Object.keys(NUMERIC_CHOICES) as NumericSetting[]).map((key) => {
       const select = el("select", {}, NUMERIC_CHOICES[key].map(([value, label]) => el("option", { text: label, attrs: { value: String(value) } })));
       select.addEventListener("change", () => deps.save({ [key]: Number(select.value) }));
@@ -246,6 +253,8 @@ export class SettingsPanel implements Panel {
     this.node = panelNode("Settings", [
       el("h3", { text: "Shortcut key (MOD)" }),
       modifierGrid,
+      el("h3", { text: "Notifications" }),
+      el("label", { className: "check" }, [this.#mirrorNotifications, "Mirror phone notifications"]),
       el("h3", { text: "Stream" }),
       el("label", { className: "check" }, [this.#audio, "Play phone audio on this PC"]),
       el("div", { className: "grid" }, [
@@ -257,9 +266,11 @@ export class SettingsPanel implements Panel {
       el("p", { className: "note", text: "Stream changes apply the next time the phone connects." }),
       el("h3", { text: "Mouse wheel" }),
       el("div", { className: "grid" }, [
-        el("label", { className: "field" }, [el("span", { className: "sub", text: "Smoothing" }), scrollSmoothing]),
+        el("label", { className: "field" }, [el("span", { className: "sub", text: "Scrolls with" }), this.#wheelStyle]),
         el("label", { className: "field" }, [el("span", { className: "sub", text: "Speed" }), scrollSpeed]),
+        el("label", { className: "field" }, [el("span", { className: "sub", text: "Step smoothing" }), scrollSmoothing]),
       ]),
+      el("p", { className: "note", text: "A finger swipe glides on like a flick on the phone. Scroll steps suit apps that ignore swipes; a touchpad always scrolls in steps." }),
       el("h3", { text: "Settings file" }),
       this.#path,
     ]);
@@ -274,11 +285,14 @@ export class SettingsPanel implements Panel {
     const held = normaliseModifiers(settings.shortcutModifiers);
     for (const [modifier, box] of this.#modifiers) box.checked = held.includes(modifier);
     this.#audio.checked = settings.audio;
+    this.#mirrorNotifications.checked = settings.mirrorNotifications;
     this.#codec.value = settings.videoCodec;
+    this.#wheelStyle.value = settings.wheelStyle;
     for (const [key, select] of this.#numeric) {
       const value = String(settings[key]);
       if (![...select.options].some((o) => o.value === value)) select.append(el("option", { text: value, attrs: { value } }));
       select.value = value;
+      select.disabled = key === "scrollSmoothing" && settings.wheelStyle === "swipe";
     }
   }
 

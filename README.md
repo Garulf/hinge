@@ -32,7 +32,7 @@ r37.0.1) and `scrcpy-server-v4.1` into `vendor/` (gitignored). Pass `--only win`
 
 ## Status
 
-First release candidate. The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, in a flat work view or a 3D showcase view, with touch, keyboard, scrcpy's shortcuts, clipboard sync, phone audio, file drop and Wi-Fi pairing. Builds are made locally for Windows (installer and portable exe) and Linux (AppImage and deb).
+First release candidate. The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, flat and pixel-accurate straight on and 3D when you turn it by its case, with touch, keyboard, scrcpy's shortcuts, clipboard sync, phone audio, mirrored notifications, file drop and Wi-Fi pairing. Builds are made locally for Windows (installer and portable exe) and Linux (AppImage and deb).
 
 ## Running
 
@@ -80,58 +80,49 @@ percent of the screen's height) and follows the phone as you fold it:
 - Turn the phone to landscape and the model turns with it around the
   window's centre; touches still land where you click on the video.
 
-### Showcase view
+### Moving and turning the phone
 
-MOD+d (or the View button) switches between the flat work view and a 3D
-showcase view, easing the camera over 600 ms; press it again mid-way to
-turn back from where it is. Each phone comes back in the
-view it was last in.
+Straight on, the phone is flat and pixel-accurate. Grab the case to move
+or turn it:
 
-- The showcase looks at the phone straight on at the same size as the work
-  view, lit by a studio environment with a glass reflection on the screens,
-  and the inner screen's crease catches the light. It shows the phone's real
-  posture: tented, half open or flat. The phone and the window stay exactly
-  where they were in the work view.
-- Dragging on the lit screen still touches the phone. Dragging anywhere
-  else turns the phone around; two seconds after you let go it eases back.
-- Shift+drag off the screen moves the window, since a plain drag turns the
-  phone there.
-- Pointer input on the screen and MOD+wheel scaling are paused for the
-  600 ms of the switch; keys and shortcuts still work.
-- With the display paused (MOD+z) touches stay off, but dragging off the
-  screen still turns the phone, since that never reaches it.
-- The window controls anchor to the window rather than the bezel while the
-  phone is tilted: from the first step of the switch the menu shows when
-  you hover the window's top edge and sits at its top centre, with panels
-  and notices under it. Back in the work view they return to the bezel.
-- In fullscreen the phone moves to the middle of the screen for the
-  showcase.
-- Back in the work view the camera and window are exactly as before.
+- Drag the top or bottom of the case to move the window.
+- Drag a side or a corner of the case to turn the phone: sideways spins it
+  all the way round, a full 360 degree turntable, and up or down tilts its
+  top away or toward you (up to 60 degrees either way). It follows the
+  pointer and stays where you leave it; the next drag carries on from
+  there.
+- Center (the button in the hover menu, or MOD+d) eases it back to
+  straight on. So does a double-click on a side or corner.
+- The pointer shows what a press does: a hand over the sides and corners,
+  a move cursor over the top and bottom. Pressing the screen always touches
+  the phone.
+- Hold Alt (left or right) to turn the phone from anywhere, the screen
+  included; Alt+double-click centres it. Some Linux window managers move
+  the window on Alt+drag (Xfce, and KDE depending on its settings), unless
+  you change their move modifier.
 
-### Turning the phone
+Turned away from straight on, the phone looks 3D: a perspective lens, a
+studio environment with a glass reflection on the screens, the inner
+screen's crease catching the light at steep angles, and the phone's real
+posture (tented, half open or flat). The look fades in over the first 30
+degrees of a turn, so it starts from the flat view without a jump, and
+comes back to exactly the flat view on Center.
 
-Hold Alt (left or right) and drag with the left button anywhere on the
-phone to turn it: sideways spins it all the way round, a full 360 degree
-turntable, and up or down tilts its top away or toward you (up to 60
-degrees either way). It follows the pointer while you drag and stays
-where you leave it; the next drag carries on from there. Nothing reaches
-the phone during an Alt drag, not even on the screen, and the window
-doesn't move.
-
-- Starting a turn from the work view switches straight to the showcase,
-  in the same drag, so there's always a live phone to see it turn. Going
-  back to the work view (MOD+d, or the View button) springs the turn back
-  to straight on.
-- Alt+double-click eases the turn back to straight on without changing
-  view.
+- While turned, the phone keeps its size and place. The window grows
+  evenly around it once, as the turn starts, by as much as any turn could
+  need, so it never resizes under the phone mid-turn, and shrinks back
+  once the phone is straight on again.
 - Touches on the screen still land where you click on the turned video.
-- While turned, the phone keeps its size and place, and the window grows
-  evenly around it for as long as the turn needs the room.
-- Each phone comes back turned the way you left it; a phone that was left
-  turned opens straight into the showcase rather than a turned work view.
-- Some Linux window managers move the window on Alt+drag (Xfce, and KDE
-  depending on its settings). There the drag moves the window instead of
-  turning the phone, unless you change the window manager's move modifier.
+- With the display paused (MOD+z) touches stay off, but the case still
+  turns the phone, since that never reaches it.
+- While turned, the window controls anchor to the window rather than the
+  bezel: the menu shows when you hover the window's top edge and sits at its
+  top centre, with panels and notices under it.
+- Pointer input on the screen is paused while Center eases the phone back;
+  keys and shortcuts still work.
+- Each phone comes back turned the way you left it.
+- In fullscreen the top and bottom don't move anything; turning works as
+  usual.
 
 ### Windows
 
@@ -142,8 +133,8 @@ hinge.exe --serial 10.0.0.23:5555
 hinge.exe --probe --seconds 60
 ```
 
-The window is frameless. Move the pointer to the phone's top edge for its
-controls, quit with MOD+q, or close it with Alt+F4 or from the taskbar.
+The window is frameless. Drag the phone's top or bottom edge to move it,
+move the pointer to its top edge for its controls, quit with MOD+q, or close it with Alt+F4 or from the taskbar.
 Starting hinge again while it runs brings the open window to the front.
 
 ### Window controls
@@ -155,12 +146,12 @@ shade from the top still works):
 - **Devices** lists the phones adb can see (USB, Wi-Fi and mDNS), lets you
   switch to another one, switch a USB phone to Wi-Fi, disconnect a Wi-Fi
   phone, or pair a new one.
-- **View** switches between the flat work view and the 3D view (MOD+d).
+- **Center** turns the phone back to straight on (MOD+d).
 - **Colour** picks the model's colourway: Jet Black, Blue Shadow, Silver
   Shadow or Mint.
 - **Pin** keeps the window above other windows.
-- **Settings** has the shortcut modifier, phone audio, the video codec,
-  bit rate, size and frame rate limits, and how smoothly and how far the
+- **Settings** has the shortcut modifier, notification mirroring, phone
+  audio, the video codec, bit rate, size and frame rate limits, and how the
   mouse wheel scrolls the phone. Stream settings apply the next time the
   phone connects.
 - **Close** quits.
@@ -169,6 +160,24 @@ Panels open inside the window (it grows while one needs the room) and close
 with Escape or a click elsewhere. Short notices appear under the phone's top
 bezel for three seconds; the Devices panel also shows pairing and connection
 errors in its own status line.
+
+### Scrolling
+
+The mouse wheel scrolls the phone with a finger swipe by default. Each burst
+of notches is one stroke that lets go while still moving, so the phone
+finishes it with its own fling, the same glide a flick on the screen gives.
+The stroke starts under the pointer but keeps clear of the screen edges, so
+it stays away from the shade and the back and home gestures.
+
+- Settings, Mouse wheel, Scrolls with: Scroll steps sends Android scroll
+  events instead, eased over the Step smoothing time. Use it for apps that
+  scroll only with a mouse wheel, or where a swipe does something else (a
+  map pans rather than zooms, a list at the top pulls to refresh).
+- Speed scales how far a notch goes in either style; one notch at 1x is
+  Android's own mouse scroll step.
+- A touchpad's small steps always go out as scroll events, straight away.
+- While the left button holds a touch down, the wheel scrolls in steps
+  rather than adding a second finger.
 
 ### Shortcuts
 
@@ -184,8 +193,8 @@ mix of left or right Alt, Super and Ctrl in Settings. The table follows
 | Screen at 1:1 (one video pixel per display pixel) | MOD+g |
 | Shrink the window back after a panel | MOD+w |
 | Bigger or smaller, 10 percent steps | MOD+wheel |
-| Work view or 3D view | MOD+d |
-| Turn the phone model, or turn it back | Alt+drag, Alt+double-click |
+| Turn the phone back to straight on | MOD+d |
+| Turn the phone model from anywhere, or centre it | Alt+drag, Alt+double-click |
 | Pause display, or resume | MOD+z, MOD+Shift+z |
 | Reset video capture | MOD+Shift+r |
 | HOME | MOD+h or middle click |
@@ -218,6 +227,14 @@ Phones on Android 11 or newer play their audio through the PC. If the phone
 can't share audio, hinge says so once and carries on without it; if the
 audio stops partway while the video goes on, a notice says that too. Turn
 it off in Settings.
+
+### Notifications
+
+While the phone is streaming, its notifications appear on the PC too:
+ongoing, foreground-service, group-summary and below-default-importance
+ones are left out, and nothing pops while the hinge window is focused.
+Clicking one brings hinge to the front and opens the app on the phone.
+Turn it off in Settings.
 
 ### Files
 
@@ -256,9 +273,8 @@ path. A file that can't be read is kept as `settings.json.bad` and defaults
 are used, and a single setting with a wrong value falls back to its
 default on its own. Besides the panel's options it holds the colourway,
 the last phone, and for each phone (by serial number) the window's
-position, the size you picked, the view (work or 3D) it was last in and
-how the model was turned. The last phone's position, size, view and turn
-are applied at startup, before it connects.
+position, the size you picked and how the model was turned. The last
+phone's position, size and turn are applied at startup, before it connects.
 
 ## Development commands
 

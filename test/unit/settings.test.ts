@@ -157,7 +157,6 @@ test("each field of a loaded file is checked on its own: a wrong type falls back
     maxFps: 60,
     shortcutModifiers: ["rctrl"],
     alwaysOnTop: true,
-    view: "showcase",
     devices: { A: { pxPerMm: 5, rotation: { yaw: 0, pitch: 0 } } },
   });
   expect(existsSync(`${path}.bad`)).toBe(false);
@@ -176,12 +175,13 @@ test("a version 1 file migrates: the stale shortcutModifier key goes, and serial
     }),
   );
   const store = await loadSettings(path, { platform: "linux" });
-  expect(store.current.version).toBe(3);
+  expect(store.current.version).toBe(4);
   expect(store.current).not.toHaveProperty("shortcutModifier");
   expect(store.current.shortcutModifiers).toEqual(["lalt", "lsuper"]);
   expect(store.current.devices).toEqual({});
-  expect(store.current.legacyDevices).toEqual({ "10.0.0.5:41234": { pxPerMm: 6, view: "showcase" } });
+  expect(store.current.legacyDevices).toEqual({ "10.0.0.5:41234": { pxPerMm: 6 } });
   expect(store.current.lastDevice).toBe("10.0.0.5:41234");
+  expect(store.current.mirrorNotifications).toBe(true);
 });
 
 test("on Windows the migration swaps the old default left Alt + left Super for the new left Alt default, but keeps a custom choice", async () => {
@@ -205,12 +205,12 @@ test("adoptTransport moves a serial-keyed entry and a serial lastDevice over to 
   store.onChange((s) => seen.push(s));
 
   await store.adoptTransport("10.0.0.5:41234", "R5CY");
-  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6, view: "showcase" } });
+  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6 } });
   expect(store.current.lastDevice).toBe("R5CY");
   expect(store.current.legacyDevices).toEqual({ "adb-R5CY-x._adb-tls-connect._tcp": { windowPosition: { x: 1, y: 2 } }, OTHER: { pxPerMm: 3 } });
 
   await store.adoptTransport("adb-R5CY-x._adb-tls-connect._tcp", "R5CY");
-  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6, view: "showcase", windowPosition: { x: 1, y: 2 } } });
+  expect(store.current.devices).toEqual({ R5CY: { pxPerMm: 6, windowPosition: { x: 1, y: 2 } } });
   expect(store.current.legacyDevices).toEqual({ OTHER: { pxPerMm: 3 } });
 
   await store.adoptTransport("OTHER", "OTHER");
@@ -220,22 +220,22 @@ test("adoptTransport moves a serial-keyed entry and a serial lastDevice over to 
 
   await store.adoptTransport("10.0.0.5:41234", "R5CY");
   expect(seen).toHaveLength(3);
-  expect(JSON.parse(readFileSync(path, "utf8")).devices.R5CY).toEqual({ pxPerMm: 6, view: "showcase", windowPosition: { x: 1, y: 2 } });
+  expect(JSON.parse(readFileSync(path, "utf8")).devices.R5CY).toEqual({ pxPerMm: 6, windowPosition: { x: 1, y: 2 } });
 });
 
 test("the identity's own saved values win over an adopted serial-keyed entry", async () => {
   writeFileSync(path, JSON.stringify({ version: 2, devices: { R5CY: { pxPerMm: 9 } }, legacyDevices: { "10.0.0.5:5555": { pxPerMm: 6, view: "showcase" } } }));
   const store = await loadSettings(path);
   await store.adoptTransport("10.0.0.5:5555", "R5CY");
-  expect(store.current.devices.R5CY).toEqual({ pxPerMm: 9, view: "showcase", rotation: { yaw: 0, pitch: 0 } });
+  expect(store.current.devices.R5CY).toEqual({ pxPerMm: 9, rotation: { yaw: 0, pitch: 0 } });
 });
 
 test("a version 2 file migrates to 3: every phone gets the model's turn at rest", async () => {
   writeFileSync(path, JSON.stringify({ version: 2, devices: { R5CY: { pxPerMm: 9, view: "showcase" }, OTHER: {} } }));
   const store = await loadSettings(path);
-  expect(store.current.version).toBe(3);
+  expect(store.current.version).toBe(4);
   expect(store.current.devices).toEqual({
-    R5CY: { pxPerMm: 9, view: "showcase", rotation: { yaw: 0, pitch: 0 } },
+    R5CY: { pxPerMm: 9, rotation: { yaw: 0, pitch: 0 } },
     OTHER: { rotation: { yaw: 0, pitch: 0 } },
   });
 });
@@ -264,6 +264,20 @@ test("a saved turn round-trips; an out-of-range one wraps yaw and clamps pitch, 
     JSON.stringify({ version: 3, devices: { A: { rotation: { yaw: 400, pitch: -90 } }, B: { rotation: { yaw: "1", pitch: 0 } }, C: { rotation: 5 } } }),
   );
   expect((await loadSettings(path)).current.devices).toEqual({ A: { rotation: { yaw: 40, pitch: -60 } }, B: {}, C: {} });
+});
+
+test("a version 3 file migrates to 4: notification mirroring defaults on", async () => {
+  writeFileSync(path, JSON.stringify({ version: 3, colourway: "Silver", devices: {} }));
+  const store = await loadSettings(path);
+  expect(store.current.version).toBe(4);
+  expect(store.current.mirrorNotifications).toBe(true);
+});
+
+test("mirrorNotifications can be turned off and round-trips", async () => {
+  const store = await loadSettings(path);
+  expect(store.current.mirrorNotifications).toBe(true);
+  await store.save({ mirrorNotifications: false });
+  expect((await loadSettings(path)).current.mirrorNotifications).toBe(false);
 });
 
 test("a rename that fails with EPERM or EBUSY (a virus scanner holding the file on Windows) is retried up to 3 times", async () => {

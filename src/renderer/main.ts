@@ -4,10 +4,10 @@ import { DecodeRecovery } from "../shared/decode-recovery";
 import { bodyIsOpen, FoldDirector, type DirectorOutput } from "../shared/fold-director";
 import { classifyScreen, type ScreenClass } from "../shared/fold7";
 import { bodySizePx, deviceAlignedPad, deviceAlignedSize, FOLD7_BODY, NO_PAD, unionSize } from "../shared/layout";
-import { MODEL_REST } from "../shared/model-rotation";
 import type { Rotation } from "../shared/screen-uv";
-import { startupDevice, type DeviceSettings, type Settings } from "../shared/settings";
+import { startupDevice, type Settings } from "../shared/settings";
 import { defaultModifiers, normaliseModifiers, type HingeAction } from "../shared/shortcuts";
+import { TurnRoom } from "../shared/turn-room";
 import { WindowSizer } from "../shared/window-sizer";
 import type { MainToRenderer, SessionStatus } from "../shared/wire";
 import { AudioPipe } from "./audio-pipe";
@@ -23,20 +23,7 @@ import { PortClient, receivePort } from "./port-client";
 import { ScaleController } from "./scale-controller";
 import { RotationMemory } from "./rotation-memory";
 import { PhoneScene, type ViewState } from "./scene/phone-scene";
-import { ViewMemory } from "./view-memory";
 import { VideoPipe } from "./video-pipe";
-
-/**
- * The view a phone's saved settings open in: a saved turn that is not
- * front-facing always opens in the showcase, never a turned phone in the
- * work view; otherwise the phone's own saved view (or undefined, which
- * ViewMemory reads as "keep whatever is on screen").
- */
-function viewForDevice(saved: DeviceSettings | undefined): "work" | "showcase" | undefined {
-  const rotation = saved?.rotation;
-  if (rotation && (rotation.yaw !== MODEL_REST.yaw || rotation.pitch !== MODEL_REST.pitch)) return "showcase";
-  return saved?.view;
-}
 
 function statusText(status: SessionStatus): string | null {
   switch (status.state) {
@@ -63,12 +50,12 @@ async function loadModel(): Promise<ArrayBuffer> {
 }
 
 const director = new FoldDirector({
-  view: "work",
   requestFrames: () => client?.send({ kind: "control", intent: { type: "reset-video" } }),
 });
 const windowSizer = new WindowSizer((size, rotation, pad) => window.hinge.setWindowSize(size.w, size.h, rotation, pad), {
   nudgeLostResizes: window.hinge.platform === "linux",
 });
+const heldRoom = new TurnRoom();
 const decodeRecovery = new DecodeRecovery();
 const colourways = colourwayFile as ColourwayFile;
 let cls: ScreenClass | null = null;
@@ -101,12 +88,12 @@ function logPhase(out: DirectorOutput, rotation: Rotation): void {
 }
 
 /**
- * In fullscreen the window is the whole screen, so in the work view the
- * canvas (still anchored to the fixed half's edge) is placed within a stage
- * the size of the body, centred on the screen; a transformed stage is what
- * position: fixed inside it resolves against. The showcase frames the phone
- * in the middle of the canvas, so there the stage grows with the view blend
- * until it covers the whole window.
+ * In fullscreen the window is the whole screen, so straight on the canvas
+ * (still anchored to the fixed half's edge) is placed within a stage the
+ * size of the body, centred on the screen; a transformed stage is what
+ * position: fixed inside it resolves against. The showcase look frames the
+ * phone in the middle of the canvas, so as the phone turns the stage grows
+ * with the blend until it covers the whole window.
  */
 const stage = document.createElement("div");
 document.body.append(stage);
@@ -131,9 +118,9 @@ function fullscreenStage(body: Box, viewport: Size, view: ViewState): Box | null
 
 /**
  * The hover menu, its panels and the toasts hang off the phone's top bezel
- * in the work view. Once the showcase blend starts the phone is tilted and
- * moving, so the chrome anchors to the window instead: the menu at the top
- * centre, over a band the depth of the work view's menu zone.
+ * straight on. Once the phone turns it is tilted and moving, so the chrome
+ * anchors to the window instead: the menu at the top centre, over a band
+ * the depth of the work view's menu zone.
  */
 function chromeAnchor(body: Box, viewport: Size, bezelPx: number, view: ViewState): { body: Box; bezelPx: number } {
   if (view.t === 0) return { body, bezelPx };
@@ -163,7 +150,9 @@ function sizeWindow(out: DirectorOutput, rotation: Rotation, view: ViewState): v
   const dpr = window.devicePixelRatio;
   const work = withPanel(deviceAlignedSize(size, dpr), chrome.neededWindow(), dpr);
   const showcase = view.t > 0 || view.active;
-  windowSizer.update(work, rotation, out.settled, showcase ? deviceAlignedPad(work, scene.turnRoom(), dpr) : NO_PAD);
+  if (!showcase) heldRoom.release();
+  const room = showcase ? deviceAlignedPad(work, heldRoom.update({ need: scene.turnRoom(), straightOn: scene.straightOn() }, scene.turnReserve(), performance.now()), dpr) : NO_PAD;
+  windowSizer.update(work, rotation, out.settled, room);
   scene.setWorkSize(showcase ? windowSizer.requested : null);
 }
 
@@ -208,7 +197,6 @@ function applySettings(next: Settings): void {
   chrome.settingsChanged(next);
 }
 
-let views: ViewMemory | null = null;
 const rotations = new RotationMemory({
   angles: () => scene.modelRotation(),
   set: (angles) => scene.setModelRotation(angles),
@@ -217,8 +205,8 @@ const rotations = new RotationMemory({
 });
 
 /**
- * Held back until the settings are in, so the first phone's saved scale,
- * view and turn are known when its streaming status arrives; later settings
+ * Held back until the settings are in, so the first phone's saved scale and
+ * turn are known when its streaming status arrives; later settings
  * changes never touch them, which only change on a device change. The last
  * phone's are applied at once, so the window does not jump when it starts
  * streaming.
@@ -231,17 +219,6 @@ const settingsReady = window.hinge
     const last = loaded ? startupDevice(loaded) : null;
     if (last) scale.useDevice(last.id, last.saved.pxPerMm);
     if (last) rotations.useDevice(last.id, last.saved.rotation);
-    views = new ViewMemory(
-      {
-        apply: (view, { instant }) => scene.setView(view, { instant }),
-        save: (id, view) => {
-          void window.hinge.saveSettings({ view });
-          if (id) void window.hinge.saveDeviceSettings(id, { view });
-        },
-      },
-      viewForDevice(last?.saved) ?? loaded?.view ?? "work",
-    );
-    if (last) views.useDevice(last.id, viewForDevice(last.saved));
   });
 window.hinge.onSettings(applySettings);
 
@@ -259,7 +236,6 @@ function onStatus(status: SessionStatus): void {
   currentDeviceId = status.deviceId;
   const saved = settings?.devices[status.deviceId];
   scale.useDevice(status.deviceId, saved?.pxPerMm);
-  views?.useDevice(status.deviceId, viewForDevice(saved));
   rotations.useDevice(status.deviceId, saved?.rotation);
 }
 
@@ -325,8 +301,7 @@ function pixelPerfect(): void {
 
 function onAction(action: HingeAction): void {
   switch (action) {
-    case "toggle-view":
-      views?.toggle();
+    case "center":
       rotations.reset();
       break;
     case "quit":
@@ -367,8 +342,7 @@ const router = new InputRouter(canvas, scene, () => videoSize, (intent) => clien
   modifiers: () => normaliseModifiers(settings?.shortcutModifiers, defaultModifiers(window.hinge.platform)),
   paused: () => display.paused,
   onRotated: (outcome) => (outcome === "reset" ? rotations.reset() : rotations.turned(scene.modelRotation())),
-  onEnterShowcase: () => views?.enterShowcase(),
-  scrolling: () => ({ smoothingMs: settings?.scrollSmoothing ?? 0, speed: settings?.scrollSpeed ?? 1 }),
+  scrolling: () => ({ smoothingMs: settings?.scrollSmoothing ?? 0, speed: settings?.scrollSpeed ?? 1, style: settings?.wheelStyle ?? "swipe" }),
 });
 
 // Resolves dropped files to real paths and hands them to main, which picks install or push.
@@ -455,5 +429,6 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
   },
   phases: () => [...phases],
   streamPointAt: (x: number, y: number) => router.streamPointAt(x, y),
+  pressAt: (x: number, y: number) => router.pressAt(x, y),
   drop: (paths: string[]) => client?.send({ kind: "drop-files", paths }),
 };

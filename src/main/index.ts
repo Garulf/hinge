@@ -1,15 +1,17 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, screen } from "electron";
 import { AdbHost } from "./adb-host";
 import type { ClipboardHost } from "./clipboard-sync";
-import { bindSource, DeviceSource, type SessionFactory } from "./app-controller";
+import { bindSource, DeviceSource, type NotificationMirrorStarter, type SessionFactory } from "./app-controller";
 import { parseArgs, reportStartupError } from "./cli";
 import { createLogger, type Logger } from "./logger";
 import type { MediaSink, MediaSource } from "./media-source";
+import { launchAppOnPhone } from "./intents";
 import { resolveOutputPath } from "./output-path";
 import { createQueuedWriter } from "./queued-writer";
 import { startFoldMonitor } from "./fold-monitor";
+import { startNotificationMirror, type Notifier } from "./notification-mirror";
 import { runProbe } from "./probe";
 import { recordProgressHtml, recordResultHtml } from "./probe-window";
 import { teeToRecording } from "./recorder";
@@ -87,7 +89,17 @@ function closeRecordStream(stream: WriteStream, writer: ReturnType<typeof create
 
 type RunOptions = Extract<ReturnType<typeof parseArgs>, { mode: "run" }>;
 
-async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logger["log"]): Promise<BuiltSource> {
+function electronNotifier(): Notifier {
+  return {
+    show({ title, body }) {
+      const notification = new Notification({ title, body });
+      notification.show();
+      return { onClick: (cb) => notification.on("click", cb) };
+    },
+  };
+}
+
+async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logger["log"], win: BrowserWindow): Promise<BuiltSource> {
   if (opts.replay) {
     const replay = await ReplaySource.fromFile(opts.replay, { loop: false });
     return { source: opts.dryRunTransfers ? withDryRunTransfers(replay) : replay, closeRecording: async () => {} };
@@ -107,6 +119,17 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
     settings.save({ lastDevice: id }).catch((e) => log(`failed to save lastDevice: ${String(e)}`));
   };
   const onIdentified = (serial: string, id: string): Promise<void> => settings.adoptTransport(serial, id);
+
+  const notifier = electronNotifier();
+  const notificationMirror: NotificationMirrorStarter = (adb, mirrorLog) =>
+    startNotificationMirror(adb, {
+      enabled: () => settings.current.mirrorNotifications,
+      notifier,
+      isWindowFocused: () => win.isFocused(),
+      focusWindow: () => focusWindow(win),
+      launchApp: (pkg) => launchAppOnPhone(adb, pkg, mirrorLog),
+      log: mirrorLog,
+    });
 
   const clipboardHost: ClipboardHost = { readText: () => clipboard.readText(), writeText: (t) => clipboard.writeText(t) };
   const createSession: SessionFactory = (device, adb, deviceId) =>
@@ -128,6 +151,7 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
       log,
       createSession,
       foldMonitor: startFoldMonitor,
+      notificationMirror,
       wireless,
       onConnected,
       onIdentified,
@@ -154,6 +178,7 @@ async function buildSource(opts: RunOptions, settings: SettingsStore, log: Logge
     createSession,
     recordSink: (sink) => teeToRecording(sink, writer, Date.now, log),
     foldMonitor: startFoldMonitor,
+    notificationMirror,
     wireless,
     onConnected,
     onIdentified,
@@ -190,6 +215,10 @@ async function runMode(opts: RunOptions): Promise<void> {
   if (opts.userData) app.setPath("userData", opts.userData);
   if (!holdSingleInstance()) return;
   await app.whenReady();
+  // Toasts on Windows are grouped and actioned by AppUserModelId; without a
+  // matching one set explicitly, an installed, portable and unpacked build
+  // of the same app each gets their own default id and none of them work.
+  if (process.platform === "win32") app.setAppUserModelId("net.garulf.hinge");
   const logger = createLogger(join(app.getPath("logs"), "hinge.log"));
   const settingsPath = join(app.getPath("userData"), "settings.json");
   const settings = await loadSettings(settingsPath);
@@ -224,7 +253,7 @@ async function runMode(opts: RunOptions): Promise<void> {
   let source: MediaSource;
   let closeRecording: () => Promise<void> = async () => {};
   try {
-    const built = await buildSource(opts, settings, logger.log);
+    const built = await buildSource(opts, settings, logger.log, win);
     source = built.source;
     closeRecording = built.closeRecording;
   } catch (e) {

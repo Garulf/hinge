@@ -29,22 +29,17 @@ void main() {
  */
 const SCREEN_REFLECTION = 0.24;
 
-/** Overall strength of the inner screen's crease in the showcase; its parts are tuned relative to it. */
-export const CREASE_STRENGTH = 1;
-/** How far the valley tilts the normal at the band's steepest point. */
-const CREASE_TILT = 0.5;
-/** Video shift across the band per unit of along-u view direction, in band half-widths. */
-const CREASE_WARP = 0.6;
-/** Extra reflection along the band's middle, on top of the glass. */
-const CREASE_SHEEN = 5;
-/** Off-axis view angle, in degrees, below which the crease is invisible, as it is on the real phone seen head on. */
-const CREASE_ONSET_DEG = 40;
-/** Off-axis view angle, in degrees, at which the crease reaches full strength. */
-const CREASE_FULL_DEG = 75;
+/**
+ * How far the glass spreads a directional light's glint (GGX roughness):
+ * wide enough that the crease's few degrees of slope bend the glint, as they
+ * do on the real screen.
+ */
+const GLASS_ROUGHNESS = 0.15;
 
 const fragmentShader = /* glsl */ `
 #include <common>
 #include <cube_uv_reflection_fragment>
+#include <lights_pars_begin>
 uniform sampler2D map;
 uniform bool hasMap;
 uniform mat3 sampleMatrix;
@@ -53,9 +48,6 @@ uniform vec2 pixelSize;
 uniform float cornerRadiusPx;
 uniform vec3 punchHolePx;
 uniform float glass;
-uniform float crease;
-uniform float creaseCentreU;
-uniform float creaseHalfWidthU;
 uniform sampler2D envMap;
 varying vec2 vUv;
 varying vec3 vViewNormal;
@@ -64,11 +56,7 @@ varying vec3 vViewPosition;
 const float GLASS_F0 = 0.04;
 const float GLASS_F90 = 0.5;
 const float SCREEN_REFLECTION = ${SCREEN_REFLECTION.toFixed(4)};
-const float CREASE_TILT = ${CREASE_TILT.toFixed(4)};
-const float CREASE_WARP = ${CREASE_WARP.toFixed(4)};
-const float CREASE_SHEEN = ${CREASE_SHEEN.toFixed(4)};
-const float CREASE_ONSET_COS = ${Math.cos((CREASE_ONSET_DEG * Math.PI) / 180).toFixed(4)};
-const float CREASE_FULL_COS = ${Math.cos((CREASE_FULL_DEG * Math.PI) / 180).toFixed(4)};
+const float GLASS_ALPHA = ${(GLASS_ROUGHNESS ** 2).toFixed(6)};
 
 vec3 environmentRadiance(vec3 worldDirection) {
 #ifdef ENVMAP_TYPE_CUBE_UV
@@ -79,27 +67,33 @@ vec3 environmentRadiance(vec3 worldDirection) {
 #endif
 }
 
+float glassFresnel(float cosTheta) {
+  return GLASS_F0 + (GLASS_F90 - GLASS_F0) * pow(1.0 - saturate(cosTheta), 5.0);
+}
+
+vec3 lightGlints(vec3 viewNormal, vec3 viewDirection) {
+  vec3 glints = vec3(0.0);
+#if NUM_DIR_LIGHTS > 0
+  float a2 = GLASS_ALPHA * GLASS_ALPHA;
+  for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
+    vec3 toLight = directionalLights[i].direction;
+    vec3 halfway = normalize(toLight + viewDirection);
+    float dotNL = saturate(dot(viewNormal, toLight));
+    float dotNH = saturate(dot(viewNormal, halfway));
+    float dotLH = saturate(dot(toLight, halfway));
+    float denom = dotNH * dotNH * (a2 - 1.0) + 1.0;
+    float distribution = RECIPROCAL_PI * a2 / (denom * denom);
+    float visibility = 0.25 / max(dotLH * dotLH, 1e-4);
+    glints += directionalLights[i].color * dotNL * glassFresnel(dotLH) * distribution * visibility;
+  }
+#endif
+  return glints;
+}
+
 vec3 glassReflection(vec3 viewNormal, vec3 viewDirection) {
-  float cosTheta = clamp(dot(viewNormal, viewDirection), 0.0, 1.0);
-  float fresnel = GLASS_F0 + (GLASS_F90 - GLASS_F0) * pow(1.0 - cosTheta, 5.0);
   vec3 reflected = inverseTransformDirection(reflect(-viewDirection, viewNormal), viewMatrix);
-  return fresnel * SCREEN_REFLECTION * environmentRadiance(reflected);
-}
-
-vec3 screenTangent(vec3 normal) {
-  vec3 position = -vViewPosition;
-  vec3 dpx = dFdx(position);
-  vec3 dpy = dFdy(position);
-  vec2 dux = dFdx(vUv);
-  vec2 duy = dFdy(vUv);
-  vec3 tangent = (dpx * duy.y - dpy * dux.y) * sign(dux.x * duy.y - duy.x * dux.y);
-  tangent -= normal * dot(normal, tangent);
-  return normalize(tangent);
-}
-
-float creaseVisibility(vec3 normal, vec3 viewDirection) {
-  float cosTheta = clamp(dot(normal, viewDirection), 0.0, 1.0);
-  return 1.0 - smoothstep(CREASE_FULL_COS, CREASE_ONSET_COS, cosTheta);
+  vec3 environment = glassFresnel(dot(viewNormal, viewDirection)) * SCREEN_REFLECTION * environmentRadiance(reflected);
+  return environment + lightGlints(viewNormal, viewDirection);
 }
 
 float roundedRectDistance(vec2 p, vec2 halfSize, float radius) {
@@ -117,29 +111,16 @@ void main() {
   float inside = coverage(roundedRectDistance(px - 0.5 * pixelSize, 0.5 * pixelSize, cornerRadiusPx));
   vec3 viewDirection = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition);
   vec3 normal = normalize(vViewNormal);
-  vec2 sampleUv = vUv;
-  float band = 0.0;
-  float creaseStrength = 0.0;
-  if (crease > 0.0) {
-    vec3 tangent = screenTangent(normal);
-    creaseStrength = crease * creaseVisibility(normal, viewDirection);
-    float d = clamp((vUv.x - creaseCentreU) / creaseHalfWidthU, -1.0, 1.0);
-    float across = 1.0 - d * d;
-    band = across * across;
-    normal = normalize(normal - creaseStrength * CREASE_TILT * 4.0 * d * across * tangent);
-    sampleUv.x += creaseStrength * CREASE_WARP * creaseHalfWidthU * band * dot(viewDirection, tangent);
-  }
   vec3 color = vec3(0.0);
   if (hasMap) {
-    vec2 st = (sampleMatrix * vec3(sampleUv, 1.0)).xy;
+    vec2 st = (sampleMatrix * vec3(vUv, 1.0)).xy;
     color = texture2D(map, st).rgb;
   }
   color *= brightness;
   float hole = coverage(length(px - punchHolePx.xy) - punchHolePx.z);
   color = mix(color, vec3(0.0), hole);
-  float reflection = glass + creaseStrength * CREASE_SHEEN * band;
-  if (reflection > 0.0) {
-    vec3 linear = sRGBTransferEOTF(vec4(color, 1.0)).rgb + reflection * glassReflection(normal, viewDirection);
+  if (glass > 0.0) {
+    vec3 linear = sRGBTransferEOTF(vec4(color, 1.0)).rgb + glass * glassReflection(normal, viewDirection);
     color = sRGBTransferOETF(vec4(linear, 1.0)).rgb;
   }
   gl_FragColor = vec4(color, inside);
@@ -164,8 +145,8 @@ function cubeUvDefines(imageHeight: number): Record<(typeof CUBE_UV_DEFINE_KEYS)
  * masked to the screen's rounded corners and punch hole. three uploads video
  * textures without sRGB decoding, so the samples are already in the output's
  * sRGB encoding and pass through unconverted (brightness fades in that
- * perceptual space); only the glass reflection, which is added in linear
- * light, converts them.
+ * perceptual space); only the glass reflection (the environment and the
+ * scene's directional lights), which is added in linear light, converts them.
  */
 export class ScreenMaterial extends THREE.ShaderMaterial {
   constructor(extras: ScreenExtras) {
@@ -177,7 +158,9 @@ export class ScreenMaterial extends THREE.ShaderMaterial {
       fragmentShader,
       transparent: true,
       toneMapped: false,
+      lights: true,
       uniforms: {
+        ...THREE.UniformsUtils.clone(THREE.UniformsLib.lights),
         map: { value: null },
         hasMap: { value: false },
         sampleMatrix: { value: new THREE.Matrix3().fromArray(streamSampleMatrix(0)) },
@@ -186,9 +169,6 @@ export class ScreenMaterial extends THREE.ShaderMaterial {
         cornerRadiusPx: { value: (ru * w + rv * h) / 2 },
         punchHolePx: { value: new THREE.Vector3(holeU * w, holeV * h, holeRadiusU * w) },
         glass: { value: 0 },
-        crease: { value: 0 },
-        creaseCentreU: { value: 0.5 },
-        creaseHalfWidthU: { value: 0 },
         envMap: { value: null },
       },
     });
@@ -197,17 +177,6 @@ export class ScreenMaterial extends THREE.ShaderMaterial {
   /** 0 in the work view; up to 1 for the full fresnel-weighted reflection. */
   setGlass(strength: number): void {
     this.uniforms.glass.value = strength;
-  }
-
-  /** The band a crease runs along, for the inner screen; without one the screen has no crease. */
-  setCreaseBand(band: { centreU: number; halfWidthU: number }): void {
-    this.uniforms.creaseCentreU.value = band.centreU;
-    this.uniforms.creaseHalfWidthU.value = band.halfWidthU;
-  }
-
-  /** 0 in the work view, 1 in the showcase; always 0 without a crease band. */
-  setCrease(t: number): void {
-    this.uniforms.crease.value = this.uniforms.creaseHalfWidthU.value > 0 ? CREASE_STRENGTH * t : 0;
   }
 
   /** A PMREM environment to reflect, or null for a plain studio gradient. */

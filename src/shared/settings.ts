@@ -7,13 +7,12 @@ export interface DeviceSettings {
   /** The window's top-right corner: the fixed half's edge, which folding keeps in place. */
   windowPosition?: { x: number; y: number };
   pxPerMm?: number;
-  view?: "work" | "showcase";
-  /** The model's turn (Alt+drag), left where the user left it. */
+  /** The model's turn, left where the user left it until Center. */
   rotation?: ModelAngles;
 }
 
 export interface Settings {
-  version: 3;
+  version: 4;
   colourway: string;
   videoCodec: "h264" | "h265";
   videoBitRate: number;
@@ -22,13 +21,16 @@ export interface Settings {
   audio: boolean;
   shortcutModifiers: ShortcutModifier[];
   alwaysOnTop: boolean;
-  /** How long a mouse wheel notch eases out over on the phone, in ms; 0 scrolls it in one jump. */
+  /** "swipe" scrolls the phone with a finger swipe per burst of wheel notches, which the phone finishes with its own fling; "events" sends scroll events. */
+  wheelStyle: "swipe" | "events";
+  /** How long a mouse wheel notch sent as scroll events eases out over on the phone, in ms; 0 scrolls it in one jump. */
   scrollSmoothing: number;
   /** How far a wheel notch scrolls, as a multiple of Android's own mouse scroll step. */
   scrollSpeed: number;
   /** A phone's identity (see deviceIdentity), or an adb serial left over from a version 1 file until that phone is seen again. */
   lastDevice: string | null;
-  view: "work" | "showcase";
+  /** Mirrors the phone's notifications to the PC as they arrive; on by default. */
+  mirrorNotifications: boolean;
   /** Keyed by the phone's identity, which stays the same across USB, Wi-Fi and a changing wireless port. */
   devices: Record<string, DeviceSettings>;
   /** Version 1 entries, keyed by an adb transport serial; each moves into devices when that serial's identity is first seen. */
@@ -37,7 +39,7 @@ export interface Settings {
 
 export type SettingsPatch = Partial<Omit<Settings, "version" | "devices" | "legacyDevices">>;
 
-/** The phone last connected and what was saved for it, so its scale, view, turn and window corner can be in place before it streams. */
+/** The phone last connected and what was saved for it, so its scale, turn and window corner can be in place before it streams. */
 export function startupDevice(settings: Settings): { id: string; saved: DeviceSettings } | null {
   const id = settings.lastDevice;
   if (!id) return null;

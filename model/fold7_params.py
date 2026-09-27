@@ -26,6 +26,7 @@ class SpecDimensions:
     inner_active_height_mm: float = 150.7
     inner_pixels: tuple = (1968, 2184)
     crease_band_width_mm: float = 6.0
+    crease_depth_mm: float = 0.1
     crease_band_min_loops: int = 12
 
 

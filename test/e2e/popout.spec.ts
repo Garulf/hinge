@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -7,8 +7,8 @@ const PKG = "com.example.chat";
 
 const softwareGl = process.env.HINGE_E2E_REAL_GPU !== "1";
 
-async function launch(recording: string, extra: string[]): Promise<ElectronApplication> {
-  const userData = await mkdtemp(join(tmpdir(), "hinge-e2e-"));
+async function launch(recording: string, extra: string[], userData?: string): Promise<ElectronApplication> {
+  userData ??= await mkdtemp(join(tmpdir(), "hinge-e2e-"));
   const args = ["--replay", recording, "--user-data", userData, ...extra, ...(softwareGl ? ["--use-gl=angle", "--use-angle=swiftshader"] : []), "--no-sandbox"];
   const executablePath = process.env.HINGE_E2E_EXECUTABLE;
   return electron.launch(executablePath ? { executablePath, args } : { args: [resolve("out/main/index.js"), ...args] });
@@ -77,5 +77,37 @@ test("the Apps button opens the picker, which asks main for the phone's apps and
     await expect(picker).not.toHaveAttribute("aria-busy", "true");
   } finally {
     await app.close();
+  }
+});
+
+test("a pop-out's window comes back where it was left after hinge quits with it", async () => {
+  test.setTimeout(120_000);
+  const userData = await mkdtemp(join(tmpdir(), "hinge-e2e-"));
+  const first = await launch("test/fixtures/synthetic-fold.hrec", ["--app", PKG], userData);
+  const quit = first.waitForEvent("close", { timeout: 60_000 });
+  await windowTitled(first, PKG, 20_000);
+  const placed = { x: 120, y: 80, width: 460, height: 820 };
+  const left = await first.evaluate(
+    ({ BrowserWindow }, { pkg, bounds }) => {
+      const win = BrowserWindow.getAllWindows().find((w) => w.getTitle() === pkg)!;
+      win.setBounds(bounds);
+      const now = win.getNormalBounds();
+      win.close();
+      return now;
+    },
+    { pkg: PKG, bounds: placed },
+  );
+  await quit;
+
+  const saved = JSON.parse(await readFile(join(userData, "settings.json"), "utf8"));
+  expect(saved.devices.replay.popouts[PKG]).toEqual(left);
+
+  const second = await launch("test/fixtures/synthetic-fold.hrec", ["--app", PKG], userData);
+  try {
+    await windowTitled(second, PKG, 20_000);
+    const reopened = await second.evaluate(({ BrowserWindow }, pkg) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === pkg)!.getNormalBounds(), PKG);
+    expect(reopened).toEqual(left);
+  } finally {
+    await second.close();
   }
 });

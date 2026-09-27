@@ -1,6 +1,7 @@
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { clampModelAngles, MODEL_REST } from "../shared/model-rotation";
 import { defaultModifiers, normaliseModifiers } from "../shared/shortcuts";
+import type { Rect } from "../shared/clamp-bounds";
 import type { DeviceSettings, Settings, SettingsPatch } from "../shared/settings";
 
 export type { DeviceSettings, Settings, SettingsPatch, ShortcutModifier } from "../shared/settings";
@@ -63,10 +64,25 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isWindowRect(value: unknown): value is Rect {
+  if (!isPlainObject(value)) return false;
+  const { x, y, width, height } = value;
+  return Number.isFinite(x) && Number.isFinite(y) && isPositive(width) && isPositive(height);
+}
+
+function sanitisePopouts(value: unknown): Record<string, Rect> {
+  if (!isPlainObject(value)) return {};
+  const result: Record<string, Rect> = {};
+  for (const [pkg, rect] of Object.entries(value)) {
+    if (isWindowRect(rect)) result[pkg] = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  }
+  return result;
+}
+
 /** Keeps only the per-phone fields with values of the right type. */
 export function sanitiseDeviceSettings(value: unknown): DeviceSettings {
   if (!isPlainObject(value)) return {};
-  const { pxPerMm, windowPosition, rotation } = value;
+  const { pxPerMm, windowPosition, rotation, popouts } = value;
   const result: DeviceSettings = {};
   if (isPlainObject(rotation) && typeof rotation.yaw === "number" && typeof rotation.pitch === "number") {
     result.rotation = clampModelAngles({ yaw: rotation.yaw, pitch: rotation.pitch });
@@ -76,6 +92,8 @@ export function sanitiseDeviceSettings(value: unknown): DeviceSettings {
     const { x, y } = windowPosition;
     if (Number.isFinite(x) && Number.isFinite(y)) result.windowPosition = { x: x as number, y: y as number };
   }
+  const windows = sanitisePopouts(popouts);
+  if (Object.keys(windows).length > 0) result.popouts = windows;
   return result;
 }
 
@@ -229,6 +247,7 @@ async function atomicWrite(path: string, contents: string, renameFile: RenameFn)
 export interface SettingsStore {
   readonly current: Settings;
   save(patch: SettingsPatch): Promise<void>;
+  /** Merges into the phone's saved fields; a patch's popouts merge per package, so saving one app's window keeps the others'. */
   saveDevice(id: string, patch: DeviceSettings): Promise<void>;
   /**
    * The first time an adb serial's identity is known: a version 1 entry
@@ -239,6 +258,8 @@ export interface SettingsStore {
   adoptTransport(serial: string, id: string): Promise<void>;
   /** Returns an unsubscribe function. */
   onChange(fn: (settings: Settings) => void): () => void;
+  /** Resolves once every write queued so far has finished, failed ones included, so quitting does not cut one short. */
+  settled(): Promise<void>;
 }
 
 export async function loadSettings(
@@ -299,10 +320,12 @@ export async function loadSettings(
       return enqueue(() => ({ ...current, ...patch }));
     },
     saveDevice(id, patch) {
-      return enqueue(() => ({
-        ...current,
-        devices: { ...current.devices, [id]: { ...current.devices[id], ...patch } },
-      }));
+      return enqueue(() => {
+        const saved = current.devices[id];
+        const merged: DeviceSettings = { ...saved, ...patch };
+        if (patch.popouts) merged.popouts = { ...saved?.popouts, ...patch.popouts };
+        return { ...current, devices: { ...current.devices, [id]: merged } };
+      });
     },
     adoptTransport(serial, id) {
       return enqueue(() => adopted(serial, id));
@@ -310,6 +333,9 @@ export async function loadSettings(
     onChange(fn) {
       listeners.add(fn);
       return () => listeners.delete(fn);
+    },
+    settled() {
+      return queue;
     },
   };
 }

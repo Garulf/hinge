@@ -20,6 +20,8 @@ function flush(): Promise<void> {
   return new Promise((r) => setImmediate(r));
 }
 
+const TITLE_BAR = 30;
+
 class FakeWindow implements PopoutWindow {
   readonly port: PortLike = { postMessage: () => {}, onMessage: () => {} };
   focusCalls = 0;
@@ -27,11 +29,15 @@ class FakeWindow implements PopoutWindow {
   titles: string[] = [];
   icons: Uint8Array[] = [];
   #onClosed: (() => void)[] = [];
+  #onBoundsChanged: (() => void)[] = [];
+  #bounds: Rect;
 
   constructor(
     readonly created: { pkg: string; title: string; bounds: Rect | null; content: { width: number; height: number } },
     private readonly scale = 1,
-  ) {}
+  ) {
+    this.#bounds = created.bounds ?? { x: 10, y: 20 - TITLE_BAR, width: created.content.width, height: created.content.height + TITLE_BAR };
+  }
 
   focus(): void {
     this.focusCalls++;
@@ -51,7 +57,21 @@ class FakeWindow implements PopoutWindow {
   }
 
   contentBounds(): Rect {
-    return { x: 10, y: 20, ...this.created.content };
+    const b = this.#bounds;
+    return { x: b.x, y: b.y + TITLE_BAR, width: b.width, height: b.height - TITLE_BAR };
+  }
+
+  windowBounds(): Rect {
+    return this.#bounds;
+  }
+
+  onBoundsChanged(cb: () => void): void {
+    this.#onBoundsChanged.push(cb);
+  }
+
+  userMove(bounds: Rect): void {
+    this.#bounds = bounds;
+    for (const cb of this.#onBoundsChanged) cb();
   }
 
   scaleFactor(): number {
@@ -187,13 +207,12 @@ test("open creates one window titled with the package and starts one session siz
   expect(windows[0].icons).toEqual([icon]);
 });
 
-test("a saved size is reused for the window and its display", () => {
-  const { manager, windows, sessions } = harness({ savedBounds: { x: 5, y: 6, width: 400, height: 860 } });
+test("saved window bounds place the window, and its display is sized to the content inside the frame", () => {
+  const { manager, windows, sessions } = harness({ savedBounds: { x: 5, y: 6, width: 400, height: 890 } });
   manager.setPhone(fold());
   manager.open("com.example.app");
 
-  expect(windows[0].created.bounds).toEqual({ x: 5, y: 6, width: 400, height: 860 });
-  expect(windows[0].created.content).toEqual({ width: 400, height: 860 });
+  expect(windows[0].created.bounds).toEqual({ x: 5, y: 6, width: 400, height: 890 });
   expect(sessions[0].geometry).toEqual({ width: 400, height: 856, dpi: 160 });
 });
 
@@ -228,7 +247,7 @@ test("closing a window while its session is still starting stops that session an
   expect(sessions[0].stopCalls).toBe(1);
   expect(manager.count()).toBe(0);
   expect(counts).toEqual([1, 0]);
-  expect(saved).toEqual([["R5CY", "com.example.app", { x: 10, y: 20, width: 379, height: 884 }]]);
+  expect(saved).toEqual([["R5CY", "com.example.app", { x: 10, y: -10, width: 379, height: 914 }]]);
 
   sessions[0].finishStart();
   await flush();
@@ -380,7 +399,7 @@ test("a window whose bounds cannot be read on close still has its session stoppe
   manager.open("a.one");
   manager.open("a.two");
   for (const w of windows) {
-    w.contentBounds = () => {
+    w.windowBounds = () => {
       throw new Error("Object has been destroyed");
     };
   }
@@ -527,4 +546,32 @@ test("label answers the identified label of an open pop-out, its package before 
   await flush();
   expect(manager.label("com.example.app")).toBe("Example");
   expect(manager.label("a.closed")).toBeNull();
+});
+
+test("the window bounds, frame included, are saved once a move or resize has settled for 500 ms", () => {
+  vi.useFakeTimers();
+  const { manager, windows, saved } = harness();
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+
+  windows[0].userMove({ x: 50, y: 60, width: 420, height: 930 });
+  vi.advanceTimersByTime(300);
+  windows[0].userMove({ x: 70, y: 80, width: 440, height: 950 });
+  vi.advanceTimersByTime(499);
+  expect(saved).toEqual([]);
+
+  vi.advanceTimersByTime(1);
+  expect(saved).toEqual([["R5CY", "com.example.app", { x: 70, y: 80, width: 440, height: 950 }]]);
+});
+
+test("closing during a pending move saves the final bounds once, and nothing after", () => {
+  vi.useFakeTimers();
+  const { manager, windows, saved } = harness();
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+
+  windows[0].userMove({ x: 50, y: 60, width: 420, height: 930 });
+  windows[0].userClose();
+  vi.advanceTimersByTime(1000);
+  expect(saved).toEqual([["R5CY", "com.example.app", { x: 50, y: 60, width: 420, height: 930 }]]);
 });

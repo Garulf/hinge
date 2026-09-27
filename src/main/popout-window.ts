@@ -17,10 +17,8 @@ export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow & { rea
   const win = new BrowserWindow({
     frame: true,
     resizable: true,
-    useContentSize: true,
-    width: o.content.width,
-    height: o.content.height,
-    ...(o.bounds ? { x: o.bounds.x, y: o.bounds.y } : {}),
+    useContentSize: o.bounds === null,
+    ...(o.bounds ?? o.content),
     minWidth: 160,
     minHeight: 160,
     title: o.title,
@@ -29,6 +27,8 @@ export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow & { rea
     show: false,
     webPreferences: pageWebPreferences(),
   });
+  // Electron can misscale a window created at bounds on a monitor with another scale factor; setting them again once it exists avoids that.
+  if (o.bounds) win.setBounds(o.bounds);
   // The page's own <title> would otherwise replace the app's name on every load.
   win.on("page-title-updated", (e) => e.preventDefault());
   win.once("ready-to-show", () => win.show());
@@ -36,8 +36,11 @@ export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow & { rea
   loadPage(win, "popout.html");
 
   let lastBounds: Rect = win.getContentBounds();
+  let lastWindowBounds: Rect = win.getNormalBounds();
   const remember = () => {
-    if (!win.isDestroyed()) lastBounds = win.getContentBounds();
+    if (win.isDestroyed()) return;
+    lastBounds = win.getContentBounds();
+    lastWindowBounds = win.getNormalBounds();
   };
   win.on("resize", remember);
   win.on("move", remember);
@@ -62,7 +65,15 @@ export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow & { rea
       remember();
       return lastBounds;
     },
+    windowBounds: () => {
+      remember();
+      return lastWindowBounds;
+    },
     scaleFactor: () => (win.isDestroyed() ? 1 : screen.getDisplayMatching(win.getBounds()).scaleFactor),
     onClosed: (cb) => win.on("closed", cb),
+    onBoundsChanged: (cb) => {
+      win.on("move", cb);
+      win.on("resize", cb);
+    },
   };
 }

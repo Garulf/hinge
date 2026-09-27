@@ -18,8 +18,12 @@ export interface PopoutWindow {
   setIcon(png: Uint8Array): void;
   /** Must still answer, with the last known bounds, from inside an onClosed callback. */
   contentBounds(): Rect;
+  /** The window's bounds with its frame, as left when not maximised, minimised or full screen; answers like contentBounds from inside onClosed. */
+  windowBounds(): Rect;
   scaleFactor(): number;
   onClosed(cb: () => void): void;
+  /** Each move or resize step. */
+  onBoundsChanged(cb: () => void): void;
 }
 
 export interface PopoutSessionLike extends MediaSource {
@@ -32,6 +36,7 @@ export interface AppIdentity {
 }
 
 export interface PopoutManagerDeps {
+  /** bounds are saved window bounds, frame included; content sizes a window with none. */
   createWindow(o: { pkg: string; title: string; bounds: Rect | null; content: { width: number; height: number } }): PopoutWindow;
   createSession(phone: ConnectedPhone, pkg: string, g: DisplayGeometry): PopoutSessionLike;
   /** Starts the session once the window's renderer is ready, as bindSource does; called once per window. */
@@ -53,6 +58,7 @@ export interface PopoutManagerDeps {
 export type OpenResult = "opened" | "focused" | "queued" | "limit";
 
 const LIMIT_NOTICE = `Up to ${MAX_POPOUTS} apps can be open at once`;
+const SAVE_BOUNDS_DEBOUNCE_MS = 500;
 /** An app that refuses secondary displays opens on the phone screen instead, and its pop-out never gets a frame. */
 const REFUSAL_CHECK_MS = 5000;
 
@@ -125,6 +131,7 @@ interface Entry {
   streamed: boolean;
   streamWaiters: ((streamed: boolean) => void)[];
   refusalTimer: ReturnType<typeof setTimeout>;
+  saveTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export class PopoutManager {
@@ -202,8 +209,8 @@ export class PopoutManager {
 
   #openWindow(phone: ConnectedPhone, pkg: string): void {
     const saved = this.deps.savedBounds(phone.deviceId, pkg);
-    const content = saved && saved.width > 0 && saved.height > 0 ? { width: saved.width, height: saved.height } : initialContentSize(this.deps.workArea());
-    const window = this.deps.createWindow({ pkg, title: pkg, bounds: saved, content });
+    const window = this.deps.createWindow({ pkg, title: pkg, bounds: saved, content: initialContentSize(this.deps.workArea()) });
+    const content = window.contentBounds();
     const scale = window.scaleFactor();
     const geometry = displayGeometry(content.width, content.height, scale) ?? { width: MIN_DISPLAY_PX, height: MIN_DISPLAY_PX, dpi: Math.round(160 * scale) };
     const slot = new SessionSlot(this.deps.log, () => this.#streamed(entry));
@@ -222,12 +229,14 @@ export class PopoutManager {
       streamed: false,
       streamWaiters: [],
       refusalTimer: setTimeout(() => this.#checkRefused(entry), REFUSAL_CHECK_MS),
+      saveTimer: null,
     };
     entry.debouncer.prime(geometry);
     this.#entries.set(pkg, entry);
     window.onClosed(() => {
       this.#forget(entry).catch((e) => this.deps.log(`closing ${pkg} failed: ${String(e)}`));
     });
+    window.onBoundsChanged(() => this.#boundsChanged(entry));
     slot.replace(this.deps.createSession(phone, pkg, geometry));
     entry.status = this.deps.bindPort(slot, window.port, {
       viewport: (w, h, dpr) => entry.debouncer.push(displayGeometry(w, h, dpr)),
@@ -323,9 +332,20 @@ export class PopoutManager {
     await stopped;
   }
 
+  #boundsChanged(entry: Entry): void {
+    if (this.#entries.get(entry.pkg) !== entry) return;
+    if (entry.saveTimer !== null) clearTimeout(entry.saveTimer);
+    entry.saveTimer = setTimeout(() => {
+      entry.saveTimer = null;
+      this.#saveBounds(entry);
+    }, SAVE_BOUNDS_DEBOUNCE_MS);
+  }
+
   #saveBounds(entry: Entry): void {
+    if (entry.saveTimer !== null) clearTimeout(entry.saveTimer);
+    entry.saveTimer = null;
     try {
-      this.deps.saveBounds(entry.deviceId, entry.pkg, entry.window.contentBounds());
+      this.deps.saveBounds(entry.deviceId, entry.pkg, entry.window.windowBounds());
     } catch (e) {
       this.deps.log(`saving the ${entry.pkg} window bounds failed: ${String(e)}`);
     }

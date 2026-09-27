@@ -2,6 +2,7 @@ import { createWriteStream, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell as electronShell, type Tray, type WebContents } from "electron";
 import type { DisplayGeometry } from "../shared/popout";
+import { restoreBounds } from "../shared/popout-bounds";
 import { AdbHost } from "./adb-host";
 import { AppCatalog, answerAppsRequest } from "./app-catalog";
 import { appIconPath } from "./app-icon";
@@ -348,8 +349,10 @@ async function runMode(opts: RunOptions): Promise<void> {
     bindPort: bindPopoutPort,
     identify: async (phone, pkg) => (built.catalog ? built.catalog.identify(phone, pkg) : { label: pkg, icon: null }),
     workArea: () => screen.getDisplayMatching(win.getBounds()).workArea,
-    savedBounds: () => null,
-    saveBounds: () => {},
+    savedBounds: (deviceId, pkg) => restoreBounds(settings.current.devices[deviceId]?.popouts?.[pkg], screen.getAllDisplays().map((d) => d.workArea)),
+    saveBounds: (deviceId, pkg, bounds) => {
+      settings.saveDevice(deviceId, { popouts: { [pkg]: bounds } }).catch((e) => logger.log(`failed to save the ${pkg} window: ${String(e)}`));
+    },
     notice,
     log: logger.log,
     checkRefused: (phone, pkg) => (phone === built.replayPhone ? Promise.resolve(false) : landedOnPhoneScreen(phone, pkg)),
@@ -396,7 +399,10 @@ async function runMode(opts: RunOptions): Promise<void> {
     if (shuttingDown) return;
     quitting = true;
     shuttingDown = shutdownWithin(SHUTDOWN_LIMIT_MS, [
-      () => popouts.closeAll(),
+      async () => {
+        await popouts.closeAll();
+        await settings.settled();
+      },
       async () => companion?.stop(),
       async () => {
         await source.stop().catch(() => {});

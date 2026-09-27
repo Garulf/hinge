@@ -2317,3 +2317,56 @@ test("a main video session that throws on start retries on the same connection",
   expect(serials(phones)).toEqual(["USB1"]);
   await source.stop();
 });
+
+test("losing the adb server drops the connection, so the phone reappearing opens a fresh transport and is announced again", async () => {
+  const watcher = fakeWatcher();
+  let opens = 0;
+  watcher.host.open = async (serial) => ({ serial, open: ++opens }) as never;
+  const sessions: FakeSession[] = [];
+  const phones: (ConnectedPhone | null)[] = [];
+  let foldStarts = 0;
+  let foldStops = 0;
+  let mirrorStops = 0;
+  const source = new DeviceSource({
+    host: watcher.host,
+    createSession: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    onPhone: (p) => phones.push(p),
+    foldMonitor: async () => {
+      foldStarts++;
+      return async () => {
+        foldStops++;
+      };
+    },
+    notificationMirror: async () => async () => {
+      mirrorStops++;
+    },
+    delay: async () => {},
+  });
+  await source.start(fakeSink().sink);
+  watcher.emit([device("USB1")]);
+  await flush();
+  sessions[0].streamed();
+
+  watcher.fail(new Error("adb server version doesn't match; killing"));
+  await flush();
+
+  expect(sessions[0].stopped).toBe(true);
+  expect(phones.map((p) => (p ? (p.adb as unknown as { open: number }).open : null))).toEqual([1, null]);
+  expect(foldStops).toBe(1);
+  expect(mirrorStops).toBe(1);
+  expect(watcher.watchCalls).toBe(2);
+
+  watcher.emit([device("USB1")]);
+  await flush();
+
+  expect(opens).toBe(2);
+  expect(phones.map((p) => (p ? (p.adb as unknown as { open: number }).open : null))).toEqual([1, null, 2]);
+  expect(foldStarts).toBe(2);
+  expect(sessions).toHaveLength(2);
+  expect(sessions[1].startCalls).toBe(1);
+  await source.stop();
+});

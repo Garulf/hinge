@@ -450,9 +450,12 @@ export class DeviceSource implements MediaSource {
     this.#beginReconnect();
   }
 
+  /** Every transport opened through the lost adb server is dead, so the connection goes with it and the next device list connects afresh. */
   #beginReconnect(): void {
     if (this.#stopped || this.#reconnecting) return;
     this.#reconnecting = true;
+    this.#cancelSessionRetry();
+    this.#teardownSession();
     this.opts.log?.("adb device tracking failed, reconnecting");
     this.#sink?.status({ state: "error", message: "Lost connection to the adb server, reconnecting..." });
     this.#reconnectAbort = new AbortController();

@@ -126,5 +126,7 @@ test("the phone is only ever asked for the activities dump, which says whether a
   expect(await dumpActivities(phone)).toContain("com.example.chat");
   expect(await landedOnPhoneScreen(phone, "com.example.chat")).toBe(true);
   expect(await landedOnPhoneScreen(phone, "com.example.maps")).toBe(false);
+  const both = shellPhone(dump({ 0: "com.example.chat", 2: "com.example.chat" }), commands);
+  expect(await landedOnPhoneScreen(both, "com.example.chat"), "resumed on its own display too, so it did move").toBe(false);
   expect(new Set(commands)).toEqual(new Set(["dumpsys activity activities"]));
 });

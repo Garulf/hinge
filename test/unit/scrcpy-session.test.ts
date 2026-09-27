@@ -665,6 +665,35 @@ function streamWithOnePacket(): ReadableStream<{ type: "data"; data: Uint8Array 
 
 const POPOUT_ROLE: SessionRole = { kind: "popout", pkg: "com.example.app", geometry: { width: 400, height: 856, dpi: 160 } };
 
+test("a pop-out session tells its listeners once the app's start has been sent, and not when sending it fails", async () => {
+  let release!: () => void;
+  const sent = new Promise<void>((resolve) => (release = resolve));
+  const deps = (startApp: () => Promise<void>): Partial<ScrcpyServerDeps> => ({
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async () => oneShotClient(streamWithOnePacket, { controller: { startApp }, clipboard: new ReadableStream<string>({ start: () => {} }) }) as never,
+  });
+  const session = new ScrcpySession(baseOpts(deps(() => sent), { role: POPOUT_ROLE }));
+  let started = 0;
+  session.onAppStarted(() => started++);
+  await session.start(fakeSink().sink);
+  await flush();
+  expect(started).toBe(0);
+
+  release();
+  await flush();
+  expect(started).toBe(1);
+  await session.stop();
+
+  const failing = new ScrcpySession(baseOpts(deps(async () => Promise.reject(new Error("socket closed"))), { role: POPOUT_ROLE }));
+  let failedStarts = 0;
+  failing.onAppStarted(() => failedStarts++);
+  await failing.start(fakeSink().sink);
+  await flush();
+  expect(failedStarts).toBe(0);
+  await failing.stop();
+});
+
 test("a pop-out session starts its app once the display streams, and leaves audio and the clipboard alone", async () => {
   const startApps: unknown[] = [];
   const controller = {

@@ -26,6 +26,7 @@ function harness() {
     control: (i) => controls.push(i),
     stop: async () => {},
     resize: (g) => resizes.push(g),
+    onAppStarted: () => {},
   };
   const viewports: [number, number, number][] = [];
   let retries = 0;

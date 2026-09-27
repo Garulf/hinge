@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { currentAppPackage, homePackages, resumedByDisplay, resumedOnPhoneScreen, stayedOnPhoneScreen } from "../../src/shared/activities";
+import { currentAppPackage, homePackages, resumedByDisplay, stayedOnPhoneScreen } from "../../src/shared/activities";
 
 // The *-aosp.txt fixture is written from the AOSP dump format, not captured from a real phone.
 const ACTIVITIES = readFileSync(join(import.meta.dirname, "../fixtures/dumpsys-activity-activities-aosp.txt"), "utf8");
@@ -64,9 +64,4 @@ test("an app stayed on the phone screen when it is resumed on display 0 and on n
   expect(stayedOnPhoneScreen(dump({ 0: [resumed("com.a")] }), "com.a")).toBe(true);
   expect(stayedOnPhoneScreen(dump({ 0: [resumed("com.a")], 2: [resumed("com.a", 8)] }), "com.a")).toBe(false);
   expect(stayedOnPhoneScreen(dump({ 0: [resumed("com.launcher")], 2: [resumed("com.a")] }), "com.a")).toBe(false);
-});
-
-test("an app is resumed on the phone screen when display 0 shows it, whatever the other displays show", () => {
-  expect(resumedOnPhoneScreen(dump({ 0: [resumed("com.a")], 2: [resumed("com.a", 8)] }), "com.a")).toBe(true);
-  expect(resumedOnPhoneScreen(ACTIVITIES, "com.example.maps")).toBe(false);
 });

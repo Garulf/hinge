@@ -77,6 +77,7 @@ export class ScrcpySession implements MediaSource {
   #stopped = false;
   #videoEnded = false;
   #endedFired = false;
+  readonly #appStartedListeners: (() => void)[] = [];
   #resolveEnded!: () => void;
   readonly ended: Promise<void>;
   readonly #deps: ScrcpyServerDeps;
@@ -224,8 +225,19 @@ export class ScrcpySession implements MediaSource {
     return this.#role.kind === "main" && !this.opts.companion;
   }
 
+  /** A pop-out's app is started once its display streams; until then its frames are the empty display's. */
+  onAppStarted(cb: () => void): void {
+    this.#appStartedListeners.push(cb);
+  }
+
   #startApp(client: Client, pkg: string): void {
-    client.controller?.startApp(pkg).catch((e) => this.opts.log?.(`start app ${pkg} failed: ${String(e)}`));
+    client.controller
+      ?.startApp(pkg)
+      .then(() => {
+        if (this.#stopped) return;
+        for (const cb of this.#appStartedListeners) cb();
+      })
+      .catch((e) => this.opts.log?.(`start app ${pkg} failed: ${String(e)}`));
   }
 
   /** client.clipboard blocks on backpressure once clipboardAutosync is on, so this must run for the life of every successful attempt, not just when a clipboard host happens to be wired. */

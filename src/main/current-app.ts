@@ -1,4 +1,4 @@
-import { currentAppPackage, resumedOnPhoneScreen, stayedOnPhoneScreen } from "../shared/activities";
+import { currentAppPackage, stayedOnPhoneScreen } from "../shared/activities";
 import { runShellChecked, withinTimeout } from "./adb-shell";
 import type { ConnectedPhone } from "./app-controller";
 import type { PopoutManager } from "./popout-manager";
@@ -21,9 +21,9 @@ export function dumpActivities(phone: ConnectedPhone): Promise<string> {
   return withinTimeout((signal) => runShellChecked(phone.adb, "dumpsys activity activities", signal), "the activities dump");
 }
 
-/** For PopoutManager's refusal check: the app landed on the phone screen instead of its pop-out's display. */
+/** For PopoutManager's refusal check: the app landed on the phone screen and on no other display. */
 export async function landedOnPhoneScreen(phone: ConnectedPhone, pkg: string): Promise<boolean> {
-  return resumedOnPhoneScreen(await dumpActivities(phone), pkg);
+  return stayedOnPhoneScreen(await dumpActivities(phone), pkg);
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

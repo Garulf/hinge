@@ -28,6 +28,8 @@ export interface PopoutWindow {
 
 export interface PopoutSessionLike extends MediaSource {
   resize(g: DisplayGeometry): void;
+  /** Each time the session has sent the phone its app's start. */
+  onAppStarted(cb: () => void): void;
 }
 
 export interface AppIdentity {
@@ -59,7 +61,7 @@ export type OpenResult = "opened" | "focused" | "queued" | "limit";
 
 const LIMIT_NOTICE = `Up to ${MAX_POPOUTS} apps can be open at once`;
 const SAVE_BOUNDS_DEBOUNCE_MS = 500;
-/** An app that refuses secondary displays opens on the phone screen instead, and its pop-out never gets a frame. */
+/** Counted from the app's start: an app that refuses secondary displays opens on the phone screen instead, and its pop-out never gets a frame. */
 const REFUSAL_CHECK_MS = 5000;
 
 function watchFrames(sink: MediaSink, onFrame: () => void): MediaSink {
@@ -81,15 +83,24 @@ class SessionSlot implements PopoutSessionLike {
   #current: PopoutSessionLike | null = null;
   #sink: MediaSink | null = null;
   #closed = false;
+  /** Whether the current session has started its app, so its frames are the app's. */
+  #appRunning = false;
+  readonly #appStartedListeners: (() => void)[] = [];
 
   constructor(
     private readonly log: (line: string) => void,
-    private readonly onFrame: () => void,
+    private readonly onAppFrame: () => void,
   ) {}
 
   async start(sink: MediaSink): Promise<void> {
-    this.#sink = watchFrames(sink, this.onFrame);
+    this.#sink = watchFrames(sink, () => {
+      if (this.#appRunning) this.onAppFrame();
+    });
     await this.#current?.start(this.#sink);
+  }
+
+  onAppStarted(cb: () => void): void {
+    this.#appStartedListeners.push(cb);
   }
 
   control(intent: ControlIntent): void {
@@ -107,6 +118,12 @@ class SessionSlot implements PopoutSessionLike {
 
   replace(next: PopoutSessionLike | null): void {
     if (this.#closed) return;
+    this.#appRunning = false;
+    next?.onAppStarted(() => {
+      if (this.#current !== next || this.#closed) return;
+      this.#appRunning = true;
+      for (const cb of this.#appStartedListeners) cb();
+    });
     void this.#swap(next);
     const sink = this.#sink;
     if (next && sink) next.start(sink).catch((e) => this.log(`pop-out session failed to start: ${String(e)}`));
@@ -130,7 +147,7 @@ interface Entry {
   label: string;
   streamed: boolean;
   streamWaiters: ((streamed: boolean) => void)[];
-  refusalTimer: ReturnType<typeof setTimeout>;
+  refusalTimer: ReturnType<typeof setTimeout> | null;
   saveTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -228,9 +245,10 @@ export class PopoutManager {
       label: pkg,
       streamed: false,
       streamWaiters: [],
-      refusalTimer: setTimeout(() => this.#checkRefused(entry), REFUSAL_CHECK_MS),
+      refusalTimer: null,
       saveTimer: null,
     };
+    slot.onAppStarted(() => this.#appStarted(entry));
     entry.debouncer.prime(geometry);
     this.#entries.set(pkg, entry);
     window.onClosed(() => {
@@ -258,10 +276,24 @@ export class PopoutManager {
       .catch((e) => this.deps.log(`identifying ${entry.pkg} failed: ${String(e)}`));
   }
 
+  #appStarted(entry: Entry): void {
+    if (entry.streamed || this.#entries.get(entry.pkg) !== entry) return;
+    this.#clearRefusalTimer(entry);
+    entry.refusalTimer = setTimeout(() => {
+      entry.refusalTimer = null;
+      this.#checkRefused(entry);
+    }, REFUSAL_CHECK_MS);
+  }
+
+  #clearRefusalTimer(entry: Entry): void {
+    if (entry.refusalTimer !== null) clearTimeout(entry.refusalTimer);
+    entry.refusalTimer = null;
+  }
+
   #streamed(entry: Entry): void {
     if (entry.streamed) return;
     entry.streamed = true;
-    clearTimeout(entry.refusalTimer);
+    this.#clearRefusalTimer(entry);
     for (const resolve of entry.streamWaiters.splice(0)) resolve(true);
   }
 
@@ -324,7 +356,7 @@ export class PopoutManager {
     if (this.#entries.get(entry.pkg) !== entry) return;
     this.#entries.delete(entry.pkg);
     entry.debouncer.cancel();
-    clearTimeout(entry.refusalTimer);
+    this.#clearRefusalTimer(entry);
     for (const resolve of entry.streamWaiters.splice(0)) resolve(false);
     const stopped = entry.slot.stop();
     this.#countChanged();

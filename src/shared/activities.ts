@@ -46,10 +46,6 @@ export function currentAppPackage(dumpsysText: string): string | null {
   return pkg;
 }
 
-export function resumedOnPhoneScreen(dumpsysText: string, pkg: string): boolean {
-  return resumedByDisplay(dumpsysText).get(PHONE_SCREEN) === pkg;
-}
-
 /** The app did not move to its pop-out's display: it is still on the phone screen and resumed nowhere else. */
 export function stayedOnPhoneScreen(dumpsysText: string, pkg: string): boolean {
   const resumed = resumedByDisplay(dumpsysText);

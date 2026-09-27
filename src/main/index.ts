@@ -86,12 +86,18 @@ interface PhoneHooks {
 
 const REPLAY_PHONE: ConnectedPhone = { adb: null as never, serial: "replay", deviceId: "replay", model: null };
 
-/** For the e2e test: replays the same recording in a pop-out, and records each display resize in __hingePopoutResizes. */
+/** For the e2e test: replays the same recording in a pop-out, as the app's own frames, and records each display resize in __hingePopoutResizes. */
 function replayPopoutSession(file: string): PopoutSessionLike {
   const replay = ReplaySource.fromFile(file, { loop: false });
   const resizes = globalThis as { __hingePopoutResizes?: DisplayGeometry[] };
+  const appStarted: (() => void)[] = [];
   return {
-    start: async (sink) => (await replay).start(sink),
+    start: async (sink) => {
+      const source = await replay;
+      for (const cb of appStarted) cb();
+      await source.start(sink);
+    },
+    onAppStarted: (cb) => void appStarted.push(cb),
     control: (intent) => void replay.then((r) => r.control(intent)).catch(() => {}),
     stop: async () => (await replay).stop(),
     resize: (g) => (resizes.__hingePopoutResizes ??= []).push(g),
@@ -99,7 +105,7 @@ function replayPopoutSession(file: string): PopoutSessionLike {
 }
 
 function noPopoutSession(message: string): PopoutSessionLike {
-  return { ...errorSource(message), resize: () => {} };
+  return { ...errorSource(message), resize: () => {}, onAppStarted: () => {} };
 }
 
 /** Opens the write stream up front so a bad path or a permission error surfaces before mirroring starts, instead of crashing mid-session. */

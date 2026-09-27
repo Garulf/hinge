@@ -121,6 +121,16 @@ class FakeSession implements PopoutSessionLike {
     this.sink?.videoPacket({ type: "data", keyframe: true, pts: 0, data: new Uint8Array([0]) });
   }
 
+  readonly #appStartedListeners: (() => void)[] = [];
+
+  onAppStarted(cb: () => void): void {
+    this.#appStartedListeners.push(cb);
+  }
+
+  appStarted(): void {
+    for (const cb of this.#appStartedListeners) cb();
+  }
+
   control(): void {}
 
   async stop(): Promise<void> {
@@ -433,7 +443,7 @@ test("closeAll closes every window even when one of them fails to close", async 
   expect(logs.some((l) => l.includes("close failed"))).toBe(true);
 });
 
-test("a pop-out with no frame 5 s after it opened, whose app is resumed on the phone screen, closes with a notice", async () => {
+test("a pop-out with no frame 5 s after its app was started, whose app stayed on the phone screen, closes with a notice", async () => {
   vi.useFakeTimers();
   const { manager, windows, sessions, notices, refusalChecks } = harness({
     identify: async () => ({ label: "Example", icon: null }),
@@ -441,6 +451,7 @@ test("a pop-out with no frame 5 s after it opened, whose app is resumed on the p
   });
   manager.setPhone(fold());
   manager.open("com.example.app");
+  sessions[0].appStarted();
   await vi.advanceTimersByTimeAsync(4999);
   expect(refusalChecks).toEqual([]);
 
@@ -457,6 +468,7 @@ test("a pop-out that streamed before 5 s is never checked for refusal", async ()
   const { manager, windows, sessions, refusalChecks } = harness({ checkRefused: async () => true });
   manager.setPhone(fold());
   manager.open("com.example.app");
+  sessions[0].appStarted();
   sessions[0].frame();
 
   await vi.advanceTimersByTimeAsync(5000);
@@ -467,7 +479,7 @@ test("a pop-out that streamed before 5 s is never checked for refusal", async ()
 
 test("a slow pop-out whose app is not on the phone screen stays open, and a failed check only logs", async () => {
   vi.useFakeTimers();
-  const { manager, windows, notices, logs } = harness({
+  const { manager, windows, sessions, notices, logs } = harness({
     checkRefused: async (_phone, pkg) => {
       if (pkg === "a.broken") throw new Error("dumpsys timed out");
       return false;
@@ -476,6 +488,7 @@ test("a slow pop-out whose app is not on the phone screen stays open, and a fail
   manager.setPhone(fold());
   manager.open("a.slow");
   manager.open("a.broken");
+  for (const session of sessions) session.appStarted();
 
   await vi.advanceTimersByTimeAsync(5000);
   expect(windows.map((w) => w.closeCalls)).toEqual([0, 0]);
@@ -490,6 +503,7 @@ test("a pop-out closed or streaming by the time the refusal check answers is lef
   const { manager, windows, sessions, notices } = harness({ checkRefused: () => new Promise((resolve) => (answer = resolve)) });
   manager.setPhone(fold());
   manager.open("com.example.app");
+  sessions[0].appStarted();
   await vi.advanceTimersByTimeAsync(5000);
   sessions[0].frame();
   answer(true);
@@ -501,10 +515,11 @@ test("a pop-out closed or streaming by the time the refusal check answers is lef
 
 test("the refusal check is not run once the window has closed or the phone is gone", async () => {
   vi.useFakeTimers();
-  const { manager, windows, refusalChecks } = harness({ checkRefused: async () => true });
+  const { manager, windows, sessions, refusalChecks } = harness({ checkRefused: async () => true });
   manager.setPhone(fold());
   manager.open("a.one");
   manager.open("a.two");
+  for (const session of sessions) session.appStarted();
   windows[0].userClose();
   manager.setPhone(null);
 
@@ -518,6 +533,7 @@ test("whenStreaming answers true on the pop-out's first frame, at once if it alr
   manager.setPhone(fold());
   manager.open("a.one");
   manager.open("a.two");
+  for (const session of sessions) session.appStarted();
   const one = manager.whenStreaming("a.one");
   const two = manager.whenStreaming("a.two");
 
@@ -574,4 +590,52 @@ test("closing during a pending move saves the final bounds once, and nothing aft
   windows[0].userClose();
   vi.advanceTimersByTime(1000);
   expect(saved).toEqual([["R5CY", "com.example.app", { x: 50, y: 60, width: 420, height: 930 }]]);
+});
+
+test("a start slower than 5 s is not checked before its app is started, and the 5 s count from the start", async () => {
+  vi.useFakeTimers();
+  const { manager, windows, sessions, refusalChecks } = harness({ checkRefused: async () => true });
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(refusalChecks).toEqual([]);
+  expect(windows[0].closeCalls).toBe(0);
+
+  sessions[0].appStarted();
+  await vi.advanceTimersByTimeAsync(4999);
+  expect(refusalChecks).toEqual([]);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(refusalChecks).toEqual(["com.example.app"]);
+  expect(windows[0].closeCalls).toBe(1);
+});
+
+test("frames from the empty display before the app is started do not count as the app streaming", async () => {
+  vi.useFakeTimers();
+  const { manager, windows, sessions, refusalChecks } = harness({ checkRefused: async () => true });
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  const streaming = manager.whenStreaming("com.example.app");
+  sessions[0].frame();
+  sessions[0].appStarted();
+
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(refusalChecks).toEqual(["com.example.app"]);
+  expect(windows[0].closeCalls).toBe(1);
+  expect(await streaming).toBe(false);
+});
+
+test("a replaced session's app start is ignored, and the new session's start arms the check", async () => {
+  vi.useFakeTimers();
+  const { manager, sessions, bindings, refusalChecks } = harness({ checkRefused: async () => false });
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  bindings[0].handlers.retry();
+  sessions[0].appStarted();
+  sessions[0].frame();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(refusalChecks).toEqual([]);
+
+  sessions[1].appStarted();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(refusalChecks).toEqual(["com.example.app"]);
 });

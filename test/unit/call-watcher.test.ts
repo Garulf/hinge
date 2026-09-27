@@ -1,13 +1,18 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { startCallWatcher } from "../../src/main/call-watcher";
 import type { Notifier, NotifierInput } from "../../src/main/notification-mirror";
 
-const RINGING = readFileSync(join(import.meta.dirname, "../fixtures/dumpsys-telephony-registry-ringing.txt"), "utf8");
+// Built from AOSP's TelephonyRegistry.dump() layout, not captured from the Fold 7: unverified against Samsung's build.
+const RINGING = readFileSync(join(import.meta.dirname, "../fixtures/dumpsys-telephony-registry-ringing-aosp.txt"), "utf8");
 const IDLE = RINGING.replace("mCallState=1", "mCallState=0").replace("mCallIncomingNumber=+15551234567", "mCallIncomingNumber=");
 const OFFHOOK = RINGING.replace("mCallState=1", "mCallState=2");
 const ALEX = "Row: 0 display_name=Alex Doe\n";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 interface ShownToast {
   input: NotifierInput;
@@ -99,7 +104,6 @@ test("a ringing phone pops one persistent toast naming the contact, however many
     "content query --uri content://com.android.contacts/phone_lookup/%2B15551234567 --projection display_name",
   );
   await stop();
-  vi.useRealTimers();
 });
 
 test("the toast closes when the call is answered", async () => {
@@ -110,7 +114,6 @@ test("the toast closes when the call is answered", async () => {
   await vi.advanceTimersByTimeAsync(1000);
   expect(shown[0].closed).toBe(true);
   await stop();
-  vi.useRealTimers();
 });
 
 test("a second call after the first ended gets its own toast", async () => {
@@ -121,7 +124,6 @@ test("a second call after the first ended gets its own toast", async () => {
   expect(shown[0].closed).toBe(true);
   expect(shown[1].closed).toBe(false);
   await stop();
-  vi.useRealTimers();
 });
 
 test("a caller who is not a contact is shown by number", async () => {
@@ -130,7 +132,6 @@ test("a caller who is not a contact is shown by number", async () => {
   await vi.advanceTimersByTimeAsync(0);
   expect(shown[0].input.body).toBe("+15551234567");
   await stop();
-  vi.useRealTimers();
 });
 
 test("a failed contact lookup is logged and the toast falls back to the number", async () => {
@@ -143,7 +144,6 @@ test("a failed contact lookup is logged and the toast falls back to the number",
   expect(shown[0].input.body).toBe("+15551234567");
   expect(logs.some((l) => l.includes("permission denied"))).toBe(true);
   await stop();
-  vi.useRealTimers();
 });
 
 test("no toast while the hinge window is focused, and none later for the same call", async () => {
@@ -155,7 +155,6 @@ test("no toast while the hinge window is focused, and none later for the same ca
   await vi.advanceTimersByTimeAsync(2000);
   expect(shown).toEqual([]);
   await stop();
-  vi.useRealTimers();
 });
 
 test("clicking the toast focuses the hinge window", async () => {
@@ -166,7 +165,6 @@ test("clicking the toast focuses the hinge window", async () => {
   shown[0].click();
   expect(focusedCount).toBe(1);
   await stop();
-  vi.useRealTimers();
 });
 
 test("a failed poll is logged and leaves the toast up", async () => {
@@ -184,7 +182,6 @@ test("a failed poll is logged and leaves the toast up", async () => {
   expect(shown).toHaveLength(1);
   expect(shown[0].closed).toBe(false);
   await stop();
-  vi.useRealTimers();
 });
 
 test("stop() ends polling and closes a toast still up", async () => {
@@ -197,7 +194,6 @@ test("stop() ends polling and closes a toast still up", async () => {
   const countAtStop = phone.commands.length;
   await vi.advanceTimersByTimeAsync(10_000);
   expect(phone.commands.length).toBe(countAtStop);
-  vi.useRealTimers();
 });
 
 test("a toast whose contact lookup finishes after stop() is never shown", async () => {
@@ -212,7 +208,6 @@ test("a toast whose contact lookup finishes after stop() is never shown", async 
   answerLookup(ALEX);
   await stopped;
   expect(shown).toEqual([]);
-  vi.useRealTimers();
 });
 
 test("disabled by the setting: no shell command is ever run", async () => {

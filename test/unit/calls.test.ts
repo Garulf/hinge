@@ -4,7 +4,7 @@ import { expect, test } from "vitest";
 import { incomingCallBody, parseCallState, parseContactName, phoneLookupCommand } from "../../src/shared/calls";
 
 // Built from AOSP's TelephonyRegistry.dump() layout, not captured from the Fold 7: unverified against Samsung's build.
-const RINGING = readFileSync(join(import.meta.dirname, "../fixtures/dumpsys-telephony-registry-ringing.txt"), "utf8");
+const RINGING = readFileSync(join(import.meta.dirname, "../fixtures/dumpsys-telephony-registry-ringing-aosp.txt"), "utf8");
 const IDLE = RINGING.replace("mCallState=1", "mCallState=0").replace("mCallIncomingNumber=+15551234567", "mCallIncomingNumber=");
 const OFFHOOK = RINGING.replace("mCallState=1", "mCallState=2");
 

@@ -29,7 +29,7 @@ export function parseCallState(dumpsysText: string): CallState {
 export function phoneLookupCommand(number: string): string | null {
   if (!DIALABLE.test(number)) return null;
   const uri = `content://com.android.contacts/phone_lookup/${encodeURIComponent(number)}`;
-  return `content query --uri ${uri} --projection display_name`;
+  return `content query --uri '${uri}' --projection display_name`;
 }
 
 /** Reads `Row: 0 display_name=<name>`; `No result found.` means the number is not a contact. */

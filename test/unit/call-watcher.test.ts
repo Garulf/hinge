@@ -101,7 +101,7 @@ test("a ringing phone pops one persistent toast naming the contact, however many
   expect(shown).toHaveLength(1);
   expect(shown[0].input).toEqual({ title: "Incoming call", body: "Alex Doe", persistent: true });
   expect(phone.commands).toContain(
-    "content query --uri content://com.android.contacts/phone_lookup/%2B15551234567 --projection display_name",
+    "content query --uri 'content://com.android.contacts/phone_lookup/%2B15551234567' --projection display_name",
   );
   await stop();
 });

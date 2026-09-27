@@ -39,8 +39,12 @@ test("text with no call state at all is not ringing", () => {
 
 test("phoneLookupCommand url-encodes the plus of an international number", () => {
   expect(phoneLookupCommand("+15551234567")).toBe(
-    "content query --uri content://com.android.contacts/phone_lookup/%2B15551234567 --projection display_name",
+    "content query --uri 'content://com.android.contacts/phone_lookup/%2B15551234567' --projection display_name",
   );
+});
+
+test("phoneLookupCommand quotes the URI, so a service code's star never reaches the shell as a glob", () => {
+  expect(phoneLookupCommand("*123#")).toBe("content query --uri 'content://com.android.contacts/phone_lookup/*123%23' --projection display_name");
 });
 
 test("phoneLookupCommand refuses anything that is not a dialable number, so nothing else reaches the shell", () => {

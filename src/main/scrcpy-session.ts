@@ -85,6 +85,10 @@ export class ScrcpySession implements MediaSource {
   #clipboardSync: ClipboardSync | null = null;
   readonly #transfers: TransferQueue;
   #sink: MediaSink | null = null;
+  /** The pop-out display size last asked for, which the next attempt starts with. */
+  #wantedGeometry: DisplayGeometry | null;
+  /** The size of the virtual display a streaming attempt has; null until one streams. */
+  #shownGeometry: DisplayGeometry | null = null;
 
   constructor(
     private readonly opts: {
@@ -110,6 +114,7 @@ export class ScrcpySession implements MediaSource {
     },
   ) {
     this.#deps = { ...defaultServerDeps, ...opts.deps };
+    this.#wantedGeometry = opts.role?.kind === "popout" ? opts.role.geometry : null;
     this.#firstPacketTimeoutMs = opts.firstPacketTimeoutMs ?? FIRST_PACKET_TIMEOUT_MS;
     this.#clipboardHost = opts.clipboardHost;
     this.ended = new Promise((resolve) => {
@@ -173,11 +178,21 @@ export class ScrcpySession implements MediaSource {
     this.#transfers.enqueue(localPaths);
   }
 
+  /** Before an attempt streams, the size is kept for it rather than sent to a server that is not up yet. */
   resize(g: DisplayGeometry): void {
+    this.#wantedGeometry = g;
+    this.#syncDisplaySize();
+  }
+
+  #syncDisplaySize(): void {
     const controller = this.#client?.controller;
-    if (!controller) return;
+    const shown = this.#shownGeometry;
+    const wanted = this.#wantedGeometry;
+    if (!controller || !shown || !wanted) return;
+    if (shown.width === wanted.width && shown.height === wanted.height) return;
+    this.#shownGeometry = wanted;
     controller
-      .resizeDisplay({ width: g.width, height: g.height })
+      .resizeDisplay({ width: wanted.width, height: wanted.height })
       .catch((e) => this.opts.log?.(`resize display failed: ${String(e)}`));
   }
 
@@ -199,7 +214,9 @@ export class ScrcpySession implements MediaSource {
   }
 
   get #role(): SessionRole {
-    return this.opts.role ?? { kind: "main" };
+    const role = this.opts.role ?? { kind: "main" };
+    if (role.kind === "popout" && this.#wantedGeometry) return { ...role, geometry: this.#wantedGeometry };
+    return role;
   }
 
   /** Only a main session with no companion streams audio and syncs the clipboard itself. */
@@ -238,7 +255,8 @@ export class ScrcpySession implements MediaSource {
       await this.#deps.pushServer(this.opts.adb, jar, instance.jarPath);
       if (this.#stopped) return "stopped";
 
-      const init = buildInit(this.opts.settings, attempt, this.#role, this.opts.companion);
+      const role = this.#role;
+      const init = buildInit(this.opts.settings, attempt, role, this.opts.companion);
       const options = new AdbScrcpyOptions4_1({ ...init, scid: instance.scid } as never);
       const startPromise = this.#deps.startClient(this.opts.adb, options, instance.jarPath);
       client = await this.#withTimeout(startPromise, "scrcpy server did not start within", () => {
@@ -280,8 +298,11 @@ export class ScrcpySession implements MediaSource {
       });
       sink.status({ state: "streaming", serial: this.opts.serial, model: this.opts.model, deviceId: this.opts.deviceId ?? this.opts.serial });
       sink.videoPacket(toWire(first.value));
-      const role = this.#role;
-      if (role.kind === "popout") this.#startApp(client, role.pkg);
+      if (role.kind === "popout") {
+        this.#startApp(client, role.pkg);
+        this.#shownGeometry = role.geometry;
+        this.#syncDisplaySize();
+      }
       if (this.#ownsMedia) {
         this.#startClipboardSync(client);
         void pumpAudio(client, sink, {

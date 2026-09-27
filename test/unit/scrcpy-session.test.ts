@@ -807,3 +807,75 @@ test("every attempt runs its own server instance: a fresh scid and a jar path of
   }
   expect(new Set(started.map((s) => s.scid)).size).toBe(3);
 });
+
+test("a resize that arrives while the server is still starting reaches the display once it streams", async () => {
+  const resizes: unknown[] = [];
+  const controller = {
+    startApp: async () => {},
+    resizeDisplay: async (m: unknown) => {
+      resizes.push(m);
+    },
+  };
+  let serverUp!: () => void;
+  const serverStarted = new Promise<void>((resolve) => {
+    serverUp = resolve;
+  });
+  let newDisplay: unknown;
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => new Uint8Array([1]),
+    pushServer: async () => {},
+    startClient: async (_adb, options) => {
+      newDisplay = (options.value as { newDisplay?: unknown }).newDisplay;
+      await serverStarted;
+      return oneShotClient(streamWithOnePacket, { controller }) as never;
+    },
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  const started = session.start(fakeSink().sink);
+  await flush();
+
+  session.resize({ width: 480, height: 856, dpi: 160 });
+  serverUp();
+  await started;
+  await flush();
+
+  expect(newDisplay).toBe("400x856/160");
+  expect(resizes).toEqual([{ width: 480, height: 856 }]);
+  await session.stop();
+});
+
+test("a resize before an attempt builds its server options sizes that attempt's new display instead", async () => {
+  const resizes: unknown[] = [];
+  const controller = {
+    startApp: async () => {},
+    resizeDisplay: async (m: unknown) => {
+      resizes.push(m);
+    },
+  };
+  let jarRead!: () => void;
+  const jarReady = new Promise<void>((resolve) => {
+    jarRead = resolve;
+  });
+  let newDisplay: unknown;
+  const deps: Partial<ScrcpyServerDeps> = {
+    readServerJar: async () => {
+      await jarReady;
+      return new Uint8Array([1]);
+    },
+    pushServer: async () => {},
+    startClient: async (_adb, options) => {
+      newDisplay = (options.value as { newDisplay?: unknown }).newDisplay;
+      return oneShotClient(streamWithOnePacket, { controller }) as never;
+    },
+  };
+  const session = new ScrcpySession(baseOpts(deps, { role: POPOUT_ROLE }));
+  const started = session.start(fakeSink().sink);
+  session.resize({ width: 480, height: 856, dpi: 160 });
+  jarRead();
+  await started;
+  await flush();
+
+  expect(newDisplay).toBe("480x856/160");
+  expect(resizes).toEqual([]);
+  await session.stop();
+});

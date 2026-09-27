@@ -464,18 +464,39 @@ test("a pop-out with no frame 5 s after its app was started, whose app stayed on
   expect(notices).toEqual(["Example can't run in its own window"]);
 });
 
-test("a pop-out that streamed before 5 s is never checked for refusal", async () => {
+test("frames arriving after the app's start do not stop the refusal check, since the server repeats its last frame", async () => {
   vi.useFakeTimers();
-  const { manager, windows, sessions, refusalChecks } = harness({ checkRefused: async () => true });
+  const { manager, windows, sessions, notices, refusalChecks } = harness({
+    identify: async () => ({ label: "Example", icon: null }),
+    checkRefused: async () => true,
+  });
+  manager.setPhone(fold());
+  manager.open("com.example.app");
+  sessions[0].appStarted();
+  for (let t = 0; t < 5000; t += 100) {
+    sessions[0].frame();
+    await vi.advanceTimersByTimeAsync(100);
+  }
+
+  expect(refusalChecks).toEqual(["com.example.app"]);
+  expect(windows[0].closeCalls).toBe(1);
+  expect(manager.count()).toBe(0);
+  expect(notices).toEqual(["Example can't run in its own window"]);
+});
+
+test("an app that moved to its own display is checked once and stays open while it streams", async () => {
+  vi.useFakeTimers();
+  const { manager, windows, sessions, notices, refusalChecks } = harness({ checkRefused: async () => false });
   manager.setPhone(fold());
   manager.open("com.example.app");
   sessions[0].appStarted();
   sessions[0].frame();
 
-  await vi.advanceTimersByTimeAsync(5000);
-  expect(refusalChecks).toEqual([]);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(refusalChecks).toEqual(["com.example.app"]);
   expect(windows[0].closeCalls).toBe(0);
   expect(manager.count()).toBe(1);
+  expect(notices).toEqual([]);
 });
 
 test("a slow pop-out whose app is not on the phone screen stays open, and a failed check only logs", async () => {
@@ -498,7 +519,7 @@ test("a slow pop-out whose app is not on the phone screen stays open, and a fail
   expect(logs.some((l) => l.includes("dumpsys timed out"))).toBe(true);
 });
 
-test("a pop-out closed or streaming by the time the refusal check answers is left alone", async () => {
+test("a pop-out closed by the time the refusal check answers is left alone", async () => {
   vi.useFakeTimers();
   let answer!: (refused: boolean) => void;
   const { manager, windows, sessions, notices } = harness({ checkRefused: () => new Promise((resolve) => (answer = resolve)) });
@@ -506,7 +527,7 @@ test("a pop-out closed or streaming by the time the refusal check answers is lef
   manager.open("com.example.app");
   sessions[0].appStarted();
   await vi.advanceTimersByTimeAsync(5000);
-  sessions[0].frame();
+  windows[0].userClose();
   answer(true);
   await vi.advanceTimersByTimeAsync(1);
 

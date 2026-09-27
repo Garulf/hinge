@@ -61,7 +61,11 @@ export type OpenResult = "opened" | "focused" | "queued" | "limit";
 
 const LIMIT_NOTICE = `Up to ${MAX_POPOUTS} apps can be open at once`;
 const SAVE_BOUNDS_DEBOUNCE_MS = 500;
-/** Counted from the app's start: an app that refuses secondary displays opens on the phone screen instead, and its pop-out never gets a frame. */
+/**
+ * Counted from the app's start: an app that refuses secondary displays opens
+ * on the phone screen instead. Frames are no sign that it moved: the encoder
+ * keeps repeating a display's last frame even when nothing new is shown.
+ */
 const REFUSAL_CHECK_MS = 5000;
 
 function watchSink(sink: MediaSink, on: { frame(): void; error(): void }): MediaSink {
@@ -284,7 +288,7 @@ export class PopoutManager {
   }
 
   #appStarted(entry: Entry): void {
-    if (entry.streamed || this.#entries.get(entry.pkg) !== entry) return;
+    if (this.#entries.get(entry.pkg) !== entry) return;
     this.#clearRefusalTimer(entry);
     entry.refusalTimer = setTimeout(() => {
       entry.refusalTimer = null;
@@ -305,13 +309,12 @@ export class PopoutManager {
   #streamed(entry: Entry): void {
     if (entry.streamed) return;
     entry.streamed = true;
-    this.#clearRefusalTimer(entry);
     for (const resolve of entry.streamWaiters.splice(0)) resolve(true);
   }
 
   #checkRefused(entry: Entry): void {
     const phone = this.#phone;
-    const pending = () => this.#entries.get(entry.pkg) === entry && !entry.streamed;
+    const pending = () => this.#entries.get(entry.pkg) === entry;
     if (!phone || phone.deviceId !== entry.deviceId || !pending()) return;
     this.deps
       .checkRefused(phone, entry.pkg)

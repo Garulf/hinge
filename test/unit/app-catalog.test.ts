@@ -23,6 +23,12 @@ test("parseAgentApps falls back to the package for a blank label and drops entri
   ]);
 });
 
+test("parseAgentApps drops any package that is not a package name, so none reaches a shell command or a file path", () => {
+  const hostile = ["../../../../Desktop/x", "a;reboot", "$(reboot)", "a b", "com..x", "com.example.ok/../x"];
+  const json = JSON.stringify([...hostile.map((pkg) => ({ pkg, label: "Evil", versionCode: 1 })), { pkg: "com.example.ok", label: "Ok", versionCode: 1 }]);
+  expect(parseAgentApps(json)).toEqual([{ pkg: "com.example.ok", label: "Ok", versionCode: 1 }]);
+});
+
 test("parseAgentApps throws when the output is not an array", () => {
   expect(() => parseAgentApps('{"pkg":"com.example.chat"}')).toThrow();
   expect(() => parseAgentApps("hinge-agent: boom")).toThrow();
@@ -36,13 +42,41 @@ test("parseAgentIcons decodes each package's base64 PNG and skips anything that 
   expect([...icons["com.example.chat"]]).toEqual([...png]);
 });
 
+test("parseAgentIcons drops any key that is not a package name", () => {
+  const png = Buffer.from([1, 2, 3]).toString("base64");
+  expect(Object.keys(parseAgentIcons(JSON.stringify({ "../../x": png, "a;b": png, "com.example.ok": png })))).toEqual(["com.example.ok"]);
+});
+
 test("parseAgentIcons throws when the output is not an object", () => {
   expect(() => parseAgentIcons("[]")).toThrow();
   expect(() => parseAgentIcons("null")).toThrow();
 });
 
-test("parseRecents lists each recent task's package in order, once, from A= or else the first cmp=", () => {
-  expect(parseRecents(RECENTS)).toEqual(["com.example.chat", "com.example.maps", "com.android.systemui", "com.example.notes", "com.example.browser"]);
+test("parseRecents lists each recent task's package in order, once, from its component before its affinity", () => {
+  expect(parseRecents(RECENTS)).toEqual([
+    "com.example.chat",
+    "com.example.maps",
+    "com.android.systemui",
+    "com.example.notes",
+    "com.example.browser",
+    "com.example.camera",
+    "com.example.mail",
+    "com.example.music",
+  ]);
+});
+
+test("parseRecents names a task with a custom affinity by its component's package", () => {
+  const text = "  * Recent #0: Task{1 #3 type=standard A=10300:com.example.mail.compose U=0}\n    intent={flg=0x10080001 cmp=com.example.mail/.ComposeActivity}\n";
+  expect(parseRecents(text)).toEqual(["com.example.mail"]);
+});
+
+test("parseRecents takes the header's I= or aI= component when the block has no cmp=", () => {
+  expect(parseRecents("  * Recent #0: Task{1 #3 type=standard I=com.example.camera/.CameraActivity U=0}\n")).toEqual(["com.example.camera"]);
+  expect(parseRecents("  * Recent #0: Task{1 #3 type=standard aI=com.example.music/.PlayerActivity U=0}\n")).toEqual(["com.example.music"]);
+});
+
+test("parseRecents skips a package that is not a package name", () => {
+  expect(parseRecents("  * Recent #0: Task{1 #3 A=10:com..x U=0}\n  * Recent #1: Task{2 #4 A=11:com.example.ok U=0}\n")).toEqual(["com.example.ok"]);
 });
 
 test("parseRecents reads nothing from text without Recent blocks", () => {
@@ -61,6 +95,10 @@ test("parseLauncherActivities lists each package with a launcher activity once, 
     { pkg: "com.android.settings", label: "com.android.settings", versionCode: null },
     { pkg: "com.example.notes", label: "com.example.notes", versionCode: null },
   ]);
+});
+
+test("parseLauncherActivities skips a package that is not a package name", () => {
+  expect(parseLauncherActivities("    com..x/.A\n    com.example.ok/.Main\n").map((a) => a.pkg)).toEqual(["com.example.ok"]);
 });
 
 test("parseLauncherActivities reads nothing from No activities found", () => {

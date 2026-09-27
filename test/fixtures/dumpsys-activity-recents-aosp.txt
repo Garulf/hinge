@@ -47,6 +47,17 @@ ACTIVITY MANAGER RECENT TASKS (dumpsys activity recents)
     userId=0 effectiveUid=u0a150 mCallingUid=u0a89 mUserSetupComplete=true mCallingPackage=com.android.launcher3 mCallingFeatureId=null
     intent={act=android.intent.action.VIEW dat=https://example.com/... flg=0x10000000 cmp=com.example.browser/.BrowserActivity}
     taskId=390 rootTaskId=390
+  * Recent #6: Task{2d3e4f5 #385 type=standard I=com.example.camera/.CameraActivity U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a160 mCallingUid=u0a89 mUserSetupComplete=true mCallingPackage=com.android.launcher3 mCallingFeatureId=null
+    taskId=385 rootTaskId=385
+  * Recent #7: Task{4e5f6a7 #380 type=standard A=10300:com.example.mail.compose U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a300 mCallingUid=u0a300 mUserSetupComplete=true mCallingPackage=com.example.mail mCallingFeatureId=null
+    affinity=10300:com.example.mail.compose
+    intent={act=android.intent.action.SEND flg=0x10080001 cmp=com.example.mail/.ComposeActivity}
+    taskId=380 rootTaskId=380
+  * Recent #8: Task{5f6a7b8 #377 type=standard aI=com.example.music/.PlayerActivity U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    userId=0 effectiveUid=u0a171 mCallingUid=u0a171 mUserSetupComplete=true mCallingPackage=com.example.music mCallingFeatureId=null
+    taskId=377 rootTaskId=377
 
   Visible recent tasks (most recent first):
   * RecentTaskInfo #0:

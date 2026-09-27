@@ -68,9 +68,3 @@ export function launcherTarget(o: { platform: NodeJS.Platform; execPath: string;
   const wrapper = o.platform === "win32" ? o.env.PORTABLE_EXECUTABLE_FILE : o.platform === "linux" ? o.env.APPIMAGE : undefined;
   return wrapper || o.execPath;
 }
-
-const PACKAGE_NAME = /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/;
-
-export function isPackageName(pkg: string): boolean {
-  return PACKAGE_NAME.test(pkg);
-}

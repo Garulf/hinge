@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { desktopEntry, isPackageName, launcherTarget, pngToIco, pngWidth, shortcutFileName } from "../../src/shared/shortcut-files";
+import { isPackageName } from "../../src/shared/package-name";
+import { desktopEntry, launcherTarget, pngToIco, pngWidth, shortcutFileName } from "../../src/shared/shortcut-files";
 
 const FAKE_PNG = new Uint8Array([1, 2, 3]);
 

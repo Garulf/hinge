@@ -1,6 +1,7 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { desktopEntry, isPackageName, launcherTarget, pngToIco, pngWidth, shortcutFileName } from "../shared/shortcut-files";
+import { isPackageName } from "../shared/package-name";
+import { desktopEntry, launcherTarget, pngToIco, pngWidth, shortcutFileName } from "../shared/shortcut-files";
 import type { AppIdentity } from "./popout-manager";
 
 /** The part of Electron's ShortcutDetails that hinge sets. */

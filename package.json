@@ -23,11 +23,12 @@
     "test": "vitest run",
     "test:e2e": "npm run build && xvfb-run -a playwright test",
     "fetch-vendor": "node scripts/fetch-vendor.mjs",
+    "build-agent": "node scripts/build-agent.mjs",
     "make-icon": "node scripts/make-icon.mjs",
     "make-fixture": "node --experimental-strip-types scripts/make-synthetic-recording.mjs",
     "pack:win": "npm run build && electron-builder --win --dir",
     "pack:linux": "npm run build && electron-builder --linux --dir",
-    "pack:release": "npm run fetch-vendor && npm run build && node scripts/release-modes.mjs && electron-builder --win --linux --publish=never"
+    "pack:release": "npm run fetch-vendor && npm run build-agent && npm run build && node scripts/release-modes.mjs && electron-builder --win --linux --publish=never"
   },
   "dependencies": {
     "@yume-chan/adb": "3.0.0-beta.3",

@@ -36,3 +36,17 @@ are built from the Android SDK platform-tools, r37.0.1, from
 `https://dl.google.com/android/repository/`. Their own licence and copyright
 notice is bundled alongside them as `NOTICE.txt` and ships in every packaged
 build at `resources/vendor/platform-tools-<os>/NOTICE.txt`.
+
+## hinge-agent (adapted scrcpy code)
+
+`agent/src/net/garulf/hinge/SystemContext.java`, built into
+`vendor/hinge-agent.jar` by `npm run build-agent`, adapts the system
+`Context` setup from scrcpy's
+[`Workarounds.java`](https://github.com/Genymobile/scrcpy/blob/master/server/src/main/java/com/genymobile/scrcpy/Workarounds.java)
+and
+[`FakeContext.java`](https://github.com/Genymobile/scrcpy/blob/master/server/src/main/java/com/genymobile/scrcpy/FakeContext.java)
+(taken at commit `19c1261d2e2cbf2b5e6a71a8b64cc1dd3ede06ac`). It is modified:
+only the `ActivityThread` system context, the configuration controller and the
+`com.android.shell` package name are kept. The same Apache 2.0 notice as
+scrcpy-server above applies, and the full licence text is in
+[LICENSE-scrcpy](LICENSE-scrcpy).

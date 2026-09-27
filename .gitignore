@@ -174,3 +174,6 @@ playwright-report/
 # model
 model/out/
 __pycache__/
+
+# hinge-agent
+agent/build/

@@ -32,7 +32,7 @@ r37.0.1) and `scrcpy-server-v4.1` into `vendor/` (gitignored). Pass `--only win`
 
 ## Status
 
-First release candidate. The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, flat and pixel-accurate straight on and 3D when you turn it by its case, with touch, keyboard, scrcpy's shortcuts, clipboard sync, phone audio, mirrored notifications, file drop and Wi-Fi pairing. Builds are made locally for Windows (installer and portable exe) and Linux (AppImage and deb).
+First release candidate. The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, flat and pixel-accurate straight on and 3D when you turn it by its case, with touch, keyboard, scrcpy's shortcuts, clipboard sync, phone audio, mirrored notifications, file drop, Wi-Fi pairing and phone apps in windows of their own. Builds are made locally for Windows (installer and portable exe) and Linux (AppImage and deb).
 
 ## Running
 
@@ -51,6 +51,8 @@ connects to whatever device `adb` sees. Relevant flags:
   `device_state`/rotation while you fold and rotate the phone. Writes a JSON
   report to the desktop, or to the path given with `--out <file>`
 - `--seconds <n>` how long `--probe` samples for (default 90)
+- `--app <package>` open one phone app in its own window, without the main
+  window (see [App windows](#app-windows))
 - `--user-data <dir>` keep settings in another folder, as the e2e tests do
 - `--dry-run-transfers` with `--replay`, run dropped files through the
   transfer queue without a phone, so the progress notices can be tested
@@ -143,6 +145,9 @@ Hovering the bezel along the phone's top edge shows a small bar of buttons
 (the screen below it stays the phone's, so pulling down the notification
 shade from the top still works):
 
+- **Apps** lists the phone's apps to open in their own windows (see
+  [App windows](#app-windows)).
+- **Pop out** opens the app on the phone's screen in its own window (MOD+t).
 - **Devices** lists the phones adb can see (USB, Wi-Fi and mDNS), lets you
   switch to another one, switch a USB phone to Wi-Fi, disconnect a Wi-Fi
   phone, or pair a new one.
@@ -194,6 +199,7 @@ mix of left or right Alt, Super and Ctrl in Settings. The table follows
 | Shrink the window back after a panel | MOD+w |
 | Bigger or smaller, 10 percent steps | MOD+wheel |
 | Turn the phone back to straight on | MOD+d |
+| Open the phone's current app in its own window | MOD+t |
 | Turn the phone model from anywhere, or centre it | Alt+drag, Alt+double-click |
 | Pause display, or resume | MOD+z, MOD+Shift+z |
 | Reset video capture | MOD+Shift+r |
@@ -241,6 +247,40 @@ is answered, declined or missed. Clicking it brings hinge to the front so
 you can answer on the mirror. Missed calls come through as the dialer's
 own notification. Both are turned off by the same setting in Settings.
 
+### App windows
+
+A phone app can run in a window of its own, next to the main one. Each app
+window streams its own display on the phone, so the phone's screen and up
+to four apps can be in use at once. There are four ways to open one:
+
+- **Apps** in the hover menu lists the phone's apps with recent ones on
+  top. Type to search, and click an app or press Enter to open the first
+  match.
+- **Pop out** in the hover menu, or MOD+t, opens the app on the phone's
+  screen. Android normally moves the app to its new window; if it stays on
+  the phone's screen instead, a notice says so and hinge leaves it there.
+- `hinge --app <package>` opens the app on its own, with the main window
+  hidden. If hinge is already running, the app opens in that instance.
+- **Shortcut** under an app in the Apps list adds it to the Start menu on
+  Windows, or to the application menu on Linux, as a shortcut that runs
+  `hinge --app <package>`.
+
+An app window is an ordinary resizable window. The app's display follows
+its size, so an app that has a tablet layout switches to it once the
+window is wider than about 600 px. Each window's place and size are
+remembered per phone and app. Touch, the wheel, typing, BACK
+(right click or MOD+b), copy and paste, volume and MOD+Shift+r work as in
+the main window; home, recents, the shade and the phone model's shortcuts
+stay with the main window. A fifth app is refused with a notice. An app
+that won't run on another display ends up on the phone's screen; its
+window then closes with a notice.
+
+Closing the main window while app windows are open hides it; the phone's
+audio and the clipboard keep working, and hinge quits when the last window
+closes. The tray icon brings the main window back, opens the Apps list, or
+quits. If the phone drops, app windows wait and reconnect with it;
+connecting a different phone closes them.
+
 ### Files
 
 Drop files on the window. An `.apk` is installed, replacing an older version
@@ -278,7 +318,8 @@ path. A file that can't be read is kept as `settings.json.bad` and defaults
 are used, and a single setting with a wrong value falls back to its
 default on its own. Besides the panel's options it holds the colourway,
 the last phone, and for each phone (by serial number) the window's
-position, the size you picked and how the model was turned. The last
+position, the size you picked, how the model was turned and where each app
+window was. The last
 phone's position, size and turn are applied at startup, before it connects.
 
 ## Development commands

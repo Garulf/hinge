@@ -330,10 +330,16 @@ npm run build         # production build
 npm run typecheck     # tsc -b
 npm test              # vitest
 npm run test:e2e       # playwright, replays a synthetic fold recording end to end
+npm run build-agent    # the phone-side app list helper, vendor/hinge-agent.jar
 npm run pack:win       # unpacked Windows build in dist/win-unpacked
 npm run pack:linux     # unpacked Linux build in dist/linux-unpacked
 npm run pack:release   # installer, portable exe, AppImage and deb in dist/
 ```
+
+`build-agent` needs a JDK, version 11 or newer, with `javac` and `java` on
+the PATH. The first run downloads Android's `d8.jar` and `android.jar` into
+`vendor/.agent-sdk`. The `pack:*` commands run it for you; without the jar,
+the app picker lists package names only, with no labels or icons.
 
 `pack:release` builds the Windows files on Linux too, through wine, which
 electron-builder needs to write the icon, product name and version into

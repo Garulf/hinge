@@ -216,3 +216,40 @@ test("disabled by the setting: no shell command is ever run", async () => {
   await stop();
   expect(phone.commands).toEqual([]);
 });
+
+test("a poll the phone never answers is given up after 15 s, its command killed, and polling carries on", async () => {
+  vi.useFakeTimers();
+  const signals: (AbortSignal | undefined)[] = [];
+  let poll = 0;
+  const { stop, shown, logs } = await watch(scriptedPhone([]), {
+    runShell: (_adb, command, signal) => {
+      if (command.startsWith("content query")) return Promise.resolve(ALEX);
+      signals.push(signal);
+      return poll++ === 0 ? new Promise<string>(() => {}) : Promise.resolve(RINGING);
+    },
+  });
+  await vi.advanceTimersByTimeAsync(14_999);
+  expect(poll).toBe(1);
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(signals[0]?.aborted).toBe(true);
+  expect(logs.some((l) => l.includes("timed out"))).toBe(true);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(poll).toBe(2);
+  expect(shown).toHaveLength(1);
+  await stop();
+});
+
+test("a contact lookup the phone never answers is given up after 15 s and the toast shows the number", async () => {
+  vi.useFakeTimers();
+  const { stop, shown, logs } = await watch(scriptedPhone([RINGING], () => ""), {
+    runShell: (_adb, command) => (command.startsWith("content query") ? new Promise<string>(() => {}) : Promise.resolve(RINGING)),
+  });
+  await vi.advanceTimersByTimeAsync(14_999);
+  expect(shown).toEqual([]);
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(shown[0].input.body).toBe("+15551234567");
+  expect(logs.some((l) => l.includes("timed out"))).toBe(true);
+  await stop();
+});

@@ -1,6 +1,6 @@
 import type { Adb } from "@yume-chan/adb";
 import { incomingCallBody, parseCallState, parseContactName, phoneLookupCommand } from "../shared/calls";
-import { runShellText } from "./adb-shell";
+import { runShellChecked, withinTimeout } from "./adb-shell";
 import { defaultDelay, type Notifier, type NotifierHandle } from "./notification-mirror";
 
 export interface CallWatcherOpts {
@@ -10,7 +10,8 @@ export interface CallWatcherOpts {
   isWindowFocused: () => boolean;
   focusWindow: () => void;
   log: (line: string) => void;
-  runShell?: (adb: Adb, command: string) => Promise<string>;
+  /** Aborting the signal kills the command. */
+  runShell?: (adb: Adb, command: string, signal: AbortSignal) => Promise<string>;
   pollMs?: number;
   delay?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
@@ -23,13 +24,15 @@ const REGISTRY_COMMAND = "dumpsys telephony.registry";
  * for as long as the phone rings, closing it once the call is answered,
  * declined or missed. A call that starts ringing while the hinge window is
  * focused gets no toast, since the phone's own call screen is on the mirror.
- * A poll that throws is logged and leaves the current state alone. Returns a
- * stop function that also closes a toast still showing.
+ * A poll that throws or takes longer than 15 s is logged and leaves the
+ * current state alone. Returns a stop function that also closes a toast
+ * still showing.
  */
 export async function startCallWatcher(adb: Adb, opts: CallWatcherOpts): Promise<() => Promise<void>> {
   if (!opts.enabled()) return async () => {};
 
-  const runShell = opts.runShell ?? runShellText;
+  const runShell = (command: string, what: string): Promise<string> =>
+    withinTimeout((signal) => (opts.runShell ?? runShellChecked)(adb, command, signal), what);
   const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
   const wait = opts.delay ?? defaultDelay;
   const controller = new AbortController();
@@ -42,7 +45,7 @@ export async function startCallWatcher(adb: Adb, opts: CallWatcherOpts): Promise
     const command = phoneLookupCommand(number);
     if (!command) return null;
     try {
-      return parseContactName(await runShell(adb, command));
+      return parseContactName(await runShell(command, "the contact lookup"));
     } catch (e) {
       opts.log(`call watcher: contact lookup failed: ${String(e)}`);
       return null;
@@ -64,7 +67,7 @@ export async function startCallWatcher(adb: Adb, opts: CallWatcherOpts): Promise
   async function tick(): Promise<void> {
     let text: string;
     try {
-      text = await runShell(adb, REGISTRY_COMMAND);
+      text = await runShell(REGISTRY_COMMAND, "the call state poll");
     } catch (e) {
       opts.log(`call watcher: poll failed: ${String(e)}`);
       return;

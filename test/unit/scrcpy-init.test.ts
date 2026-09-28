@@ -52,6 +52,10 @@ test("a pop-out session asks for a new display sized to its window and leaves au
   });
 });
 
+test("a pop-out display is a flex display, because the server throws on a resize of any other and takes the session down with it", () => {
+  expect(buildInit(DEFAULT_STREAM_SETTINGS, 0, POPOUT)).toMatchObject({ flexDisplay: true });
+});
+
 test("a pop-out session keeps the user's codec, bitrate and fps and the retry ladder", () => {
   const settings = { ...DEFAULT_STREAM_SETTINGS, videoCodec: "h265" as const, videoBitRate: 4_000_000, maxSize: 1280, maxFps: 30 };
   expect(buildInit(settings, 0, POPOUT)).toMatchObject({ videoCodec: "h265", videoBitRate: 4_000_000, maxFps: 30, maxSize: 0, ignoreVideoEncoderConstraints: false });

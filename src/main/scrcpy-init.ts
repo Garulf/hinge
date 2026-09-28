@@ -62,6 +62,7 @@ function popoutOverrides(g: DisplayGeometry): Record<string, unknown> {
     maxSize: 0,
     newDisplay: `${g.width}x${g.height}/${g.dpi}`,
     flexDisplay: true,
+    keepActive: true,
     vdSystemDecorations: false,
     vdDestroyContent: false,
     displayImePolicy: "hide",

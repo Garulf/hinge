@@ -21,6 +21,8 @@ export interface HingeApi {
   toggleFullscreen(): void;
   onFullscreen(fn: (on: boolean) => void): void;
   quit(): void;
+  /** The menu's close button: to the tray when closeToTray is on and there is one, otherwise the same as quit. */
+  close(): void;
   /** process.platform of the app, e.g. "linux", "win32". */
   readonly platform: string;
 }

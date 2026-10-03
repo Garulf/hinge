@@ -15,7 +15,7 @@ export interface DeviceSettings {
 }
 
 export interface Settings {
-  version: 4;
+  version: 5;
   colourway: string;
   videoCodec: "h264" | "h265";
   videoBitRate: number;
@@ -34,6 +34,8 @@ export interface Settings {
   lastDevice: string | null;
   /** Mirrors the phone's notifications to the PC as they arrive; on by default. */
   mirrorNotifications: boolean;
+  /** The main window's close button hides it to the system tray, leaving hinge running, instead of quitting; off by default. */
+  closeToTray: boolean;
   /** Keyed by the phone's identity, which stays the same across USB, Wi-Fi and a changing wireless port. */
   devices: Record<string, DeviceSettings>;
   /** Version 1 entries, keyed by an adb transport serial; each moves into devices when that serial's identity is first seen. */

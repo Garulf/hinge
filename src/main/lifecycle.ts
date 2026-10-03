@@ -1,10 +1,10 @@
-/** hinge keeps running, its main window hidden, while any pop-out is open. */
-export function onMainWindowClose(o: { popouts: number }): "hide" | "quit" {
-  return o.popouts > 0 ? "hide" : "quit";
+/** hinge keeps running, its main window hidden, while any pop-out is open, and always when it closes to the tray. */
+export function onMainWindowClose(o: { popouts: number; toTray: boolean }): "hide" | "quit" {
+  return o.toTray || o.popouts > 0 ? "hide" : "quit";
 }
 
-export function afterPopoutClosed(o: { mainVisible: boolean; popouts: number }): "quit" | "stay" {
-  return !o.mainVisible && o.popouts === 0 ? "quit" : "stay";
+export function afterPopoutClosed(o: { mainVisible: boolean; popouts: number; toTray: boolean }): "quit" | "stay" {
+  return !o.mainVisible && o.popouts === 0 && !o.toTray ? "quit" : "stay";
 }
 
 /** Runs every step of a shutdown at once, but never waits more than `limitMs` for them: quitting must not hang on a phone that stopped answering. */

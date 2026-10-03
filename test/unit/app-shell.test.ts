@@ -15,6 +15,7 @@ function harness(startHidden: boolean, openResult: "opened" | "queued" = "queued
   const companion: boolean[] = [];
   const opened: string[] = [];
   let count = 0;
+  const tray = { on: false };
   const countListeners: ((n: number) => void)[] = [];
   const shell = new AppShell(
     {
@@ -30,6 +31,7 @@ function harness(startHidden: boolean, openResult: "opened" | "queued" = "queued
         },
         onCountChanged: (cb) => countListeners.push(cb),
       },
+      toTray: () => tray.on,
       quit: () => calls.push("quit"),
       notice: (text) => notices.push(text),
       log: () => {},
@@ -40,7 +42,7 @@ function harness(startHidden: boolean, openResult: "opened" | "queued" = "queued
     count = n;
     for (const cb of countListeners) cb(n);
   };
-  return { shell, calls, companion, opened, setCount, notices };
+  return { shell, calls, companion, opened, setCount, notices, tray };
 }
 
 test("the companion is wanted as soon as the shell starts with the main window shown, without waiting for a show event", () => {
@@ -80,6 +82,47 @@ test("closing the main window with no pop-outs quits and hides nothing", () => {
 
   expect(shell.closeRequested()).toBe("quit");
   expect(calls).toEqual([]);
+});
+
+test("closing the main window to the tray hides it and turns its video off even with no pop-outs", () => {
+  const { shell, calls, companion, tray } = harness(false);
+  tray.on = true;
+  shell.start();
+
+  expect(shell.closeRequested()).toBe("hide");
+
+  expect(calls).toEqual(["hide", "video false"]);
+  expect(shell.mainVisible).toBe(false);
+  expect(companion.at(-1)).toBe(false);
+});
+
+test("the close button quits, pop-outs and all, unless hinge closes to the tray", () => {
+  const quits = harness(false);
+  quits.shell.start();
+  quits.setCount(1);
+  quits.shell.closeButton();
+  expect(quits.calls).toEqual(["quit"]);
+
+  const hides = harness(false);
+  hides.tray.on = true;
+  hides.shell.start();
+  hides.shell.closeButton();
+  expect(hides.calls).toEqual(["hide", "video false"]);
+  expect(hides.shell.mainVisible).toBe(false);
+});
+
+test("the last pop-out closing leaves hinge in the tray when it closes there", () => {
+  const { shell, calls, setCount, tray } = harness(false);
+  tray.on = true;
+  shell.start();
+  setCount(1);
+  shell.closeButton();
+
+  setCount(0);
+
+  expect(calls).not.toContain("quit");
+  shell.showMain();
+  expect(shell.mainVisible).toBe(true);
 });
 
 test("the last pop-out closing quits only while the main window is hidden", () => {

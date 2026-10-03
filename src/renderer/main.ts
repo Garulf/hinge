@@ -300,6 +300,9 @@ function onAction(action: HingeAction): void {
     case "quit":
       window.hinge.quit();
       break;
+    case "close":
+      window.hinge.close();
+      break;
     case "pause":
       display.paused = true;
       chrome.toast({ id: "pause", text: "Display paused. MOD+Shift+z resumes.", sticky: true });

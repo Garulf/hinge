@@ -218,12 +218,13 @@ const NUMERIC_CHOICES: Record<NumericSetting, [number, string][]> = {
 };
 
 export class SettingsPanel implements Panel {
-  readonly size = { w: 300, h: 540 };
+  readonly size = { w: 300, h: 600 };
   readonly node: HTMLElement;
   readonly #deps: SettingsPanelDeps;
   readonly #modifiers = new Map<ShortcutModifier, HTMLInputElement>();
   readonly #audio = el("input", { attrs: { type: "checkbox" } });
   readonly #mirrorNotifications = el("input", { attrs: { type: "checkbox" } });
+  readonly #closeToTray = el("input", { attrs: { type: "checkbox" } });
   readonly #codec = el("select", {}, [el("option", { text: "H.264", attrs: { value: "h264" } }), el("option", { text: "H.265", attrs: { value: "h265" } })]);
   readonly #wheelStyle = el("select", {}, [
     el("option", { text: "Finger swipe", attrs: { value: "swipe" } }),
@@ -243,6 +244,7 @@ export class SettingsPanel implements Panel {
     }
     this.#audio.addEventListener("change", () => deps.save({ audio: this.#audio.checked }));
     this.#mirrorNotifications.addEventListener("change", () => deps.save({ mirrorNotifications: this.#mirrorNotifications.checked }));
+    this.#closeToTray.addEventListener("change", () => deps.save({ closeToTray: this.#closeToTray.checked }));
     this.#codec.addEventListener("change", () => deps.save({ videoCodec: this.#codec.value as Settings["videoCodec"] }));
     this.#wheelStyle.addEventListener("change", () => deps.save({ wheelStyle: this.#wheelStyle.value as Settings["wheelStyle"] }));
     const numericFields = (Object.keys(NUMERIC_CHOICES) as NumericSetting[]).map((key) => {
@@ -257,6 +259,9 @@ export class SettingsPanel implements Panel {
       modifierGrid,
       el("h3", { text: "Notifications" }),
       el("label", { className: "check" }, [this.#mirrorNotifications, "Mirror phone notifications and calls"]),
+      el("h3", { text: "Window" }),
+      el("label", { className: "check" }, [this.#closeToTray, "Close to the system tray"]),
+      el("p", { className: "note", text: "Closing keeps hinge running in the tray; MOD+q or the tray's Quit quits. Launching hinge again also brings the window back." }),
       el("h3", { text: "Stream" }),
       el("label", { className: "check" }, [this.#audio, "Play phone audio on this PC"]),
       el("div", { className: "grid" }, [
@@ -288,6 +293,7 @@ export class SettingsPanel implements Panel {
     for (const [modifier, box] of this.#modifiers) box.checked = held.includes(modifier);
     this.#audio.checked = settings.audio;
     this.#mirrorNotifications.checked = settings.mirrorNotifications;
+    this.#closeToTray.checked = settings.closeToTray;
     this.#codec.value = settings.videoCodec;
     this.#wheelStyle.value = settings.wheelStyle;
     for (const [key, select] of this.#numeric) {

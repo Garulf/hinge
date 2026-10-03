@@ -12,6 +12,8 @@ export interface AppShellDeps {
   setMainVideo(on: boolean): void;
   companionWanted(on: boolean): void;
   popouts: Pick<PopoutManager, "count" | "open" | "onCountChanged">;
+  /** Whether closing the main window leaves hinge running in the tray: the setting is on and there is a tray to come back from. */
+  toTray(): boolean;
   quit(): void;
   /** Shown in the main window, or as a system notification while it is hidden. */
   notice(text: string): void;
@@ -59,11 +61,17 @@ export class AppShell {
     this.#refreshCompanion();
   }
 
-  /** The main window's close button: hides it while pop-outs are open, otherwise lets the close quit hinge. */
+  /** The window system's close: hides the main window while pop-outs are open or hinge closes to the tray, otherwise lets the close quit hinge. */
   closeRequested(): "hide" | "quit" {
-    const outcome = onMainWindowClose({ popouts: this.#deps.popouts.count() });
+    const outcome = onMainWindowClose({ popouts: this.#deps.popouts.count(), toTray: this.#deps.toTray() });
     if (outcome === "hide") this.#hideMain();
     return outcome;
+  }
+
+  /** The menu's close button: hides the main window to the tray when hinge closes there, otherwise quits, pop-outs and all. */
+  closeButton(): void {
+    if (this.#deps.toTray()) this.#hideMain();
+    else this.#deps.quit();
   }
 
   /** hinge is quitting: the --app launch's wait must not bring the main window up during a slow quit. */
@@ -96,7 +104,7 @@ export class AppShell {
   #popoutsChanged(n: number): void {
     if (n > 0) this.#cancelFallback();
     this.#refreshCompanion();
-    if (afterPopoutClosed({ mainVisible: this.mainVisible, popouts: n }) === "quit") this.#deps.quit();
+    if (afterPopoutClosed({ mainVisible: this.mainVisible, popouts: n, toTray: this.#deps.toTray() }) === "quit") this.#deps.quit();
   }
 
   #cancelFallback(): void {

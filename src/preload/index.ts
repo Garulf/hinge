@@ -52,6 +52,7 @@ const api: HingeApi = {
     ipcRenderer.on("hinge:fullscreen", (_event, on: boolean) => fn(on));
   },
   quit: () => ipcRenderer.send("hinge:quit"),
+  close: () => ipcRenderer.send("hinge:close"),
   platform: process.platform,
 };
 

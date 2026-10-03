@@ -85,7 +85,7 @@ export class Chrome {
       { name: "colour", title: "Colour", press: () => this.#toggle("colour") },
       { name: "pin", title: "Always on top", press: () => deps.save({ alwaysOnTop: !this.#settings?.alwaysOnTop }) },
       { name: "settings", title: "Settings", press: () => this.#toggle("settings") },
-      { name: "close", title: "Quit (MOD+q)", press: () => deps.onAction("quit") },
+      { name: "close", title: "Quit (MOD+q)", press: () => deps.onAction("close") },
     ];
     this.#menu = el("div", { className: "hinge-menu hinge-glass", attrs: { role: "toolbar", "data-menu": "" } });
     for (const button of menuButtons) {
@@ -133,6 +133,7 @@ export class Chrome {
   settingsChanged(settings: Settings): void {
     this.#settings = settings;
     this.#buttons.get("pin")?.setAttribute("aria-pressed", String(settings.alwaysOnTop));
+    this.#buttons.get("close")?.setAttribute("title", settings.closeToTray ? "Close to tray (MOD+q quits)" : "Quit (MOD+q)");
     for (const panel of Object.values(this.#panels)) panel.settingsChanged(settings);
   }
 

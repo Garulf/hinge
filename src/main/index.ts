@@ -298,6 +298,7 @@ async function runMode(opts: RunOptions): Promise<void> {
   let quitHinge = (): void => {
     if (!win.isDestroyed()) win.close();
   };
+  let closeButton = (): void => quitHinge();
   let workAreaChanged = (): void => {};
   const { win, port } = createPhoneWindow({
     onMoved: () => {
@@ -306,6 +307,7 @@ async function runMode(opts: RunOptions): Promise<void> {
     },
     showWhenReady: startApp === null,
     onQuit: () => quitHinge(),
+    onClose: () => closeButton(),
   });
   const earlyLaunches: (string | null)[] = [];
   let secondLaunch = (requested: string | null): void => void earlyLaunches.push(requested);
@@ -419,6 +421,7 @@ async function runMode(opts: RunOptions): Promise<void> {
       setMainVideo,
       companionWanted: (on) => companion?.wanted(on),
       popouts,
+      toTray: () => settings.current.closeToTray && tray !== null,
       quit: () => quitHinge(),
       notice,
       log: logger.log,
@@ -443,6 +446,7 @@ async function runMode(opts: RunOptions): Promise<void> {
     ]).then(() => app.quit());
   });
   quitHinge = () => shutdown.request();
+  closeButton = () => shell.closeButton();
 
   win.on("close", (e) => {
     placement?.flush();

@@ -8,6 +8,7 @@ export type HingeAction =
   | "pixel-perfect"
   | "fit"
   | "quit"
+  | "close"
   | "toggle-fps"
   | "pause"
   | "unpause"

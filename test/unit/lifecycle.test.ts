@@ -2,15 +2,24 @@ import { expect, test, vi } from "vitest";
 import { afterPopoutClosed, onMainWindowClose, Shutdown, shutdownWithin } from "../../src/main/lifecycle";
 
 test("closing the main window hides it while pop-outs are open, and quits otherwise", () => {
-  expect(onMainWindowClose({ popouts: 0 })).toBe("quit");
-  expect(onMainWindowClose({ popouts: 1 })).toBe("hide");
+  expect(onMainWindowClose({ popouts: 0, toTray: false })).toBe("quit");
+  expect(onMainWindowClose({ popouts: 1, toTray: false })).toBe("hide");
+});
+
+test("closing the main window to the tray always hides it", () => {
+  expect(onMainWindowClose({ popouts: 0, toTray: true })).toBe("hide");
+  expect(onMainWindowClose({ popouts: 1, toTray: true })).toBe("hide");
 });
 
 test("the last pop-out closing quits only when the main window is hidden", () => {
-  expect(afterPopoutClosed({ mainVisible: false, popouts: 0 })).toBe("quit");
-  expect(afterPopoutClosed({ mainVisible: false, popouts: 1 })).toBe("stay");
-  expect(afterPopoutClosed({ mainVisible: true, popouts: 0 })).toBe("stay");
-  expect(afterPopoutClosed({ mainVisible: true, popouts: 1 })).toBe("stay");
+  expect(afterPopoutClosed({ mainVisible: false, popouts: 0, toTray: false })).toBe("quit");
+  expect(afterPopoutClosed({ mainVisible: false, popouts: 1, toTray: false })).toBe("stay");
+  expect(afterPopoutClosed({ mainVisible: true, popouts: 0, toTray: false })).toBe("stay");
+  expect(afterPopoutClosed({ mainVisible: true, popouts: 1, toTray: false })).toBe("stay");
+});
+
+test("the last pop-out closing leaves hinge in the tray when it closes there", () => {
+  expect(afterPopoutClosed({ mainVisible: false, popouts: 0, toTray: true })).toBe("stay");
 });
 
 test("shutdown gives up waiting after its limit when a step never finishes", async () => {

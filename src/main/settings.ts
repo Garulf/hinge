@@ -6,11 +6,11 @@ import type { DeviceSettings, Settings, SettingsPatch } from "../shared/settings
 
 export type { DeviceSettings, Settings, SettingsPatch, ShortcutModifier } from "../shared/settings";
 
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 
 export function defaultSettings(platform: string = process.platform): Settings {
   return {
-    version: 4,
+    version: 5,
     colourway: "jetblack",
     videoCodec: "h264",
     videoBitRate: 16_000_000,
@@ -24,6 +24,7 @@ export function defaultSettings(platform: string = process.platform): Settings {
     scrollSpeed: 1,
     lastDevice: null,
     mirrorNotifications: true,
+    closeToTray: false,
     devices: {},
   };
 }
@@ -50,6 +51,7 @@ const FIELD_CHECKS: Record<PatchKey, (value: unknown) => boolean> = {
   scrollSpeed: isPositive,
   lastDevice: (v) => v === null || typeof v === "string",
   mirrorNotifications: isBoolean,
+  closeToTray: isBoolean,
 };
 
 export function isSettingKey(key: string): key is PatchKey {
@@ -124,6 +126,7 @@ function sameModifiers(value: unknown, expected: readonly string[]): boolean {
  * Windows the old left Alt + left Super default becomes left Alt alone.
  * 2 to 3: every phone gets the model's turn, at rest.
  * 3 to 4: notification mirroring is added, on by default.
+ * 4 to 5: closing to the tray is added, off by default.
  */
 export function settingsMigrations(platform: string): MigrationMap {
   return {
@@ -142,6 +145,7 @@ export function settingsMigrations(platform: string): MigrationMap {
       return { ...data, version: 3, devices: withRotation };
     },
     3: (data) => ({ ...data, version: 4, mirrorNotifications: true }),
+    4: (data) => ({ ...data, version: 5, closeToTray: false }),
   };
 }
 

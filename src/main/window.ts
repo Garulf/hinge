@@ -34,6 +34,8 @@ export interface PhoneWindowOptions {
   showWhenReady?: boolean;
   /** MOD+q; closes the window when not given. */
   onQuit?: () => void;
+  /** The menu's close button; closes the window when not given. */
+  onClose?: () => void;
 }
 
 export function createPhoneWindow(opts?: PhoneWindowOptions): { win: BrowserWindow; port: PortLike } {
@@ -58,12 +60,12 @@ export function createPhoneWindow(opts?: PhoneWindowOptions): { win: BrowserWind
 
   const port = trackedPort(win);
 
-  registerWindowIpc(win, opts?.onMoved ?? (() => {}), opts?.onQuit ?? (() => win.close()));
+  registerWindowIpc(win, opts?.onMoved ?? (() => {}), opts?.onQuit ?? (() => win.close()), opts?.onClose ?? (() => win.close()));
 
   return { win, port };
 }
 
-function registerWindowIpc(win: BrowserWindow, onMoved: () => void, onQuit: () => void): void {
+function registerWindowIpc(win: BrowserWindow, onMoved: () => void, onQuit: () => void, onClose: () => void): void {
   let dragTimer: ReturnType<typeof setInterval> | null = null;
   let dragSize: { width: number; height: number } | null = null;
   const placer = new WindowPlacer();
@@ -128,6 +130,10 @@ function registerWindowIpc(win: BrowserWindow, onMoved: () => void, onQuit: () =
 
   ipcMain.on("hinge:quit", (event) => {
     if (event.sender === win.webContents) onQuit();
+  });
+
+  ipcMain.on("hinge:close", (event) => {
+    if (event.sender === win.webContents) onClose();
   });
 }
 

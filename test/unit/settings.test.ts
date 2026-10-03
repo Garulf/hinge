@@ -175,7 +175,7 @@ test("a version 1 file migrates: the stale shortcutModifier key goes, and serial
     }),
   );
   const store = await loadSettings(path, { platform: "linux" });
-  expect(store.current.version).toBe(4);
+  expect(store.current.version).toBe(5);
   expect(store.current).not.toHaveProperty("shortcutModifier");
   expect(store.current.shortcutModifiers).toEqual(["lalt", "lsuper"]);
   expect(store.current.devices).toEqual({});
@@ -233,7 +233,7 @@ test("the identity's own saved values win over an adopted serial-keyed entry", a
 test("a version 2 file migrates to 3: every phone gets the model's turn at rest", async () => {
   writeFileSync(path, JSON.stringify({ version: 2, devices: { R5CY: { pxPerMm: 9, view: "showcase" }, OTHER: {} } }));
   const store = await loadSettings(path);
-  expect(store.current.version).toBe(4);
+  expect(store.current.version).toBe(5);
   expect(store.current.devices).toEqual({
     R5CY: { pxPerMm: 9, rotation: { yaw: 0, pitch: 0 } },
     OTHER: { rotation: { yaw: 0, pitch: 0 } },
@@ -269,8 +269,23 @@ test("a saved turn round-trips; an out-of-range one wraps yaw and clamps pitch, 
 test("a version 3 file migrates to 4: notification mirroring defaults on", async () => {
   writeFileSync(path, JSON.stringify({ version: 3, colourway: "Silver", devices: {} }));
   const store = await loadSettings(path);
-  expect(store.current.version).toBe(4);
+  expect(store.current.version).toBe(5);
   expect(store.current.mirrorNotifications).toBe(true);
+});
+
+test("a version 4 file migrates to 5: closing to the tray defaults off", async () => {
+  writeFileSync(path, JSON.stringify({ version: 4, colourway: "Silver", mirrorNotifications: false, devices: {} }));
+  const store = await loadSettings(path);
+  expect(store.current.version).toBe(5);
+  expect(store.current.closeToTray).toBe(false);
+  expect(store.current.mirrorNotifications).toBe(false);
+});
+
+test("closeToTray can be turned on and round-trips", async () => {
+  const store = await loadSettings(path);
+  expect(store.current.closeToTray).toBe(false);
+  await store.save({ closeToTray: true });
+  expect((await loadSettings(path)).current.closeToTray).toBe(true);
 });
 
 test("mirrorNotifications can be turned off and round-trips", async () => {

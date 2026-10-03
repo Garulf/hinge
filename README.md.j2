@@ -281,6 +281,11 @@ closes. The tray icon brings the main window back, opens the Apps list, or
 quits. If the phone drops, app windows wait and reconnect with it;
 connecting a different phone closes them.
 
+With Close to the system tray ticked in Settings, closing the main window
+hides it to the tray even with no app windows open, and hinge keeps running
+there, still mirroring the phone's notifications, until you quit with
+MOD+q or the tray's Quit.
+
 ### Files
 
 Drop files on the window. An `.apk` is installed, replacing an older version

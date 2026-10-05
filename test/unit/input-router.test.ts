@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { InputRouter } from "../../src/renderer/input/input-router";
+import { InputRouter, type ScreenPanelInput } from "../../src/renderer/input/input-router";
 import type { HingeAction } from "../../src/shared/shortcuts";
 import type { ControlIntent } from "../../src/shared/wire";
 
@@ -103,6 +103,7 @@ function setup(opts?: {
   view?: View;
   turnYawDeg?: number;
   lens?: "ortho" | "perspective";
+  screenPanel?: ScreenPanelInput;
 }) {
   const canvas = fakeCanvas();
   const scene = fakeScene(opts?.rotation, opts?.turnYawDeg, opts?.lens);
@@ -112,6 +113,7 @@ function setup(opts?: {
   const router = new InputRouter(canvas as unknown as HTMLCanvasElement, scene as never, () => video, (intent) => sent.push(intent), {
     onAction: opts?.onAction,
     onRotated: opts?.onRotated,
+    screenPanel: opts?.screenPanel,
   });
   return { canvas, scene, sent, router };
 }
@@ -500,6 +502,7 @@ function setupWith(opts: {
   view?: View;
   scrolling?: () => { smoothingMs: number; speed: number; style?: "swipe" | "events" };
   requestFrame?: (callback: (time: number) => void) => void;
+  screenPanel?: ScreenPanelInput;
 }) {
   const canvas = fakeCanvas();
   const scene = fakeScene();
@@ -936,4 +939,83 @@ test("a swipe in progress lets go without a fling when the display pauses", () =
   frames.run();
   expect(touchesOf(sent).map((t) => t.action)).toEqual(["down", "cancel"]);
   expect(frames.waiting).toBe(0);
+});
+
+/** A pad over the whole lit screen (the fake canvas's 0..100 square) that records what it gets. */
+function fakePanel(open = true) {
+  const got: string[] = [];
+  const panel: ScreenPanelInput = {
+    isOpen: () => open,
+    at: (x, y) => (x >= 0 && x <= 100 && y >= 0 && y <= 100 ? { u: x / 100, v: y / 100 } : null),
+    pointerDown: (u, v) => got.push(`down ${u} ${v}`),
+    pointerUp: (at) => got.push(at ? `up ${at.u} ${at.v}` : "up off"),
+    key: (e) => {
+      got.push(`${e.type} ${e.key}`);
+      return e.type === "keydown";
+    },
+  };
+  return { panel, got, setOpen: (v: boolean) => (open = v) };
+}
+
+test("while the unlock pad is open a press on the screen goes to the pad, never to the phone", () => {
+  const { panel, got } = fakePanel();
+  const { canvas, sent } = setup({ screenPanel: panel });
+  canvas.fire("pointerdown", { pointerId: 1, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointermove", { pointerId: 1, button: -1, buttons: 1, clientX: 60, clientY: 60 });
+  canvas.fire("pointerup", { pointerId: 1, button: 0, buttons: 0, clientX: 60, clientY: 60 });
+  expect(got).toEqual(["down 0.5 0.5", "up 0.6 0.6"]);
+  expect(sent).toEqual([]);
+});
+
+test("with the pad closed the screen is the phone's again", () => {
+  const { panel, got } = fakePanel(false);
+  const { canvas, sent } = setup({ screenPanel: panel });
+  canvas.fire("pointerdown", { pointerId: 1, button: 0, buttons: 1, ...CENTER });
+  expect(got).toEqual([]);
+  expect(sent.length).toBeGreaterThan(0);
+});
+
+test("a press off the pad still moves the window", () => {
+  const { panel } = fakePanel();
+  const { canvas } = setup({ screenPanel: panel });
+  canvas.fire("pointerdown", { pointerId: 1, button: 0, buttons: 1, ...OFF_SCREEN });
+  expect(fakeWindow.hinge.beginDrag).toHaveBeenCalledOnce();
+});
+
+test("keys go to the open pad and never to the phone; MOD shortcuts still work", () => {
+  const { panel, got } = fakePanel();
+  const onAction = vi.fn();
+  const { sent } = setup({ screenPanel: panel, onAction });
+  const prevented = fireKey("keydown", "Digit1", { key: "1" });
+  fireKey("keyup", "Digit1", { key: "1" });
+  expect(prevented).toHaveBeenCalledOnce();
+  expect(got).toEqual(["keydown 1", "keyup 1"]);
+  fireKey("keydown", "AltLeft", { altKey: true });
+  fireKey("keydown", "KeyD", { altKey: true });
+  expect(onAction).toHaveBeenCalledWith("center");
+  expect(sent).toEqual([]);
+});
+
+test("the wheel over the open pad neither scrolls the phone nor scales it", () => {
+  const { panel } = fakePanel();
+  const onAction = vi.fn();
+  const { canvas, sent } = setup({ screenPanel: panel, onAction });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, ...CENTER });
+  expect(sent).toEqual([]);
+  expect(onAction).not.toHaveBeenCalled();
+});
+
+test("a pad press cut short by pointercancel lets the pad's key go", () => {
+  const { panel, got } = fakePanel();
+  const { canvas } = setup({ screenPanel: panel });
+  canvas.fire("pointerdown", { pointerId: 1, button: 0, buttons: 1, ...CENTER });
+  canvas.fire("pointercancel", { pointerId: 1 });
+  expect(got).toEqual(["down 0.5 0.5", "up off"]);
+});
+
+test("releasePhoneInput lets go of a key the phone still holds", () => {
+  const { sent, router } = setup();
+  fireKey("keydown", "ArrowUp", { key: "ArrowUp" });
+  router.releasePhoneInput();
+  expect(sent.map((i) => i.type === "key" && i.action)).toEqual(["down", "up"]);
 });

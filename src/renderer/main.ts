@@ -24,7 +24,7 @@ import { ScaleController } from "./scale-controller";
 import { RotationMemory } from "./rotation-memory";
 import { PhoneScene, type ViewState } from "./scene/phone-scene";
 import { statusText } from "./status-text";
-import { BlackSampler, canvasReader, SamplingTarget } from "./unlock/black-sampler";
+import { BlackSampler, frameReader, SamplingTarget } from "./unlock/black-sampler";
 import { UnlockController } from "./unlock/unlock-controller";
 import type { HitId } from "./unlock/unlock-layout";
 import { UnlockOverlay } from "./unlock/unlock-overlay";
@@ -269,7 +269,7 @@ function onDecodeError(message: string): void {
 }
 
 const display = new PausableTarget(scene);
-const blackSampler = new BlackSampler({ read: canvasReader(), now: () => performance.now(), onChange: (black) => unlock.screenBlack(black) });
+const blackSampler = new BlackSampler({ read: frameReader(), now: () => performance.now(), onChange: (black) => unlock.screenBlack(black) });
 const pipe = new VideoPipe(new SamplingTarget(display, blackSampler), onSize, { onError: onDecodeError, onFirstFrame, onFrame: () => director.frame() });
 const audioPipe = new AudioPipe({
   createPlayer: createWorkletPlayer,

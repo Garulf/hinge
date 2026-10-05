@@ -97,10 +97,15 @@ export class LockWatcher {
       this.#deps.log(`lock watcher: wm dismiss-keyguard failed: ${String(e)}`);
     }
     await this.#wait(BOUNCER_SETTLE_MS);
+    if (this.#stopper.signal.aborted) return "unavailable";
+    // The pad can be opened by hand on a phone that is not locked: typing then would land in whatever app is in front.
+    if ((await this.#readLocked(phone)) === false) return "unlocked";
+    if (this.#stopper.signal.aborted) return "unavailable";
     this.#deps.control({ type: "text", text: request.secret });
     await this.#wait(ENTER_CHECK_MS);
     const afterTyping = await this.#readLocked(phone);
     if (afterTyping === false) return "unlocked";
+    if (this.#stopper.signal.aborted) return "unavailable";
     this.#key(KEYCODE_ENTER);
     let readable = afterTyping !== null;
     for (let waited = 0; waited < RESULT_LIMIT_MS; waited += RESULT_POLL_MS) {

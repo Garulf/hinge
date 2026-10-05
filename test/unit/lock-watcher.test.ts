@@ -217,3 +217,40 @@ test("the secret never reaches the log, even when every command fails", async ()
   expect(logs.length).toBeGreaterThan(0);
   expect(logs.join("\n")).not.toContain("s3cret-pass");
 });
+
+test("a phone that is already unlocked gets the wakeup but no PIN and no Enter", async () => {
+  const phone = scriptedPhone(() => UNLOCKED);
+  const { w, sent, posted } = watcher(phone);
+  w.setPhone(PHONE);
+  const done = w.unlock({ kind: "pin", secret: "1234" });
+  await vi.advanceTimersByTimeAsync(3000);
+  await done;
+  expect(keys(sent)).toEqual(["down:224", "up:224"]);
+  expect(posted.at(-1)).toEqual({ kind: "unlock-result", result: "unlocked" });
+});
+
+test("stopping while the bouncer settles types nothing", async () => {
+  const phone = scriptedPhone(() => LOCKED);
+  const { w, sent } = watcher(phone);
+  w.setPhone(PHONE);
+  const done = w.unlock({ kind: "pin", secret: "1234" });
+  await vi.advanceTimersByTimeAsync(100);
+  w.stop();
+  await vi.advanceTimersByTimeAsync(3000);
+  await done;
+  expect(keys(sent)).toEqual(["down:224", "up:224"]);
+});
+
+test("quick screenBlack toggles in one tick leave a single poll loop, one read per second", async () => {
+  const phone = scriptedPhone(() => LOCKED);
+  const { w } = watcher(phone);
+  w.setPhone(PHONE);
+  w.screenBlack(true);
+  w.screenBlack(false);
+  w.screenBlack(true);
+  await vi.advanceTimersByTimeAsync(2500);
+  const afterToggles = phone.keyguardReads();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(phone.keyguardReads() - afterToggles).toBe(2);
+  w.stop();
+});

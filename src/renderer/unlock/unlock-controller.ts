@@ -48,8 +48,9 @@ export class UnlockController {
   }
 
   lockState(state: LockState): void {
+    const unlockedNow = this.#state.locked && !state.locked;
     this.#state = state;
-    if (!state.locked) {
+    if (unlockedNow) {
       this.#dismissed = false;
       if (this.#deps.pad.isOpen()) this.#deps.pad.close();
     }

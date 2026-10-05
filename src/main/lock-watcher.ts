@@ -29,8 +29,11 @@ const KEYCODE_WAKEUP = 224;
 /**
  * A secure keyguard mirrors as a black screen, so while the renderer reports
  * black this polls whether the keyguard is up, and types the PIN or password
- * the renderer's pad collected into it. The secret only passes through
- * unlock(): it is never logged or kept.
+ * the renderer's pad collected into it. Polling goes on after the screen lights
+ * up for as long as the last state read was locked, so that an unlock done on
+ * the phone itself is still seen; it stops once the screen is not black and a
+ * read says unlocked. The secret only passes through unlock(): it is never
+ * logged or kept.
  */
 export class LockWatcher {
   readonly #deps: LockWatcherDeps;
@@ -97,15 +100,15 @@ export class LockWatcher {
       this.#deps.log(`lock watcher: wm dismiss-keyguard failed: ${String(e)}`);
     }
     await this.#wait(BOUNCER_SETTLE_MS);
-    if (this.#stopper.signal.aborted) return "unavailable";
+    if (this.#cannotType(phone)) return "unavailable";
     // The pad can be opened by hand on a phone that is not locked: typing then would land in whatever app is in front.
     if ((await this.#readLocked(phone)) === false) return "unlocked";
-    if (this.#stopper.signal.aborted) return "unavailable";
+    if (this.#cannotType(phone)) return "unavailable";
     this.#deps.control({ type: "text", text: request.secret });
     await this.#wait(ENTER_CHECK_MS);
     const afterTyping = await this.#readLocked(phone);
     if (afterTyping === false) return "unlocked";
-    if (this.#stopper.signal.aborted) return "unavailable";
+    if (this.#cannotType(phone)) return "unavailable";
     this.#key(KEYCODE_ENTER);
     let readable = afterTyping !== null;
     for (let waited = 0; waited < RESULT_LIMIT_MS; waited += RESULT_POLL_MS) {
@@ -118,6 +121,10 @@ export class LockWatcher {
     return readable ? "still-locked" : "unconfirmed";
   }
 
+  #cannotType(phone: ConnectedPhone): boolean {
+    return this.#stopper.signal.aborted || this.#phone !== phone;
+  }
+
   #key(keyCode: number): void {
     this.#deps.control({ type: "key", action: "down", keyCode, repeat: 0, metaState: 0 });
     this.#deps.control({ type: "key", action: "up", keyCode, repeat: 0, metaState: 0 });
@@ -125,7 +132,7 @@ export class LockWatcher {
 
   #syncPolling(): void {
     const phone = this.#phone;
-    const wanted = this.#black && phone !== null && !this.#stopper.signal.aborted;
+    const wanted = (this.#black || this.#state.locked) && phone !== null && !this.#stopper.signal.aborted;
     if (!wanted) this.#stopPolling();
     else if (!this.#polling) this.#startPolling(phone);
   }
@@ -198,6 +205,7 @@ export class LockWatcher {
     if (next.locked === this.#state.locked && next.credential === this.#state.credential) return;
     this.#state = next;
     this.#post();
+    this.#syncPolling();
   }
 
   #post(): void {

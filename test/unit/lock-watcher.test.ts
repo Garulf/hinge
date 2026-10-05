@@ -45,8 +45,8 @@ function watcher(phone: ReturnType<typeof scriptedPhone>) {
 
 const keys = (sent: ControlIntent[]) => sent.map((i) => (i.type === "key" ? `${i.action}:${i.keyCode}` : i.type === "text" ? `text:${i.text}` : i.type));
 
-test("polls the keyguard only while the screen is black", async () => {
-  const phone = scriptedPhone(() => LOCKED);
+test("an unlocked phone is polled only while the screen is black", async () => {
+  const phone = scriptedPhone(() => UNLOCKED);
   const { w } = watcher(phone);
   w.setPhone(PHONE);
   await vi.advanceTimersByTimeAsync(5000);
@@ -57,6 +57,25 @@ test("polls the keyguard only while the screen is black", async () => {
   w.screenBlack(false);
   await vi.advanceTimersByTimeAsync(5000);
   expect(phone.keyguardReads()).toBe(3);
+  w.stop();
+});
+
+test("a phone unlocked by hand after the screen lit up is still seen, and polling then stops", async () => {
+  let keyguard = LOCKED;
+  const phone = scriptedPhone(() => keyguard);
+  const { w, states } = watcher(phone);
+  w.setPhone(PHONE);
+  w.screenBlack(true);
+  await vi.advanceTimersByTimeAsync(10);
+  expect(states().at(-1)).toEqual({ locked: true, credential: "pin" });
+  w.screenBlack(false);
+  await vi.advanceTimersByTimeAsync(300);
+  keyguard = UNLOCKED;
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(states().at(-1)).toEqual({ locked: false, credential: "pin" });
+  const reads = phone.keyguardReads();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(phone.keyguardReads()).toBe(reads);
   w.stop();
 });
 
@@ -252,5 +271,18 @@ test("quick screenBlack toggles in one tick leave a single poll loop, one read p
   const afterToggles = phone.keyguardReads();
   await vi.advanceTimersByTimeAsync(2000);
   expect(phone.keyguardReads() - afterToggles).toBe(2);
+  w.stop();
+});
+
+test("switching to another phone while the bouncer settles types nothing into it", async () => {
+  const phone = scriptedPhone(() => LOCKED);
+  const { w, sent } = watcher(phone);
+  w.setPhone(PHONE);
+  const done = w.unlock({ kind: "pin", secret: "1234" });
+  await vi.advanceTimersByTimeAsync(100);
+  w.setPhone(OTHER);
+  await vi.advanceTimersByTimeAsync(3000);
+  await done;
+  expect(keys(sent)).toEqual(["down:224", "up:224"]);
   w.stop();
 });

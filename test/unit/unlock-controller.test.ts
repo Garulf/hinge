@@ -41,6 +41,14 @@ test("unlocking closes the pad", () => {
   expect(pad.open).toBe(false);
 });
 
+test("a re-post of unlocked leaves a pad opened by hand open", () => {
+  const { c, pad } = setup();
+  c.lockState({ locked: false, credential: "pin" });
+  c.openByHand();
+  c.lockState({ locked: false, credential: "pin" });
+  expect(pad.open).toBe(true);
+});
+
 test("a cancelled pad stays closed for this lock, and comes back once the screen showed something", () => {
   const { c, pad } = setup();
   c.screenBlack(true);

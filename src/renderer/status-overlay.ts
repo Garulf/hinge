@@ -12,7 +12,7 @@ export interface OverlayTexture {
   dispose(): void;
 }
 
-function backingSize(w: number, h: number): { pixelW: number; pixelH: number } {
+export function backingSize(w: number, h: number): { pixelW: number; pixelH: number } {
   const dpr = typeof window !== "undefined" && window.devicePixelRatio ? window.devicePixelRatio : 1;
   return { pixelW: Math.max(1, Math.round(w * dpr)), pixelH: Math.max(1, Math.round(h * dpr)) };
 }

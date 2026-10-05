@@ -142,6 +142,12 @@ export interface ViewState {
   active: boolean;
 }
 
+/** Something drawn over the lit screen above the status text, like the unlock pad, while its mesh is visible. */
+export interface ScreenPanel {
+  mesh: THREE.Mesh;
+  applySize(w: number, h: number): void;
+}
+
 export interface PhoneSceneOptions {
   loadModel: () => Promise<ArrayBuffer>;
   onTick?: (out: DirectorOutput, rotation: Rotation, view: ViewState) => void;
@@ -213,6 +219,8 @@ export class PhoneScene implements FrameTarget {
   #layoutDirty = true;
   #renderedSettled = false;
   #fatalStatus: string | null = null;
+  #panel: ScreenPanel | null = null;
+  #panelPlace: { x: number; y: number; w: number; h: number } | null = null;
   #colourway: Record<string, MaterialLook> | null = null;
   readonly #software: boolean;
 
@@ -333,6 +341,26 @@ export class PhoneScene implements FrameTarget {
   setStatus(text: string | null): void {
     this.#overlay.setText(this.#fatalStatus ?? text);
     this.#layoutDirty = true;
+  }
+
+  setScreenPanel(panel: ScreenPanel): void {
+    this.#panel = panel;
+    panel.mesh.renderOrder = 2;
+    this.#overlayScene.add(panel.mesh);
+    this.#frameDirty = true;
+  }
+
+  redrawOverlays(): void {
+    this.#frameDirty = true;
+  }
+
+  /** In client px, from the last frame drawn; null while the panel is hidden or not yet drawn. */
+  screenPanelRect(): { x: number; y: number; w: number; h: number } | null {
+    const place = this.#panelPlace;
+    if (!place || !this.#panel?.mesh.visible) return null;
+    const canvas = this.#renderer.domElement.getBoundingClientRect();
+    const { w, h } = this.#viewport;
+    return { x: canvas.left + w / 2 + place.x - place.w / 2, y: canvas.top + h / 2 - place.y - place.h / 2, w: place.w, h: place.h };
   }
 
   /** Applied now if the model is loaded, otherwise as soon as it is. */
@@ -621,17 +649,27 @@ export class PhoneScene implements FrameTarget {
     this.#overlayCamera.updateProjectionMatrix();
   }
 
-  /** Lays the status overlay over the screen the stream is on (the cover before any stream), upright on screen. */
-  #placeOverlay(): void {
-    if (!this.#overlay.mesh.visible) return;
+  /** Lays the status overlay and the screen panel over the screen the stream is on (the cover before any stream), upright on screen. */
+  #placeOverlays(): void {
+    const place = this.#screenPlace();
+    if (this.#overlay.mesh.visible) {
+      this.#overlay.applySize(place.w, place.h);
+      this.#overlay.mesh.position.set(place.x, place.y, 0);
+    }
+    const panel = this.#panel;
+    if (panel?.mesh.visible) {
+      panel.applySize(place.w, place.h);
+      panel.mesh.position.set(place.x, place.y, 0);
+      this.#panelPlace = place;
+    } else this.#panelPlace = null;
+  }
+
+  /** The lit screen's projected box in overlay-camera units: centre x and y, size w and h. */
+  #screenPlace(): { x: number; y: number; w: number; h: number } {
     const { w, h } = this.#viewport;
     const screen = this.#out?.lit ?? this.#routing.videoScreen ?? "cover";
     const mesh = this.#model?.[screen].mesh;
-    if (!mesh) {
-      this.#overlay.applySize(w, h);
-      this.#overlay.mesh.position.set(0, 0, 0);
-      return;
-    }
+    if (!mesh) return { x: 0, y: 0, w, h };
     const skinned = mesh as THREE.SkinnedMesh;
     let box: THREE.Box3;
     if (skinned.isSkinnedMesh) {
@@ -652,8 +690,7 @@ export class PhoneScene implements FrameTarget {
     }
     const size = projected.getSize(new THREE.Vector2());
     const centre = projected.getCenter(new THREE.Vector2());
-    this.#overlay.applySize(Math.max(1, Math.round(size.x)), Math.max(1, Math.round(size.y)));
-    this.#overlay.mesh.position.set(centre.x, centre.y, 0);
+    return { x: centre.x, y: centre.y, w: Math.max(1, Math.round(size.x)), h: Math.max(1, Math.round(size.y)) };
   }
 
   /**
@@ -775,8 +812,8 @@ export class PhoneScene implements FrameTarget {
     this.#renderer.clear();
     this.#renderer.render(this.#scene, this.activeCamera());
     this.#frames.onRendered();
-    if (this.#overlay.mesh.visible) {
-      this.#placeOverlay();
+    if (this.#overlay.mesh.visible || this.#panel?.mesh.visible) {
+      this.#placeOverlays();
       this.#renderer.clearDepth();
       this.#renderer.render(this.#overlayScene, this.#overlayCamera);
     }

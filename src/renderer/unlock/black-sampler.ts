@@ -22,20 +22,72 @@ export interface BlackSamplerDeps {
   intervalMs?: number;
 }
 
-/** A static screen sends no new frames, so the last reading stands until one arrives. */
+/**
+ * A static screen sends no new frames, so the last reading stands until one
+ * arrives. A frame skipped by the throttle is kept (cloned) and read when the
+ * window ends: the frame a screen settles on is often the one skipped.
+ */
 export class BlackSampler {
   readonly #deps: BlackSamplerDeps;
   #black: boolean | null = null;
   #lastAt = -Infinity;
+  #pending: VideoFrame | null = null;
+  #timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(deps: BlackSamplerDeps) {
     this.#deps = deps;
   }
 
   offer(frame: VideoFrame): void {
-    const now = this.#deps.now();
-    if (now - this.#lastAt < (this.#deps.intervalMs ?? INTERVAL_MS)) return;
-    this.#lastAt = now;
+    const wait = this.#interval() - (this.#deps.now() - this.#lastAt);
+    if (wait > 0) {
+      this.#keep(frame, wait);
+      return;
+    }
+    this.#dropPending();
+    this.#sample(frame);
+  }
+
+  /** The stream ended: the next frame is read at once and always reported. */
+  reset(): void {
+    this.#dropPending();
+    this.#black = null;
+    this.#lastAt = -Infinity;
+  }
+
+  #interval(): number {
+    return this.#deps.intervalMs ?? INTERVAL_MS;
+  }
+
+  #keep(frame: VideoFrame, wait: number): void {
+    this.#pending?.close();
+    this.#pending = null;
+    try {
+      this.#pending = frame.clone();
+    } catch {
+      return;
+    }
+    this.#timer ??= setTimeout(() => this.#readPending(), wait);
+  }
+
+  #readPending(): void {
+    const frame = this.#pending;
+    this.#pending = null;
+    this.#timer = null;
+    if (!frame) return;
+    this.#sample(frame);
+    frame.close();
+  }
+
+  #dropPending(): void {
+    if (this.#timer !== null) clearTimeout(this.#timer);
+    this.#timer = null;
+    this.#pending?.close();
+    this.#pending = null;
+  }
+
+  #sample(frame: VideoFrame): void {
+    this.#lastAt = this.#deps.now();
     let black: boolean;
     try {
       black = isBlack(this.#deps.read(frame));
@@ -46,17 +98,11 @@ export class BlackSampler {
     this.#black = black;
     this.#deps.onChange(black);
   }
-
-  /** The stream ended: the next frame is read at once and always reported. */
-  reset(): void {
-    this.#black = null;
-    this.#lastAt = -Infinity;
-  }
 }
 
 export function canvasReader(): (frame: VideoFrame) => Uint8ClampedArray {
   const canvas = new OffscreenCanvas(SIZE, SIZE);
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2d canvas context unavailable");
   return (frame) => {
     ctx.drawImage(frame, 0, 0, SIZE, SIZE);

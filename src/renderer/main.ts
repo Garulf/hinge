@@ -408,7 +408,7 @@ function onStreamMessage(msg: StreamMessage): void {
     case "video-end":
       pipe.end();
       blackSampler.reset();
-      unlock.screenBlack(false);
+      unlock.streamEnded();
       director.streamEnded();
       break;
     case "posture":

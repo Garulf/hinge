@@ -817,7 +817,7 @@ test("MOD+l opens hinge's unlock pad; with no phone a PIN is answered with 'No p
   test.setTimeout(60_000);
   const { app, page } = await launch(resolve("test/fixtures/synthetic-fold.hrec"));
   try {
-    await waitFor(page, "the closed phone", (s) => restingOn("cover", s) && s.framesDecoded > 10, 30_000);
+    await waitFor(page, "a settled, laid out phone", (s) => s.settled && s.laidOut && s.framesDecoded > 10, 30_000);
     await page.keyboard.down("Alt");
     await page.keyboard.press("KeyL");
     await page.keyboard.up("Alt");

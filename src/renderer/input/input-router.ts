@@ -83,6 +83,8 @@ export class InputRouter {
   readonly #rotate = new RotateGesture();
   readonly #onRotated: (outcome: "moved" | "reset") => void;
   readonly #panel: ScreenPanelInput | null;
+  /** Codes the panel took the key-down of: their key-up and repeats are the panel's too, even if that key closed it. */
+  readonly #panelKeys = new Set<string>();
   #press: PressMode | null = null;
   /** Whether the current rotate press has moved the model, so a plain click saves nothing. */
   #turned = false;
@@ -229,6 +231,7 @@ export class InputRouter {
 
   /** Lets go of every touch and key the phone still has held, before focus is lost or the display pauses. */
   #releaseAll(): void {
+    this.#panelKeys.clear();
     this.#wheel.cancelSwipe();
     this.#cancelInteraction();
     for (const intent of this.#keys.release()) this.#send(intent);
@@ -292,7 +295,7 @@ export class InputRouter {
   #onWheel(e: WheelEvent): void {
     e.preventDefault();
     if (this.#scene.view().active) return;
-    if (this.#panelAt(e)) return;
+    if (this.#panelAt(e) && !this.#keys.modHeld()) return;
     const hit = this.#hitOf(e);
     if (this.#keys.modHeld() || !hit) {
       this.#scaleByWheel(e.deltaY);
@@ -311,8 +314,17 @@ export class InputRouter {
     const like = keyEventLike(e);
     this.#keys.track(like);
     if (typedIntoChrome(e.target)) return;
+    const tookDown = this.#panelKeys.has(e.code);
+    if (e.type === "keyup") this.#panelKeys.delete(e.code);
     if (this.#panel?.isOpen() && !this.#keys.modHeld()) {
-      if (this.#panel.key(like)) e.preventDefault();
+      if (this.#panel.key(like)) {
+        e.preventDefault();
+        this.#panelKeys.add(e.code);
+      }
+      return;
+    }
+    if (tookDown) {
+      e.preventDefault();
       return;
     }
     const outcome = this.#keys.route(like, this.#paused());

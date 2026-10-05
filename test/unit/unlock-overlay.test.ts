@@ -94,3 +94,15 @@ test("hit points are fractions of the pad, so they hold at any size", () => {
   overlay.applySize(720, 1280);
   expect(overlay.hitPoint("5")).toEqual(small);
 });
+
+test("closing the pad forgets a half-typed entry and a held press", () => {
+  const { overlay } = setup();
+  overlay.open("pin");
+  tap(overlay, "1");
+  tap(overlay, "2");
+  const at = overlay.hitPoint("5")!;
+  overlay.pointerDown(at.u, at.v);
+  expect(overlay.view()).toMatchObject({ entered: 2, pressed: "5" });
+  overlay.close();
+  expect(overlay.view()).toMatchObject({ entered: 0, pressed: null });
+});

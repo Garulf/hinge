@@ -148,7 +148,8 @@ shade from the top still works):
 - **Apps** lists the phone's apps to open in their own windows (see
   [App windows](#app-windows)).
 - **Pop out** opens the app on the phone's screen in its own window (MOD+t).
-- **Unlock** shows hinge's own PIN or password screen (MOD+l, see [Lock screen](#lock-screen)).
+- **Unlock** shows hinge's own PIN or password screen (MOD+l, see
+  [Lock screen](#lock-screen)).
 - **Devices** lists the phones adb can see (USB, Wi-Fi and mDNS), lets you
   switch to another one, switch a USB phone to Wi-Fi, disconnect a Wi-Fi
   phone, or pair a new one.
@@ -295,7 +296,7 @@ phone shows black while it asks. hinge then draws its own unlock screen over
 the phone: click the keys or type on the PC keyboard, then OK or Enter.
 hinge types what you entered into the phone and never keeps it. A wrong PIN
 shakes and clears; hinge never tries again on its own. Cancel or Escape
-hides it until the phone next locks.
+hides it until the phone next locks or the screen shows something again.
 
 MOD+l or Unlock in the hover menu opens it any time. Pattern locks are not
 supported yet. Turn the automatic unlock screen off in Settings, Lock screen.

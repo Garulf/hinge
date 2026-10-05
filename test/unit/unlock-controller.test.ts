@@ -92,3 +92,31 @@ test("opened by hand before main has said anything, the pad asks for a PIN with 
   c.openByHand();
   expect(pad.opened).toEqual(["unknown"]);
 });
+
+test("opening by hand while the pad is open leaves it as it is", () => {
+  const { c, pad } = setup();
+  c.openByHand();
+  c.openByHand();
+  expect(pad.opened).toEqual(["unknown"]);
+});
+
+test("a stream that ends tells main the screen is not black, and keeps a cancelled pad cancelled", () => {
+  const { c, pad, sent } = setup();
+  c.screenBlack(true);
+  c.lockState(LOCKED_PIN);
+  pad.open = false;
+  c.cancelled();
+  c.streamEnded();
+  expect(sent).toEqual([true, false]);
+  expect(c.snapshot()).toMatchObject({ black: false, dismissed: true });
+  c.screenBlack(true);
+  expect(sent).toEqual([true, false, true]);
+  expect(pad.opened).toHaveLength(1);
+});
+
+test("a stream that ends while the screen was not black says nothing more", () => {
+  const { c, sent } = setup();
+  c.screenBlack(false);
+  c.streamEnded();
+  expect(sent).toEqual([false]);
+});

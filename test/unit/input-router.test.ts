@@ -1019,3 +1019,36 @@ test("releasePhoneInput lets go of a key the phone still holds", () => {
   router.releasePhoneInput();
   expect(sent.map((i) => i.type === "key" && i.action)).toEqual(["down", "up"]);
 });
+
+test("a key that closed the pad does not leak its key-up to the phone", () => {
+  let open = true;
+  const panel: ScreenPanelInput = {
+    isOpen: () => open,
+    at: () => null,
+    pointerDown: () => {},
+    pointerUp: () => {},
+    key: (e) => {
+      if (e.type === "keydown" && e.key === "Escape") open = false;
+      return e.type === "keydown";
+    },
+  };
+  const { sent } = setup({ screenPanel: panel });
+  const down = fireKey("keydown", "Escape", { key: "Escape" });
+  const up = fireKey("keyup", "Escape", { key: "Escape" });
+  expect(down).toHaveBeenCalledOnce();
+  expect(up).toHaveBeenCalledOnce();
+  expect(sent).toEqual([]);
+  fireKey("keydown", "Escape", { key: "Escape" });
+  fireKey("keyup", "Escape", { key: "Escape" });
+  expect(sent.length).toBeGreaterThan(0);
+});
+
+test("MOD+wheel over the open pad still scales the phone", () => {
+  const { panel } = fakePanel();
+  const onAction = vi.fn();
+  const { canvas, sent } = setup({ screenPanel: panel, onAction });
+  fireKey("keydown", "AltLeft", { altKey: true });
+  canvas.fire("wheel", { deltaX: 0, deltaY: 100, buttons: 0, ...CENTER });
+  expect(onAction).toHaveBeenCalledWith("scale-down");
+  expect(sent).toEqual([]);
+});

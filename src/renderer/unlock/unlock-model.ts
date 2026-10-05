@@ -56,6 +56,11 @@ export class UnlockModel {
     this.#setMode(credential === "password" ? "password" : credential === "pattern" ? "pattern" : "pin");
   }
 
+  /** Forgets whatever was typed or pressed, for a pad closed without a result. */
+  clear(): void {
+    this.#setMode(this.#mode);
+  }
+
   canSwitch(): boolean {
     return this.#canSwitch;
   }

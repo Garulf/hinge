@@ -36,6 +36,17 @@ export class UnlockController {
     this.#evaluate();
   }
 
+  /**
+   * The stream ended (a capture reset, say): main must not keep polling for a
+   * screen that is no longer there, but this is not the screen showing
+   * something, so a cancelled pad stays cancelled.
+   */
+  streamEnded(): void {
+    if (this.#black === false) return;
+    this.#black = false;
+    this.#deps.sendBlack(false);
+  }
+
   lockState(state: LockState): void {
     this.#state = state;
     if (!state.locked) {
@@ -46,6 +57,7 @@ export class UnlockController {
   }
 
   openByHand(): void {
+    if (this.#deps.pad.isOpen()) return;
     this.#deps.pad.open(this.#state.credential);
   }
 

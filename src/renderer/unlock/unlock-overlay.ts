@@ -68,6 +68,7 @@ export class UnlockOverlay {
   close(): void {
     if (!this.mesh.visible) return;
     this.mesh.visible = false;
+    this.#model.clear();
     this.#opts.changed();
   }
 

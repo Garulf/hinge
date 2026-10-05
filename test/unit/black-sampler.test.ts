@@ -1,8 +1,24 @@
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { BlackSampler, isBlack, SamplingTarget } from "../../src/renderer/unlock/black-sampler";
 import type { FrameTarget } from "../../src/renderer/texture-renderer";
 
 const SAMPLES = 16 * 16;
+
+afterEach(() => vi.useRealTimers());
+
+/** A frame that records its clones and which of them were closed. */
+function fakeFrame() {
+  const clones: { closed: boolean }[] = [];
+  const frame = {
+    clone: () => {
+      const clone = { closed: false, clone: () => frame.clone(), close() { this.closed = true; } };
+      clones.push(clone);
+      return clone;
+    },
+    close() {},
+  } as unknown as VideoFrame;
+  return { frame, clones };
+}
 
 function frame(dark: number, lit: [number, number, number] = [255, 255, 255], darkValue = 0): Uint8ClampedArray {
   const rgba = new Uint8ClampedArray(SAMPLES * 4);
@@ -33,7 +49,7 @@ test("the sampler reads at most every 500 ms and reports only changes", () => {
   const changes: boolean[] = [];
   let reads = 0;
   const sampler = new BlackSampler({ read: () => (reads++, next), now: () => now, onChange: (b) => changes.push(b) });
-  const f = {} as VideoFrame;
+  const f = fakeFrame().frame;
   sampler.offer(f);
   now = 100;
   sampler.offer(f);
@@ -48,6 +64,61 @@ test("the sampler reads at most every 500 ms and reports only changes", () => {
   now = 1250;
   sampler.offer(f);
   expect(changes).toEqual([true, false, false]);
+});
+
+test("a frame skipped inside the window is read when the window ends", () => {
+  vi.useFakeTimers();
+  let now = 0;
+  let next = frame(0);
+  const changes: boolean[] = [];
+  const reads: unknown[] = [];
+  const sampler = new BlackSampler({ read: (f) => (reads.push(f), next), now: () => now, onChange: (b) => changes.push(b) });
+  const { frame: first } = fakeFrame();
+  const { frame: settled, clones } = fakeFrame();
+  sampler.offer(first);
+  expect(changes).toEqual([false]);
+  next = frame(SAMPLES);
+  now = 100;
+  sampler.offer(settled);
+  expect(changes).toEqual([false]);
+  now = 500;
+  vi.advanceTimersByTime(400);
+  expect(changes).toEqual([false, true]);
+  expect(reads[1]).toBe(clones[0]);
+  expect(clones[0].closed).toBe(true);
+});
+
+test("a kept frame replaced by a later one is closed, and reset closes the one still pending", () => {
+  vi.useFakeTimers();
+  let now = 0;
+  const sampler = new BlackSampler({ read: () => frame(SAMPLES), now: () => now, onChange: () => {} });
+  sampler.offer(fakeFrame().frame);
+  const { frame: a, clones: first } = fakeFrame();
+  const { frame: b, clones: second } = fakeFrame();
+  now = 100;
+  sampler.offer(a);
+  now = 200;
+  sampler.offer(b);
+  expect(first[0].closed).toBe(true);
+  expect(second[0].closed).toBe(false);
+  sampler.reset();
+  expect(second[0].closed).toBe(true);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("a frame read in time supersedes the kept one", () => {
+  vi.useFakeTimers();
+  let now = 0;
+  const changes: boolean[] = [];
+  const sampler = new BlackSampler({ read: () => frame(SAMPLES), now: () => now, onChange: (b) => changes.push(b) });
+  sampler.offer(fakeFrame().frame);
+  const { frame: kept, clones } = fakeFrame();
+  now = 100;
+  sampler.offer(kept);
+  now = 600;
+  sampler.offer(fakeFrame().frame);
+  expect(clones[0].closed).toBe(true);
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 test("a frame that cannot be read is skipped", () => {

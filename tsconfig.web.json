@@ -29,6 +29,12 @@
     "test/unit/texture-renderer.test.ts",
     "test/unit/video-pipe.test.ts",
     "test/unit/wrap-text.test.ts",
-    "test/unit/flat-input.test.ts"
+    "test/unit/flat-input.test.ts",
+    "test/unit/black-sampler.test.ts",
+    "test/unit/unlock-layout.test.ts",
+    "test/unit/unlock-model.test.ts",
+    "test/unit/unlock-controller.test.ts",
+    "test/unit/unlock-paint.test.ts",
+    "test/unit/unlock-overlay.test.ts"
   ]
 }

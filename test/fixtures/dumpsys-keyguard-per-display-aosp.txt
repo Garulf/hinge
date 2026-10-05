@@ -1,0 +1,4 @@
+  KeyguardController:
+    AodShowing=false
+    KeyguardShowing=false KeyguardGoingAway=false Occluded=false at display=2
+    KeyguardShowing=true KeyguardGoingAway=false Occluded=false at display=0

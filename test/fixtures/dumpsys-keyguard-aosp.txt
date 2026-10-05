@@ -1,0 +1,6 @@
+  KeyguardController:
+    mKeyguardShowing=true
+    mAodShowing=false
+    mKeyguardGoingAway=false
+    Occluded=false DismissingKeyguardActivity=null TurnScreenOnActivity=null at display=0
+    mDismissalRequested=false

@@ -91,6 +91,7 @@ test("hinge actions: f g w q i z Shift+z d t, and F11 without MOD", () => {
     ["KeyZ", true, "unpause"],
     ["KeyD", false, "center"],
     ["KeyT", false, "popout-current"],
+    ["KeyL", false, "unlock"],
   ];
   for (const [code, shiftKey, action] of cases) {
     const { feed } = handler();
@@ -214,9 +215,9 @@ test("MOD defaults to left Alt alone on Windows, which reserves most Win+letter 
   expect(normaliseModifiers(["bogus"], defaultModifiers("win32"))).toEqual(["lalt"]);
 });
 
-test("the table covers every letter scrcpy documents plus hinge's d and t", () => {
+test("the table covers every letter scrcpy documents plus hinge's d, t and l", () => {
   expect(Object.keys(SHORTCUT_TABLE).sort()).toEqual(
-    ["ArrowDown", "ArrowUp", "Backspace", "KeyB", "KeyC", "KeyD", "KeyF", "KeyG", "KeyH", "KeyI", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT", "KeyV", "KeyW", "KeyX", "KeyZ"].sort(),
+    ["ArrowDown", "ArrowUp", "Backspace", "KeyB", "KeyC", "KeyD", "KeyF", "KeyG", "KeyH", "KeyI", "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT", "KeyV", "KeyW", "KeyX", "KeyZ"].sort(),
   );
 });
 
@@ -232,4 +233,9 @@ test("MOD+t pops the current app out from the main window only: a pop-out never 
   expect(SHORTCUT_TABLE.KeyT).toEqual({ plain: { kind: "action", action: "popout-current" } });
   expect(popoutAllows("KeyT", false)).toBe(false);
   expect(popoutAllows("KeyT", true)).toBe(false);
+});
+
+test("MOD+l opens the unlock pad from the main window only: a pop-out never takes it", () => {
+  expect(SHORTCUT_TABLE.KeyL).toEqual({ plain: { kind: "action", action: "unlock" } });
+  expect(popoutAllows("KeyL", false)).toBe(false);
 });

@@ -6,11 +6,11 @@ import type { DeviceSettings, Settings, SettingsPatch } from "../shared/settings
 
 export type { DeviceSettings, Settings, SettingsPatch, ShortcutModifier } from "../shared/settings";
 
-export const SETTINGS_VERSION = 5;
+export const SETTINGS_VERSION = 6;
 
 export function defaultSettings(platform: string = process.platform): Settings {
   return {
-    version: 5,
+    version: 6,
     colourway: "jetblack",
     videoCodec: "h264",
     videoBitRate: 16_000_000,
@@ -25,6 +25,7 @@ export function defaultSettings(platform: string = process.platform): Settings {
     lastDevice: null,
     mirrorNotifications: true,
     closeToTray: false,
+    showUnlockScreen: true,
     devices: {},
   };
 }
@@ -52,6 +53,7 @@ const FIELD_CHECKS: Record<PatchKey, (value: unknown) => boolean> = {
   lastDevice: (v) => v === null || typeof v === "string",
   mirrorNotifications: isBoolean,
   closeToTray: isBoolean,
+  showUnlockScreen: isBoolean,
 };
 
 export function isSettingKey(key: string): key is PatchKey {
@@ -127,6 +129,7 @@ function sameModifiers(value: unknown, expected: readonly string[]): boolean {
  * 2 to 3: every phone gets the model's turn, at rest.
  * 3 to 4: notification mirroring is added, on by default.
  * 4 to 5: closing to the tray is added, off by default.
+ * 5 to 6: the unlock screen is added, on by default.
  */
 export function settingsMigrations(platform: string): MigrationMap {
   return {
@@ -146,6 +149,7 @@ export function settingsMigrations(platform: string): MigrationMap {
     },
     3: (data) => ({ ...data, version: 4, mirrorNotifications: true }),
     4: (data) => ({ ...data, version: 5, closeToTray: false }),
+    5: (data) => ({ ...data, version: 6, showUnlockScreen: true }),
   };
 }
 

@@ -18,6 +18,7 @@ import { Shutdown, shutdownWithin } from "./lifecycle";
 import { createLogger, type Logger } from "./logger";
 import type { MediaSink, MediaSource } from "./media-source";
 import { launchAppOnPhone } from "./intents";
+import { LockWatcher } from "./lock-watcher";
 import { PopoutManager, type PopoutManagerDeps, type PopoutSessionLike } from "./popout-manager";
 import { bindPopoutPort } from "./popout-port";
 import { createPopoutWindow } from "./popout-window";
@@ -342,6 +343,12 @@ async function runMode(opts: RunOptions): Promise<void> {
   const { source, closeRecording } = built;
   const setMainVideo = built.setMainVideo ?? (() => {});
 
+  const lockWatcher = new LockWatcher({
+    post: (msg) => port.postMessage(msg, []),
+    control: (intent) => source.control(intent),
+    log: logger.log,
+  });
+
   const showNotification = electronNotice();
   const notice = (text: string): void => {
     port.postMessage({ kind: "notice", text }, []);
@@ -395,6 +402,8 @@ async function runMode(opts: RunOptions): Promise<void> {
       else if (msg.kind === "popout-current") void popOutCurrent({ phone: () => currentPhone, dumpActivities, popouts, notice, log: logger.log });
       else if (msg.kind === "create-shortcut") void createDesktopShortcut(shortcutDeps, msg.pkg).then(notice);
       else if (msg.kind === "apps-request") void answerAppsRequest(built.catalog ?? null, currentPhone, msg.id, (answer) => port.postMessage(answer, []));
+      else if (msg.kind === "screen-black") lockWatcher.screenBlack(msg.black);
+      else if (msg.kind === "unlock") void lockWatcher.unlock(msg.request);
     },
   });
 
@@ -404,6 +413,7 @@ async function runMode(opts: RunOptions): Promise<void> {
     built.catalog?.setPhone(phone);
     popouts.setPhone(phone);
     companion?.phone(phone);
+    lockWatcher.setPhone(phone);
   };
   phoneHooks.clipboardPush = (content) => companion?.beginPush(content) ?? 0n;
 
@@ -433,6 +443,7 @@ async function runMode(opts: RunOptions): Promise<void> {
   const shutdown = new Shutdown(() => {
     quitting = true;
     shell.quitting();
+    lockWatcher.stop();
     void shutdownWithin(SHUTDOWN_LIMIT_MS, [
       async () => {
         await popouts.closeAll();

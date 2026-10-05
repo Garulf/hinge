@@ -31,7 +31,7 @@ export interface ChromeDeps {
   createShortcut(pkg: string): void;
 }
 
-const MENU_BUTTONS = 8;
+const MENU_BUTTONS = 9;
 const MENU_GAP_PX = 2;
 const MENU_PAD_PX = 1;
 const PANEL_GAP_PX = 6;
@@ -80,6 +80,7 @@ export class Chrome {
     const menuButtons: MenuButton[] = [
       { name: "apps", title: "Apps", press: () => this.#toggle("apps") },
       { name: "popout", title: "Pop out this app (MOD+t)", press: () => deps.onAction("popout-current") },
+      { name: "unlock", title: "Unlock the phone (MOD+l)", press: () => deps.onAction("unlock") },
       { name: "device", title: "Devices", press: () => this.#toggle("device") },
       { name: "center", title: "Center (MOD+d)", press: () => deps.onAction("center") },
       { name: "colour", title: "Colour", press: () => this.#toggle("colour") },

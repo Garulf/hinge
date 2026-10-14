@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { isPackageName } from "../../src/shared/package-name";
-import { desktopEntry, launcherTarget, pngSize, pngToIco, shortcutFileName } from "../../src/shared/shortcut-files";
+import { desktopEntry, launcherTarget, pngSize, pngToIco, shortcutFileName, taskbarDetails } from "../../src/shared/shortcut-files";
 
 const FAKE_PNG = new Uint8Array([1, 2, 3]);
 
@@ -95,4 +95,15 @@ test("only a real package name is used in a file name", () => {
 
 test("a desktop entry without an icon has no Icon line", () => {
   expect(desktopEntry({ label: "x", exec: "/h", pkg: "com.a", icon: null })).not.toContain("Icon=");
+});
+
+test("a pinned taskbar button starts the exe the user launched, quoted, under hinge's AppUserModelId", () => {
+  expect(taskbarDetails({ platform: "win32", execPath: "C:\\Temp\\x\\hinge.exe", env: { PORTABLE_EXECUTABLE_FILE: "D:\\My Apps\\hinge.exe" } })).toEqual({
+    appId: "net.garulf.hinge",
+    relaunchCommand: '"D:\\My Apps\\hinge.exe"',
+    relaunchDisplayName: "hinge",
+    appIconPath: "D:\\My Apps\\hinge.exe",
+    appIconIndex: 0,
+  });
+  expect(taskbarDetails({ platform: "win32", execPath: "C:\\hinge\\hinge.exe", env: {} }).relaunchCommand).toBe('"C:\\hinge\\hinge.exe"');
 });

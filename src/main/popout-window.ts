@@ -3,7 +3,7 @@ import { appIconPath } from "./app-icon";
 import type { PopoutWindow, Rect } from "./popout-manager";
 import { trackedPort } from "./tracked-port";
 import { guardNavigation } from "./navigation-guard";
-import { focusWindow, loadPage, pageWebPreferences } from "./window";
+import { focusWindow, loadPage, makePinnable, pageWebPreferences } from "./window";
 
 export interface PopoutWindowOptions {
   pkg: string;
@@ -29,6 +29,7 @@ export function createPopoutWindow(o: PopoutWindowOptions): PopoutWindow & { rea
   });
   // Electron can misscale a window created at bounds on a monitor with another scale factor; setting them again once it exists avoids that.
   if (o.bounds) win.setBounds(o.bounds);
+  makePinnable(win);
   // The page's own <title> would otherwise replace the app's name on every load.
   win.on("page-title-updated", (e) => e.preventDefault());
   win.once("ready-to-show", () => win.show());

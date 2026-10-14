@@ -1,7 +1,7 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isPackageName } from "../shared/package-name";
-import { desktopEntry, launcherTarget, pngSize, pngToIco, shortcutFileName } from "../shared/shortcut-files";
+import { APP_USER_MODEL_ID, desktopEntry, launcherTarget, pngSize, pngToIco, shortcutFileName } from "../shared/shortcut-files";
 import { reasonOf } from "./error-text";
 import type { AppIdentity } from "./popout-manager";
 
@@ -32,7 +32,6 @@ export interface DesktopShortcutDeps {
   log(line: string): void;
 }
 
-const APP_USER_MODEL_ID = "net.garulf.hinge";
 const DESKTOP_ENTRY_MODE = 0o644;
 const DEFAULT_ICON_SIZE = { width: 256, height: 256 };
 

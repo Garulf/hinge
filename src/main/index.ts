@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell as electronShell, type Tray, type WebContents } from "electron";
 import type { DisplayGeometry } from "../shared/popout";
 import { restoreBounds } from "../shared/popout-bounds";
+import { APP_USER_MODEL_ID } from "../shared/shortcut-files";
 import { AdbHost } from "./adb-host";
 import { AppCatalog, answerAppsRequest } from "./app-catalog";
 import { appIconPath } from "./app-icon";
@@ -290,7 +291,7 @@ async function runMode(opts: RunOptions): Promise<void> {
   // Toasts on Windows are grouped and actioned by AppUserModelId; without a
   // matching one set explicitly, an installed, portable and unpacked build
   // of the same app each gets their own default id and none of them work.
-  if (process.platform === "win32") app.setAppUserModelId("net.garulf.hinge");
+  if (process.platform === "win32") app.setAppUserModelId(APP_USER_MODEL_ID);
   const logger = createLogger(join(app.getPath("logs"), "hinge.log"));
   const settingsPath = join(app.getPath("userData"), "settings.json");
   const settings = await loadSettings(settingsPath);

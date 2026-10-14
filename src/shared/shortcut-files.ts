@@ -81,3 +81,19 @@ export function launcherTarget(o: { platform: NodeJS.Platform; execPath: string;
   const wrapper = o.platform === "win32" ? o.env.PORTABLE_EXECUTABLE_FILE : o.platform === "linux" ? o.env.APPIMAGE : undefined;
   return wrapper || o.execPath;
 }
+
+export const APP_USER_MODEL_ID = "net.garulf.hinge";
+
+export interface TaskbarDetails {
+  appId: string;
+  relaunchCommand: string;
+  relaunchDisplayName: string;
+  appIconPath: string;
+  appIconIndex: number;
+}
+
+/** Windows only offers to pin a window with its own AppUserModelId when the window also says how to start it again. */
+export function taskbarDetails(o: { platform: NodeJS.Platform; execPath: string; env: Record<string, string | undefined> }): TaskbarDetails {
+  const target = launcherTarget(o);
+  return { appId: APP_USER_MODEL_ID, relaunchCommand: `"${target}"`, relaunchDisplayName: "hinge", appIconPath: target, appIconIndex: 0 };
+}

@@ -7,6 +7,7 @@ import { guardNavigation } from "./navigation-guard";
 import { trackedPort } from "./tracked-port";
 import { NO_PAD, type Pad } from "../shared/layout";
 import { WindowPlacer } from "./window-resize";
+import { taskbarDetails } from "../shared/shortcut-files";
 
 /** Shared by every hinge page: the preload's port hand-over and its window.hinge API. */
 export function pageWebPreferences(): WebPreferences {
@@ -18,6 +19,10 @@ export function loadPage(win: BrowserWindow, page: "index.html" | "popout.html")
   const devServer = process.env.ELECTRON_RENDERER_URL;
   if (devServer) void win.loadURL(page === "index.html" ? devServer : `${devServer}/${page}`);
   else void win.loadFile(join(import.meta.dirname, "../renderer", page));
+}
+
+export function makePinnable(win: BrowserWindow): void {
+  if (process.platform === "win32") win.setAppDetails(taskbarDetails({ platform: process.platform, execPath: process.execPath, env: process.env }));
 }
 
 export function focusWindow(win: BrowserWindow): void {
@@ -54,6 +59,7 @@ export function createPhoneWindow(opts?: PhoneWindowOptions): { win: BrowserWind
     show: false,
     webPreferences: pageWebPreferences(),
   });
+  makePinnable(win);
   if (opts?.showWhenReady ?? true) win.once("ready-to-show", () => win.show());
   guardNavigation(win.webContents);
   loadPage(win, "index.html");

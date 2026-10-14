@@ -1,6 +1,6 @@
 {
   "name": "hinge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "scrcpy client that shows your Galaxy Z Fold 7 as a 3D phone that folds with the real one",
   "license": "MIT",

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { caseGrip, type Grip } from "../../shared/case-grip";
 import { RotateGesture, type Point } from "../../shared/model-rotation";
+import type { KeyEventLike } from "../../shared/keymap";
 import type { ModifierKey } from "../../shared/modifiers";
 import { WheelSteps } from "../../shared/scale";
 import { insideScreenMask, screenUvToStream } from "../../shared/screen-uv";
@@ -12,6 +13,18 @@ import { KeyInput, keyEventLike } from "./key-input";
 import { WheelInput, type ScrollFeel } from "./wheel-input";
 
 export type { ScrollFeel } from "./wheel-input";
+
+/** A panel over the lit screen (the unlock pad) that takes the screen's presses and the keyboard while it is open. */
+export interface ScreenPanelInput {
+  isOpen(): boolean;
+  /** Across the panel from its top-left corner, each 0 to 1; null off the panel. */
+  at(clientX: number, clientY: number): { u: number; v: number } | null;
+  pointerDown(u: number, v: number): void;
+  /** null when released off the panel or cut short. */
+  pointerUp(at: { u: number; v: number } | null): void;
+  /** Whether the panel took the key, so its default is prevented. */
+  key(e: KeyEventLike): boolean;
+}
 
 const CHROME_FIELDS = "[data-chrome] input, [data-chrome] select, [data-chrome] textarea";
 
@@ -41,6 +54,8 @@ export interface InputRouterOptions {
   /** How a wheel notch reaches the phone and how far it scrolls, read on every wheel event. */
   scrolling?: () => ScrollFeel;
   requestFrame?: (callback: (time: number) => void) => void;
+  /** Takes the screen's presses and the keyboard while it is open. */
+  screenPanel?: ScreenPanelInput;
 }
 
 /**
@@ -48,7 +63,7 @@ export interface InputRouterOptions {
  * phone, a window drag, a turn of the model, or nothing (pressed while
  * Center eased the turn back).
  */
-type PressMode = "touch" | "drag" | "rotate" | "ignored";
+type PressMode = "touch" | "drag" | "rotate" | "ignored" | "panel";
 
 /** Over the lit screen the pointer is the phone's; over the case it shows what a press there would do. */
 const GRIP_CURSOR: Record<Grip | "screen", string> = { screen: "", turn: "grab", move: "move" };
@@ -67,6 +82,9 @@ export class InputRouter {
   readonly #raycaster = new THREE.Raycaster();
   readonly #rotate = new RotateGesture();
   readonly #onRotated: (outcome: "moved" | "reset") => void;
+  readonly #panel: ScreenPanelInput | null;
+  /** Codes the panel took the key-down of: their key-up and repeats are the panel's too, even if that key closed it. */
+  readonly #panelKeys = new Set<string>();
   #press: PressMode | null = null;
   /** Whether the current rotate press has moved the model, so a plain click saves nothing. */
   #turned = false;
@@ -90,6 +108,7 @@ export class InputRouter {
     this.#keys = new KeyInput(opts.modifiers);
     this.#paused = opts.paused ?? (() => false);
     this.#onRotated = opts.onRotated ?? (() => {});
+    this.#panel = opts.screenPanel ?? null;
     this.#wheel = new WheelInput({
       send,
       videoSize,
@@ -136,6 +155,13 @@ export class InputRouter {
       this.#startTurn(e);
       return;
     }
+    const onPanel = this.#panelAt(e);
+    if (onPanel) {
+      this.#rotate.otherPress();
+      this.#press = "panel";
+      this.#panel!.pointerDown(onPanel.u, onPanel.v);
+      return;
+    }
     const hit = this.#hitOf(e);
     if (e.button === 0 && !hit) {
       if (this.#gripAt(e) === "turn") {
@@ -161,7 +187,7 @@ export class InputRouter {
   }
 
   #onPointerMove(e: PointerEvent): void {
-    if (this.#press === "ignored") return;
+    if (this.#press === "ignored" || this.#press === "panel") return;
     if (this.#press === "rotate") {
       const angles = this.#rotate.move(screenPointOf(e));
       if (angles) {
@@ -176,6 +202,10 @@ export class InputRouter {
       return;
     }
     if (this.#scene.view().active) return;
+    if (this.#press === null && this.#panelAt(e)) {
+      this.#setCursor("");
+      return;
+    }
     const hit = this.#hitOf(e);
     if (this.#press === null) this.#setCursor(GRIP_CURSOR[hit ? "screen" : this.#gripAt(e)]);
     this.#dispatch({ kind: "move", button: e.button, buttons: e.buttons, hit });
@@ -190,6 +220,10 @@ export class InputRouter {
       this.#endRotate(this.#rotate.release(screenPointOf(e), e.timeStamp));
       return;
     }
+    if (press === "panel") {
+      this.#panel!.pointerUp(this.#panelAt(e));
+      return;
+    }
     this.#endPress(press);
     if (press === "drag" || press === "ignored") return;
     this.#dispatch({ kind: "up", button: e.button, buttons: e.buttons, hit: this.#scene.view().active ? null : this.#hitOf(e) });
@@ -197,6 +231,7 @@ export class InputRouter {
 
   /** Lets go of every touch and key the phone still has held, before focus is lost or the display pauses. */
   #releaseAll(): void {
+    this.#panelKeys.clear();
     this.#wheel.cancelSwipe();
     this.#cancelInteraction();
     for (const intent of this.#keys.release()) this.#send(intent);
@@ -206,6 +241,7 @@ export class InputRouter {
   #cancelInteraction(): void {
     const press = this.#press;
     this.#press = null;
+    if (press === "panel") this.#panel?.pointerUp(null);
     this.#endPress(press);
     this.#dispatch({ kind: "blur", button: 0, buttons: 0, hit: null });
   }
@@ -259,6 +295,7 @@ export class InputRouter {
   #onWheel(e: WheelEvent): void {
     e.preventDefault();
     if (this.#scene.view().active) return;
+    if (this.#panelAt(e) && !this.#keys.modHeld()) return;
     const hit = this.#hitOf(e);
     if (this.#keys.modHeld() || !hit) {
       this.#scaleByWheel(e.deltaY);
@@ -277,6 +314,19 @@ export class InputRouter {
     const like = keyEventLike(e);
     this.#keys.track(like);
     if (typedIntoChrome(e.target)) return;
+    const tookDown = this.#panelKeys.has(e.code);
+    if (e.type === "keyup") this.#panelKeys.delete(e.code);
+    if (this.#panel?.isOpen() && !this.#keys.modHeld()) {
+      if (this.#panel.key(like)) {
+        e.preventDefault();
+        this.#panelKeys.add(e.code);
+      }
+      return;
+    }
+    if (tookDown) {
+      e.preventDefault();
+      return;
+    }
     const outcome = this.#keys.route(like, this.#paused());
     if (outcome.claimed) e.preventDefault();
     for (const intent of outcome.intents) this.#send(intent);
@@ -292,6 +342,15 @@ export class InputRouter {
   #dispatch(e: PointerEventLike): void {
     if (this.#paused()) return;
     for (const intent of this.#touch.handle(e)) this.#send(intent);
+  }
+
+  /** Lets go of every touch and key the phone still holds, as the unlock pad takes the keyboard. */
+  releasePhoneInput(): void {
+    this.#releaseAll();
+  }
+
+  #panelAt(e: { clientX: number; clientY: number }): { u: number; v: number } | null {
+    return this.#panel?.isOpen() ? this.#panel.at(e.clientX, e.clientY) : null;
   }
 
   /** Where a press at this client point would touch the stream, or null off the lit screen. */

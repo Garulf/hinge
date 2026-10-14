@@ -148,6 +148,8 @@ shade from the top still works):
 - **Apps** lists the phone's apps to open in their own windows (see
   [App windows](#app-windows)).
 - **Pop out** opens the app on the phone's screen in its own window (MOD+t).
+- **Unlock** shows hinge's own PIN or password screen (MOD+l, see
+  [Lock screen](#lock-screen)).
 - **Devices** lists the phones adb can see (USB, Wi-Fi and mDNS), lets you
   switch to another one, switch a USB phone to Wi-Fi, disconnect a Wi-Fi
   phone, or pair a new one.
@@ -155,10 +157,10 @@ shade from the top still works):
 - **Colour** picks the model's colourway: Jet Black, Blue Shadow, Silver
   Shadow or Mint.
 - **Pin** keeps the window above other windows.
-- **Settings** has the shortcut modifier, notification mirroring, phone
-  audio, the video codec, bit rate, size and frame rate limits, and how the
-  mouse wheel scrolls the phone. Stream settings apply the next time the
-  phone connects.
+- **Settings** has the shortcut modifier, notification mirroring, the
+  unlock screen, phone audio, the video codec, bit rate, size and frame
+  rate limits, and how the mouse wheel scrolls the phone. Stream settings
+  apply the next time the phone connects.
 - **Close** quits.
 
 Panels open inside the window (it grows while one needs the room) and close
@@ -200,6 +202,7 @@ mix of left or right Alt, Super and Ctrl in Settings. The table follows
 | Bigger or smaller, 10 percent steps | MOD+wheel |
 | Turn the phone back to straight on | MOD+d |
 | Open the phone's current app in its own window | MOD+t |
+| Unlock the phone with a PIN or password | MOD+l |
 | Turn the phone model from anywhere, or centre it | Alt+drag, Alt+double-click |
 | Pause display, or resume | MOD+z, MOD+Shift+z |
 | Reset video capture | MOD+Shift+r |
@@ -285,6 +288,18 @@ With Close to the system tray ticked in Settings, closing the main window
 hides it to the tray even with no app windows open, and hinge keeps running
 there, still mirroring the phone's notifications, until you quit with
 MOD+q or the tray's Quit.
+
+### Lock screen
+
+Android keeps the PIN and password screen out of screen mirroring, so the
+phone shows black while it asks. hinge then draws its own unlock screen over
+the phone: click the keys or type on the PC keyboard, then OK or Enter.
+hinge types what you entered into the phone and never keeps it. A wrong PIN
+shakes and clears; hinge never tries again on its own. Cancel or Escape
+hides it until the phone next locks or the screen shows something again.
+
+MOD+l or Unlock in the hover menu opens it any time. Pattern locks are not
+supported yet. Turn the automatic unlock screen off in Settings, Lock screen.
 
 ### Files
 

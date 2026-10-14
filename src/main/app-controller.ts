@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { Adb } from "@yume-chan/adb";
 import type { PostureReading } from "../shared/posture";
-import type { AppRequest, AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
+import type { AppRequest, AudioStreamInfo, ControlIntent, DeviceCommand, DeviceCommandResult, LockRequest, MainToRenderer, RendererToMain, SessionStatus, VideoStreamInfo } from "../shared/wire";
 import { transferablesOf } from "../shared/wire";
 import { abortableDelay } from "./abortable-delay";
 import type { MediaSink, MediaSource } from "./media-source";
@@ -45,7 +45,7 @@ function errorResult(type: DeviceCommand["type"], message: string): DeviceComman
 export interface BindSourceOptions {
   logPath?: string;
   onStatus?: (status: SessionStatus) => void;
-  onRendererMessage?: (msg: AppRequest) => void;
+  onRendererMessage?: (msg: AppRequest | LockRequest) => void;
 }
 
 export function bindSource(source: MediaSource, port: PortLike, opts?: BindSourceOptions): MediaSink {

@@ -15,7 +15,7 @@ export interface DeviceSettings {
 }
 
 export interface Settings {
-  version: 5;
+  version: 6;
   colourway: string;
   videoCodec: "h264" | "h265";
   videoBitRate: number;
@@ -36,6 +36,8 @@ export interface Settings {
   mirrorNotifications: boolean;
   /** The main window's close button hides it to the system tray, leaving hinge running, instead of quitting; off by default. */
   closeToTray: boolean;
+  /** Draws hinge's own PIN or password pad over a lock screen the mirror shows as black; on by default. */
+  showUnlockScreen: boolean;
   /** Keyed by the phone's identity, which stays the same across USB, Wi-Fi and a changing wireless port. */
   devices: Record<string, DeviceSettings>;
   /** Version 1 entries, keyed by an adb transport serial; each moves into devices when that serial's identity is first seen. */

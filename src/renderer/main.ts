@@ -24,6 +24,10 @@ import { ScaleController } from "./scale-controller";
 import { RotationMemory } from "./rotation-memory";
 import { PhoneScene, type ViewState } from "./scene/phone-scene";
 import { statusText } from "./status-text";
+import { BlackSampler, frameReader, SamplingTarget } from "./unlock/black-sampler";
+import { UnlockController } from "./unlock/unlock-controller";
+import type { HitId } from "./unlock/unlock-layout";
+import { UnlockOverlay } from "./unlock/unlock-overlay";
 import { VideoPipe } from "./video-pipe";
 
 const SCENE_READY_CAP_MS = 5000;
@@ -150,12 +154,26 @@ let lastTickAt: number | null = null;
 function onTick(out: DirectorOutput, rotation: Rotation, view: ViewState): void {
   const now = performance.now();
   scale.tick(lastTickAt === null ? 0 : now - lastTickAt);
+  unlockPad.tick(now);
   lastTickAt = now;
   logPhase(out, rotation);
   sizeWindow(out, rotation, view);
 }
 
 const scene = new PhoneScene(stage, director, { loadModel, onTick });
+
+const unlockPad = new UnlockOverlay({
+  submit: (request) => client?.send({ kind: "unlock", request }),
+  cancelled: () => unlock.cancelled(),
+  changed: () => scene.redrawOverlays(),
+  opened: () => router.releasePhoneInput(),
+});
+scene.setScreenPanel(unlockPad);
+const unlock = new UnlockController({
+  pad: unlockPad,
+  sendBlack: (black) => client?.send({ kind: "screen-black", black }),
+  enabled: () => settings?.showUnlockScreen ?? true,
+});
 
 const scale = new ScaleController({
   apply: (pxPerMm) => scene.setPxPerMm(pxPerMm),
@@ -188,6 +206,7 @@ function applySettings(next: Settings): void {
   settings = next;
   scene.setColourway(colourwayFor(colourways, next.colourway).materials);
   chrome.settingsChanged(next);
+  unlock.settingsChanged();
 }
 
 const rotations = new RotationMemory({
@@ -250,7 +269,8 @@ function onDecodeError(message: string): void {
 }
 
 const display = new PausableTarget(scene);
-const pipe = new VideoPipe(display, onSize, { onError: onDecodeError, onFirstFrame, onFrame: () => director.frame() });
+const blackSampler = new BlackSampler({ read: frameReader(), now: () => performance.now(), onChange: (black) => unlock.screenBlack(black) });
+const pipe = new VideoPipe(new SamplingTarget(display, blackSampler), onSize, { onError: onDecodeError, onFirstFrame, onFrame: () => director.frame() });
 const audioPipe = new AudioPipe({
   createPlayer: createWorkletPlayer,
   onError: (message) => {
@@ -333,6 +353,9 @@ function onAction(action: HingeAction): void {
     case "popout-current":
       client?.send({ kind: "popout-current" });
       break;
+    case "unlock":
+      unlock.openByHand();
+      break;
   }
 }
 
@@ -342,6 +365,17 @@ const router = new InputRouter(canvas, scene, () => videoSize, (intent) => clien
   paused: () => display.paused,
   onRotated: (outcome) => (outcome === "reset" ? rotations.reset() : rotations.turned(scene.modelRotation())),
   scrolling: () => ({ smoothingMs: settings?.scrollSmoothing ?? 0, speed: settings?.scrollSpeed ?? 1, style: settings?.wheelStyle ?? "swipe" }),
+  screenPanel: {
+    isOpen: () => unlockPad.isOpen(),
+    at: (x, y) => {
+      const r = scene.screenPanelRect();
+      if (!r || x < r.x || y < r.y || x > r.x + r.w || y > r.y + r.h) return null;
+      return { u: (x - r.x) / r.w, v: (y - r.y) / r.h };
+    },
+    pointerDown: (u, v) => unlockPad.pointerDown(u, v),
+    pointerUp: (at) => unlockPad.pointerUp(at),
+    key: (e) => unlockPad.key(e),
+  },
 });
 
 // Resolves dropped files to real paths and hands them to main, which picks install or push.
@@ -361,7 +395,7 @@ window.addEventListener("drop", (e) => {
   client?.send({ kind: "drop-files", paths });
 });
 
-type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" | "devices" | "notice" | "open-picker" | "apps" }>;
+type StreamMessage = Exclude<MainToRenderer, { kind: "status" | "transfer-progress" | "device-command-result" | "devices" | "notice" | "open-picker" | "apps" | "lock-state" | "unlock-result" }>;
 
 function onStreamMessage(msg: StreamMessage): void {
   switch (msg.kind) {
@@ -373,6 +407,8 @@ function onStreamMessage(msg: StreamMessage): void {
       break;
     case "video-end":
       pipe.end();
+      blackSampler.reset();
+      unlock.streamEnded();
       director.streamEnded();
       break;
     case "posture":
@@ -404,6 +440,11 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
     else if (msg.kind === "notice") chrome.toast({ id: "notice", text: msg.text });
     else if (msg.kind === "open-picker") chrome.openPicker();
     else if (msg.kind === "apps") chrome.appsListed(msg);
+    else if (msg.kind === "lock-state") unlock.lockState(msg.state);
+    else if (msg.kind === "unlock-result") {
+      unlockPad.result(msg.result);
+      if (msg.result === "unconfirmed") chrome.toast({ id: "unlock", text: "Sent to the phone. hinge could not tell whether it unlocked." });
+    }
     else streamGate.push(msg);
   });
   client.send({ kind: "ready" });
@@ -434,4 +475,13 @@ void Promise.all([receivePort(), settingsReady]).then(([port]) => {
   streamPointAt: (x: number, y: number) => router.streamPointAt(x, y),
   pressAt: (x: number, y: number) => router.pressAt(x, y),
   drop: (paths: string[]) => client?.send({ kind: "drop-files", paths }),
+  unlock: () => {
+    const v = unlockPad.view();
+    return { open: unlockPad.isOpen(), mode: v.mode, busy: v.busy, prompt: v.prompt, entered: v.entered };
+  },
+  unlockPoint: (id: HitId) => {
+    const r = scene.screenPanelRect();
+    const at = unlockPad.hitPoint(id);
+    return r && at ? { x: r.x + at.u * r.w, y: r.y + at.v * r.h } : null;
+  },
 };

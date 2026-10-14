@@ -1,4 +1,5 @@
 import type { AppEntry } from "./app-catalog";
+import type { LockState, UnlockRequest, UnlockResult } from "./lock";
 import type { PostureReading } from "./posture";
 
 export type WireMediaPacket =
@@ -115,6 +116,10 @@ export type MainToRenderer =
    * icons are data: URLs by package; error says why the list is partial or empty.
    */
   | { kind: "apps"; id: number; apps: AppEntry[]; recents: string[]; icons: Record<string, string>; error: string | null }
+  /** The phone's keyguard and lock type, sent on every change and again whenever the renderer reports the screen's blackness. */
+  | { kind: "lock-state"; state: LockState }
+  /** The answer to the renderer's "unlock". */
+  | { kind: "unlock-result"; result: UnlockResult }
   | PostureMessage;
 
 export type RendererToMain =
@@ -131,10 +136,17 @@ export type RendererToMain =
   | { kind: "popout-current" }
   /** id tags the answers, so a late answer to an earlier request is told apart. */
   | { kind: "apps-request"; id: number }
-  | { kind: "create-shortcut"; pkg: string };
+  | { kind: "create-shortcut"; pkg: string }
+  /** Whether the mirrored screen is black, sent on every change; main polls the keyguard only while it is. */
+  | { kind: "screen-black"; black: boolean }
+  /** Carries the PIN or password: never log it. */
+  | { kind: "unlock"; request: UnlockRequest };
 
 /** The main window's requests about apps and pop-outs, which bindSource hands to its owner instead of the source. */
 export type AppRequest = Extract<RendererToMain, { kind: "popout-open" | "popout-current" | "apps-request" | "create-shortcut" }>;
+
+/** The main window's lock-screen messages, which bindSource hands to its owner like the AppRequests. */
+export type LockRequest = Extract<RendererToMain, { kind: "screen-black" | "unlock" }>;
 
 type LooseMediaPacket =
   | { type: "configuration"; data: Uint8Array }

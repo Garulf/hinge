@@ -785,3 +785,51 @@ test("dragging a side of the case turns the phone into the 3D look, and Center b
     await app.close();
   }
 });
+
+interface UnlockStats { open: boolean; mode: string; busy: boolean; prompt: string; entered: number }
+
+function unlockStats(page: Page): Promise<UnlockStats | null> {
+  return page.evaluate(() => (window as unknown as { __hinge?: { unlock(): UnlockStats } }).__hinge?.unlock() ?? null);
+}
+
+async function waitForUnlock(page: Page, what: string, ok: (u: UnlockStats) => boolean, timeoutMs = 10_000): Promise<UnlockStats> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const u = await unlockStats(page);
+    if (u && ok(u)) return u;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}: ${JSON.stringify(u)}`);
+    await page.waitForTimeout(100);
+  }
+}
+
+async function tapUnlock(page: Page, id: string): Promise<void> {
+  let point: { x: number; y: number } | null = null;
+  const deadline = Date.now() + 10_000;
+  while (!point && Date.now() < deadline) {
+    point = await page.evaluate((key) => (window as unknown as { __hinge: { unlockPoint(k: string): { x: number; y: number } | null } }).__hinge.unlockPoint(key), id);
+    if (!point) await page.waitForTimeout(100);
+  }
+  if (!point) throw new Error(`no point for unlock key ${id}`);
+  await page.mouse.click(point.x, point.y);
+}
+
+test("MOD+l opens hinge's unlock pad; with no phone a PIN is answered with 'No phone connected', and Escape hides it", async () => {
+  test.setTimeout(60_000);
+  const { app, page } = await launch(resolve("test/fixtures/synthetic-fold.hrec"));
+  try {
+    await waitFor(page, "a settled, laid out phone", (s) => s.settled && s.laidOut && s.framesDecoded > 10, 30_000);
+    await page.keyboard.down("Alt");
+    await page.keyboard.press("KeyL");
+    await page.keyboard.up("Alt");
+    await waitForUnlock(page, "the PIN pad", (u) => u.open && u.mode === "pin");
+    for (const key of ["1", "2", "3", "4"]) await tapUnlock(page, key);
+    expect((await unlockStats(page))?.entered).toBe(4);
+    await tapUnlock(page, "ok");
+    await waitForUnlock(page, "the no-phone answer", (u) => u.prompt === "No phone connected" && u.entered === 0 && !u.busy);
+    await page.screenshot({ path: "test-results/unlock-pad.png" });
+    await page.keyboard.press("Escape");
+    await waitForUnlock(page, "the pad hidden", (u) => !u.open);
+  } finally {
+    await app.close();
+  }
+});

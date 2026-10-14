@@ -1,0 +1,16 @@
+Current lock settings service state:
+
+User State:
+  User 150
+    SID: 0
+    Quality: 0
+    CredentialType: None
+    SeparateChallenge: true
+    Metrics: known
+
+  User 0
+    SID: 4fb2c8d1a3e5f607
+    Quality: 131072
+    CredentialType: Pin
+    SeparateChallenge: false
+    Metrics: known

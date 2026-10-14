@@ -14,7 +14,8 @@ export type HingeAction =
   | "unpause"
   | "scale-up"
   | "scale-down"
-  | "popout-current";
+  | "popout-current"
+  | "unlock";
 
 export const SHORTCUT_MODIFIERS: readonly ModifierKey[] = ["lalt", "ralt", "lsuper", "rsuper", "lctrl", "rctrl"];
 export const DEFAULT_MODIFIERS: readonly ModifierKey[] = ["lalt", "lsuper"];
@@ -54,7 +55,7 @@ const keyBinding = (keyCode: number, repeats?: true): Binding => ({ kind: "key",
 const intent = (i: ControlIntent): Binding => ({ kind: "intent", intent: i });
 const action = (a: HingeAction): Binding => ({ kind: "action", action: a });
 
-/** scrcpy's shortcut table (doc/shortcuts.md) keyed by KeyboardEvent.code, without and with Shift; plus hinge's own d and t. */
+/** scrcpy's shortcut table (doc/shortcuts.md) keyed by KeyboardEvent.code, without and with Shift; plus hinge's own d, t and l. */
 export const SHORTCUT_TABLE: Record<string, { plain?: Binding; shift?: Binding }> = {
   KeyF: { plain: action("fullscreen") },
   KeyG: { plain: action("pixel-perfect") },
@@ -78,6 +79,7 @@ export const SHORTCUT_TABLE: Record<string, { plain?: Binding; shift?: Binding }
   KeyZ: { plain: action("pause"), shift: action("unpause") },
   KeyD: { plain: action("center") },
   KeyT: { plain: action("popout-current") },
+  KeyL: { plain: action("unlock") },
 };
 
 function bindingFor(code: string, shift: boolean): Binding | undefined {

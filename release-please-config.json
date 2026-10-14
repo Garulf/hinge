@@ -3,5 +3,6 @@
   "release-type": "node",
   "packages": {
     ".": {}
-  }
+  },
+  "bootstrap-sha": "a4c52388982922048bc1ce5d5041466585641bb0"
 }

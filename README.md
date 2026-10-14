@@ -5,7 +5,7 @@ A desktop scrcpy client that shows a Galaxy Z Fold 7 as a 3D phone that folds wi
 
 ## Installing
 
-Release builds come in four files, all named after the version:
+[Releases](https://github.com/Garulf/hinge/releases) come in four files, all named after the version:
 
 - `hinge-<version>-win-x64-setup.exe` installs for the current user, with
   Start menu and desktop shortcuts, and lets you pick the folder.
@@ -32,7 +32,7 @@ r37.0.1) and `scrcpy-server-v4.1` into `vendor/` (gitignored). Pass `--only win`
 
 ## Status
 
-First release candidate. The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, flat and pixel-accurate straight on and 3D when you turn it by its case, with touch, keyboard, scrcpy's shortcuts, clipboard sync, phone audio, mirrored notifications, file drop, Wi-Fi pairing and phone apps in windows of their own. Builds are made locally for Windows (installer and portable exe) and Linux (AppImage and deb).
+First release candidate. The app connects to a phone over adb, starts scrcpy-server 4.1, and shows the video on a 3D model of the Fold 7 that folds, unfolds and turns with the real phone, flat and pixel-accurate straight on and 3D when you turn it by its case, with touch, keyboard, scrcpy's shortcuts, clipboard sync, phone audio, mirrored notifications, file drop, Wi-Fi pairing and phone apps in windows of their own. Releases are built for Windows (installer and portable exe) and Linux (AppImage and deb).
 
 ## Running
 
@@ -357,21 +357,19 @@ sudo apt-get install --no-install-recommends wine wine64 wine32:i386
 
 ### Tests and releases
 
-There is no CI. Unit tests and the typecheck run in the `pre-push` hook
+Unit tests and the typecheck run in the `pre-push` hook
 (`pre-commit install --hook-type pre-commit --hook-type pre-push`), and the
 GPU e2e suite runs on demand through `scripts/e2e-remote.sh` (below).
 
-Releases are cut locally with the release-please CLI, which reads the
-Conventional Commit history, then the artefacts from `npm run pack:release`
-are attached to the GitHub release:
+The `build` workflow runs the typecheck and unit tests, then packages the
+Windows and Linux builds, on every pull request and on demand from the
+Actions tab. The packages are kept as the run's artifacts, so a branch can be
+tried without a release.
 
-```sh
-npx release-please release-pr --repo-url=Garulf/hinge --token=$(gh auth token)
-# merge the release PR, then
-npx release-please github-release --repo-url=Garulf/hinge --token=$(gh auth token)
-npm run pack:release
-gh release upload v<version> dist/*-setup.exe dist/*-portable.exe dist/*.AppImage dist/*.deb
-```
+Releases come from release-please. Each push to `main` updates a release pull
+request from the Conventional Commit history; merging it tags the version,
+writes the GitHub release, and the `release` workflow attaches the installer,
+portable exe, AppImage and deb to it.
 
 ### Remote testing
 

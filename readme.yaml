@@ -14,7 +14,7 @@ vars:
     folds, unfolds and turns with the real phone, flat and pixel-accurate
     straight on and 3D when you turn it by its case, with touch, keyboard, scrcpy's shortcuts, clipboard sync,
     phone audio, mirrored notifications, file drop, Wi-Fi pairing and phone
-    apps in windows of their own. Builds
-    are made locally for
+    apps in windows of their own. Releases
+    are built for
     Windows (installer and portable exe) and Linux (AppImage and deb).
 badges: []

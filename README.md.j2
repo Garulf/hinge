@@ -3,7 +3,7 @@
 {% block install %}
 ## Installing
 
-Release builds come in four files, all named after the version:
+[Releases](https://github.com/Garulf/hinge/releases) come in four files, all named after the version:
 
 - `hinge-<version>-win-x64-setup.exe` installs for the current user, with
   Start menu and desktop shortcuts, and lets you pick the folder.
@@ -357,21 +357,19 @@ sudo apt-get install --no-install-recommends wine wine64 wine32:i386
 
 ### Tests and releases
 
-There is no CI. Unit tests and the typecheck run in the `pre-push` hook
+Unit tests and the typecheck run in the `pre-push` hook
 (`pre-commit install --hook-type pre-commit --hook-type pre-push`), and the
 GPU e2e suite runs on demand through `scripts/e2e-remote.sh` (below).
 
-Releases are cut locally with the release-please CLI, which reads the
-Conventional Commit history, then the artefacts from `npm run pack:release`
-are attached to the GitHub release:
+The `build` workflow runs the typecheck and unit tests, then packages the
+Windows and Linux builds, on every pull request and on demand from the
+Actions tab. The packages are kept as the run's artifacts, so a branch can be
+tried without a release.
 
-```sh
-npx release-please release-pr --repo-url=Garulf/hinge --token=$(gh auth token)
-# merge the release PR, then
-npx release-please github-release --repo-url=Garulf/hinge --token=$(gh auth token)
-npm run pack:release
-gh release upload v<version> dist/*-setup.exe dist/*-portable.exe dist/*.AppImage dist/*.deb
-```
+Releases come from release-please. Each push to `main` updates a release pull
+request from the Conventional Commit history; merging it tags the version,
+writes the GitHub release, and the `release` workflow attaches the installer,
+portable exe, AppImage and deb to it.
 
 ### Remote testing
 

@@ -34,10 +34,14 @@ jobs:
         include:
           - os: windows-latest
             platform: win
-            files: dist/*-setup.exe dist/*-portable.exe
+            files: |
+              dist/*-setup.exe
+              dist/*-portable.exe
           - os: ubuntu-latest
             platform: linux
-            files: dist/*.AppImage dist/*.deb
+            files: |
+              dist/*.AppImage
+              dist/*.deb
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -66,6 +70,7 @@ jobs:
           path: ${{ matrix.files }}
           if-no-files-found: error
       - if: inputs.tag
-        run: gh release upload "${{ inputs.tag }}" ${{ matrix.files }} --clobber
+        run: gh release upload "${{ inputs.tag }}" $FILES --clobber
         env:
+          FILES: ${{ matrix.files }}
           GH_TOKEN: ${{ github.token }}
